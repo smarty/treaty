@@ -94,11 +94,11 @@ func (this *Service) analyze(baseRef string) (*analysis, error) {
 // not nil. It assigns layers to both graphs.
 func (this *Service) analyzeGraphs(config Config, head, base *graph.Graph, baseRef string) *analysis {
 	result := &analysis{config: config, head: head, base: base, baseRef: baseRef}
-	config.Layers.Assign(head)
-	result.violations = rules.Violations(head)
+	config.Architecture.Assign(head)
+	result.violations = config.Architecture.Violations(head)
 	result.metrics = rules.Metrics(head)
 	if base != nil {
-		config.Layers.Assign(base)
+		config.Architecture.Assign(base)
 		result.baseMetrics = rules.Metrics(base)
 		result.changes = rules.Classify(base, head, this.compatible)
 	}
@@ -142,8 +142,17 @@ func (this *Service) graphAt(ref string) (*graph.Graph, error) {
 
 func (this *analysis) failures() []string {
 	var result []string
-	if slices.Contains(this.config.FailOn, rules.FindingLayerViolation) && len(this.violations) > 0 {
-		result = append(result, fmt.Sprintf("%d layer violation(s)", len(this.violations)))
+	counts := map[string]int{}
+	for _, violation := range this.violations {
+		counts[violation.Kind]++
+	}
+
+	if slices.Contains(this.config.FailOn, rules.FindingLayerViolation) && counts[rules.FindingLayerViolation] > 0 {
+		result = append(result, fmt.Sprintf("%d layer violation(s)", counts[rules.FindingLayerViolation]))
+	}
+
+	if slices.Contains(this.config.FailOn, rules.FindingCycle) && counts[rules.FindingCycle] > 0 {
+		result = append(result, fmt.Sprintf("%d cycle edge(s) between contexts", counts[rules.FindingCycle]))
 	}
 
 	if slices.Contains(this.config.FailOn, rules.FindingBreaking) {

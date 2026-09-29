@@ -26,28 +26,6 @@ func TestMatch(t *testing.T) {
 	}
 }
 
-func TestAllowed(t *testing.T) {
-	for _, c := range []struct {
-		from, to string
-		want     bool
-	}{
-		{graph.LayerDomain, graph.LayerDomain, true},
-		{graph.LayerDomain, graph.LayerApplication, false},
-		{graph.LayerApplication, graph.LayerDomain, true},
-		{graph.LayerApplication, graph.LayerAdapter, false},
-		{graph.LayerAdapter, graph.LayerApplication, true},
-		{graph.LayerAdapter, graph.LayerAdapter, false},
-		{graph.LayerUnclassified, graph.LayerAdapter, true},
-		{graph.LayerComposition, graph.LayerAdapter, true},
-		{graph.LayerAdapter, graph.LayerComposition, false},
-		{graph.LayerDomain, graph.LayerComposition, false},
-	} {
-		if got := Allowed(c.from, c.to); got != c.want {
-			t.Errorf("Allowed(%s, %s) = %t", c.from, c.to, got)
-		}
-	}
-}
-
 func TestClassifyAndRank(t *testing.T) {
 	base := sample(func(g *graph.Graph) {})
 	head := sample(func(g *graph.Graph) {
@@ -85,8 +63,9 @@ func TestClassifyAndRank(t *testing.T) {
 
 func TestViolationsAndMetrics(t *testing.T) {
 	g := sample(func(g *graph.Graph) {})
-	Layers{Domain: []string{"core"}, Application: []string{"app"}}.Assign(g)
-	violations := Violations(g)
+	architecture := Architecture{Style: StyleHexagonal, Layers: []Layer{{Name: graph.LayerDomain, Globs: []string{"core"}}, {Name: graph.LayerApplication, Globs: []string{"app"}}}}
+	architecture.Assign(g)
+	violations := architecture.Violations(g)
 	if len(violations) != 1 || violations[0].From != "go:core" || violations[0].To != "go:app" {
 		t.Fatalf("violations: %+v", violations)
 	}

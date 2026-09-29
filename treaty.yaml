@@ -7,8 +7,4 @@ layers:
     driven:    ["internal/adapters/golang/**", "internal/adapters/filesystem/**", "internal/adapters/gitvcs/**", "internal/adapters/htmlmap/**"]
 rules:
   fail_on: [breaking, layer_violation]
-  warn_on: [unclassified, weak_contract]
-  strength_threshold: 0.60
-mutation:
-  scope: blast_radius
-  timeout_per_mutant: 30s
+  warn_on: [unclassified]

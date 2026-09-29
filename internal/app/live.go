@@ -3,13 +3,20 @@ package app
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/smarty/treaty/internal/graph"
+	"github.com/smarty/treaty/internal/rules"
 )
 
 const (
+	// AdoptAfter is how long the map may preview another architecture
+	// before treaty.yaml switches to it.
+	AdoptAfter = 5 * time.Minute
+
 	BaselineHead        = "head"
 	BaselinePullRequest = "pr"
 	BaselineRef         = "ref"
@@ -22,9 +29,10 @@ const (
 )
 
 var (
-	ErrBaseline = errors.New("unknown baseline mode")
-	ErrNotReady = errors.New("the live graph has not been built")
-	ErrTooSoon  = errors.New("not shown: the person was shown something moments ago")
+	ErrBaseline  = errors.New("unknown baseline mode")
+	ErrNoPreview = errors.New("the map is showing the architecture in treaty.yaml")
+	ErrNotReady  = errors.New("the live graph has not been built")
+	ErrTooSoon   = errors.New("not shown: the person was shown something moments ago")
 )
 
 // Baseline is what the live map compares the working tree with.
@@ -59,9 +67,27 @@ type Selection struct {
 type LiveState struct {
 	Version   int       `json:"version"`
 	Baseline  Baseline  `json:"baseline"`
+	View      View      `json:"view"`
 	Selection Selection `json:"selection"`
 	Pointer   *Pointer  `json:"pointer,omitempty"`
 	Error     string    `json:"error,omitempty"`
+}
+
+// View is the architecture the live map draws. Another architecture than
+// the one in treaty.yaml is a preview: the map shows the code fitted to it,
+// as treaty init would propose, while checks and agents keep following
+// treaty.yaml. A preview becomes treaty.yaml when the person adopts it, or
+// after AdoptAfter.
+type View struct {
+	// Architecture is the architecture drawn.
+	Architecture string `json:"architecture"`
+
+	// Configured is the architecture in treaty.yaml.
+	Configured string `json:"configured"`
+
+	// AdoptAt is when treaty.yaml switches to the previewed architecture;
+	// zero when nothing is previewed.
+	AdoptAt time.Time `json:"adopt_at,omitzero"`
 }
 
 // Pointer is something the agent asked the person to look at. The map
@@ -101,6 +127,10 @@ type Live struct {
 	pointer     *Pointer
 	shownAt     time.Time
 	showEvery   time.Duration
+	configured  string
+	preview     string
+	adoptAt     time.Time
+	adoptAfter  time.Duration
 }
 
 // NewLive creates the live graph for a repository. Nothing is built until
@@ -123,7 +153,38 @@ func NewLive(service *Service, watcher Watcher, peer Peer) *Live {
 		bases:       map[string]*graph.Graph{},
 		subscribers: map[chan LiveState]bool{},
 		showEvery:   ShowEvery,
+		adoptAfter:  AdoptAfter,
 	}
+}
+
+// AdoptView replaces treaty.yaml with the previewed architecture, as
+// treaty init would propose it, and rebuilds.
+//
+// Returns:
+//   - path: where treaty.yaml was written.
+//   - err: nothing is previewed, or treaty.yaml could not be written.
+//
+// Errors:
+//   - ErrNoPreview: the map already shows treaty.yaml's architecture.
+func (this *Live) AdoptView() (path string, err error) {
+	this.mutex.Lock()
+	style := this.preview
+	this.mutex.Unlock()
+	if style == "" {
+		return "", ErrNoPreview
+	}
+
+	if path, err = this.service.adopt(style); err != nil {
+		return "", err
+	}
+
+	this.mutex.Lock()
+	if this.preview == style {
+		this.preview, this.adoptAt = "", time.Time{}
+	}
+
+	this.mutex.Unlock()
+	return path, this.Refresh()
 }
 
 // Page returns the live page, which loads its data from the server.
@@ -156,14 +217,14 @@ func (this *Live) Refresh() error {
 	defer this.building.Unlock()
 	fingerprint, _ := this.watcher.Fingerprint()
 	this.mutex.Lock()
-	baseline := this.baseline
+	baseline, preview := this.baseline, this.preview
 	this.mutex.Unlock()
 
 	resolved, err := this.resolve(baseline)
 	var built *analysis
 	var payload []byte
 	if err == nil {
-		built, payload, err = this.build(resolved)
+		built, payload, err = this.build(resolved, preview)
 	}
 
 	this.mutex.Lock()
@@ -174,11 +235,27 @@ func (this *Live) Refresh() error {
 		this.failure = err.Error()
 	} else {
 		this.baseline, this.analysis, this.payload = resolved, built, payload
+		this.configured = built.config.Architecture.Style
+		if this.preview == this.configured {
+			this.preview, this.adoptAt = "", time.Time{}
+		}
 	}
 
 	this.notifyLocked()
 	this.mutex.Unlock()
 	return err
+}
+
+// SetAdoptAfter changes how long the map previews another architecture
+// before treaty.yaml switches to it. A preview already counting down keeps
+// its time.
+//
+// Parameters:
+//   - after: the preview's length; AdoptAfter by default.
+func (this *Live) SetAdoptAfter(after time.Duration) {
+	this.mutex.Lock()
+	defer this.mutex.Unlock()
+	this.adoptAfter = after
 }
 
 // SetBaseline changes what the working tree is compared with, and rebuilds.
@@ -200,6 +277,34 @@ func (this *Live) SetBaseline(baseline Baseline) error {
 
 	this.mutex.Lock()
 	this.baseline = resolved
+	this.mutex.Unlock()
+	return this.Refresh()
+}
+
+// SetView draws another architecture, or treaty.yaml's again, and rebuilds.
+// Another architecture than treaty.yaml's starts the AdoptAfter countdown;
+// choosing again restarts it.
+//
+// Parameters:
+//   - architecture: one of rules.Styles.
+//
+// Returns:
+//   - err: the architecture is unknown, or the rebuild failed.
+//
+// Errors:
+//   - rules.ErrArchitecture: architecture is not one of rules.Styles.
+func (this *Live) SetView(architecture string) error {
+	if !slices.Contains(rules.Styles, architecture) {
+		return fmt.Errorf("%w: unknown architecture %q; use one of %s", rules.ErrArchitecture, architecture, strings.Join(rules.Styles, ", "))
+	}
+
+	this.mutex.Lock()
+	if architecture == this.configured {
+		this.preview, this.adoptAt = "", time.Time{}
+	} else {
+		this.preview, this.adoptAt = architecture, time.Now().Add(this.adoptAfter)
+	}
+
 	this.mutex.Unlock()
 	return this.Refresh()
 }
@@ -324,7 +429,10 @@ func (this *Live) baseGraph(commit string) (*graph.Graph, error) {
 	return built.Clone(), nil
 }
 
-func (this *Live) build(baseline Baseline) (*analysis, []byte, error) {
+// build analyzes the working tree against a baseline. The analysis follows
+// treaty.yaml; the map data shows the preview architecture instead, when
+// there is one.
+func (this *Live) build(baseline Baseline, preview string) (*analysis, []byte, error) {
 	config, _, err := this.service.config.Load()
 	if err != nil {
 		return nil, nil, err
@@ -343,12 +451,24 @@ func (this *Live) build(baseline Baseline) (*analysis, []byte, error) {
 	}
 
 	result := this.service.analyzeGraphs(config, head, base, baseline.Label)
+	shown := result
+	if preview != "" && preview != config.Architecture.Style {
+		fitted := config
+		fitted.Architecture, _ = propose(head, preview)
+		var previewBase *graph.Graph
+		if base != nil {
+			previewBase = base.Clone()
+		}
+
+		shown = this.service.analyzeGraphs(fitted, head.Clone(), previewBase, baseline.Label)
+	}
+
 	designs, err := this.service.workspace.Designs()
 	if err != nil {
 		return nil, nil, err
 	}
 
-	view, err := this.service.buildView(result, designs, true)
+	view, err := this.service.buildView(shown, designs, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -393,6 +513,20 @@ func (this *Live) poll(stop <-chan struct{}) {
 			if resolved, err := this.resolve(baseline); err == nil && resolved.Commit != baseline.Commit {
 				changed = true
 			}
+		}
+
+		this.mutex.Lock()
+		due := !this.adoptAt.IsZero() && time.Now().After(this.adoptAt)
+		this.mutex.Unlock()
+		if due {
+			if _, err := this.AdoptView(); err != nil && !errors.Is(err, ErrNoPreview) {
+				this.mutex.Lock()
+				this.adoptAt, this.failure = time.Time{}, "treaty.yaml was not switched: "+err.Error()
+				this.notifyLocked()
+				this.mutex.Unlock()
+			}
+
+			continue
 		}
 
 		if changed {
@@ -483,7 +617,12 @@ func (this *Live) planned(current *analysis, target string) bool {
 }
 
 func (this *Live) stateLocked() LiveState {
-	return LiveState{Version: this.version, Baseline: this.baseline, Selection: this.selection, Pointer: this.pointer, Error: this.failure}
+	view := View{Architecture: this.configured, Configured: this.configured, AdoptAt: this.adoptAt}
+	if this.preview != "" {
+		view.Architecture = this.preview
+	}
+
+	return LiveState{Version: this.version, Baseline: this.baseline, View: view, Selection: this.selection, Pointer: this.pointer, Error: this.failure}
 }
 
 // sync follows the peer's baseline and selection, when there is a peer.

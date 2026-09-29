@@ -63,6 +63,8 @@ func Listen(live *app.Live, port int) (result *Server, err error) {
 	mux.HandleFunc("POST /api/baseline", result.baseline)
 	mux.HandleFunc("POST /api/selection", result.selection)
 	mux.HandleFunc("POST /api/show", result.show)
+	mux.HandleFunc("POST /api/view", result.setView)
+	mux.HandleFunc("POST /api/view/adopt", result.adopt)
 	result.server = &http.Server{Handler: result.guard(mux), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = result.server.Serve(listener) }()
 	return result, nil
@@ -159,6 +161,21 @@ func (this *Server) URL() string {
 	return this.url
 }
 
+// adopt makes the previewed architecture treaty.yaml's.
+func (this *Server) adopt(writer http.ResponseWriter, request *http.Request) {
+	var ignored struct{}
+	if !decode(writer, request, &ignored) {
+		return
+	}
+
+	if _, err := this.live.AdoptView(); err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	this.state(writer, request)
+}
+
 func (this *Server) baseline(writer http.ResponseWriter, request *http.Request) {
 	var baseline app.Baseline
 	if !decode(writer, request, &baseline) {
@@ -249,6 +266,24 @@ func (this *Server) selection(writer http.ResponseWriter, request *http.Request)
 
 	this.live.SetSelection(selection)
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+// setView draws another architecture, or treaty.yaml's again.
+func (this *Server) setView(writer http.ResponseWriter, request *http.Request) {
+	var view struct {
+		Architecture string `json:"architecture"`
+	}
+
+	if !decode(writer, request, &view) {
+		return
+	}
+
+	if err := this.live.SetView(view.Architecture); err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	this.state(writer, request)
 }
 
 func (this *Server) show(writer http.ResponseWriter, request *http.Request) {

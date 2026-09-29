@@ -47,10 +47,9 @@ type Registration struct {
 
 // Config is the parsed treaty.yaml.
 type Config struct {
-	Layers            rules.Layers
-	FailOn            []string
-	WarnOn            []string
-	StrengthThreshold float64
+	Architecture rules.Architecture
+	FailOn       []string
+	WarnOn       []string
 }
 
 // ConfigSource loads the layer config.
@@ -185,6 +184,9 @@ type Workspace interface {
 
 	// SaveDesign writes a design, replacing one with the same name.
 	SaveDesign(name, text string) (path string, err error)
+
+	// WriteConfig replaces the config.
+	WriteConfig(text string) (path string, err error)
 
 	// WriteConfigDraft writes a proposed config without overwriting one.
 	WriteConfigDraft(text string) (path string, err error)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path"
 	"strings"
 
 	"github.com/smarty/treaty/internal/app"
@@ -25,7 +26,9 @@ commands:
   serve [--port <n>] [--open]                 serve the live map until interrupted
   mcp [--port <n>]                            serve the live graph to an agent over MCP on
                                               stdio, and the live map to the person
-  init                                        create .treaty and propose treaty.yaml
+  init [--architecture <name>]                create .treaty and propose treaty.yaml for an
+                                              architecture: hexagonal (default), clean,
+                                              layered, slices or modular
   url                                         print the live map's address for this directory
   here [--force]                              register treaty in this repository's .mcp.json,
                                               so Claude Code sessions here start it
@@ -109,6 +112,7 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	architecture := flags.String("architecture", "", "architecture for init: clean, hexagonal, layered, modular or slices")
 	base := flags.String("base", "", "git ref to diff against")
 	at := flags.String("at", "", "git ref to read instead of the working tree")
 	format := flags.String("format", "json", "json or text")
@@ -198,7 +202,7 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 		fmt.Fprintln(stdout, path)
 		return nil
 	case "init":
-		path, err := service.Init()
+		path, err := service.Init(*architecture)
 		if err != nil {
 			return err
 		}
@@ -245,6 +249,14 @@ func checkText(report app.Report) string {
 			layer += "/" + module.Side
 		}
 
+		if module.Section != "" {
+			layer = path.Base(module.Section) + "/" + layer
+		}
+
+		if module.Public {
+			layer += " (public)"
+		}
+
 		m := module.Metrics
 		fmt.Fprintf(&builder, "  %-44s %-20s Ca=%d Ce=%d I=%.2f A=%.2f D=%.2f", module.ID, layer, m.Afferent, m.Efferent, m.Instability, m.Abstractness, m.Distance)
 		if module.Before != nil && module.Before.Instability != m.Instability {
@@ -259,7 +271,7 @@ func checkText(report app.Report) string {
 		fmt.Fprintf(&builder, "  [%s] %s\n         %s\n", strings.ToUpper(finding.Severity[:1]), finding.Title, finding.Detail)
 	}
 
-	fmt.Fprintf(&builder, "\nStrength: %s\n", report.Strength)
+	builder.WriteString("\n")
 	if len(report.Failures) > 0 {
 		fmt.Fprintf(&builder, "FAIL: %s\n", strings.Join(report.Failures, "; "))
 	} else {

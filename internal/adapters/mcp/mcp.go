@@ -216,11 +216,11 @@ func instructions(mapURL string, shared bool) string {
 
 	return where + " The person cannot see this server's output, so in your first reply of the session give them that link, " +
 		"saying whether it is a new map or the one already running, so they can open it in a browser. " +
-		"Treaty keeps a live graph of this repository's contracts, placed in hexagonal layers, and rebuilds it as files change. " +
+		"Treaty keeps a live graph of this repository's contracts, placed by the architecture treaty.yaml declares (hexagonal, clean, layered, vertical slices or modular monolith), and rebuilds it as files change. " +
 		"Use it to decide where to work without reading the whole codebase: call overview first, find to locate symbols, " +
 		"slice before editing a symbol or module, impact before changing a contract, and allowed before adding an import. " +
 		"Write what you intend to build as CML with plan; it shows on the person's map and fills in as the code is written. " +
-		"After edits, call changes to see what moved in the architecture since the baseline, and fix any new layer violation. " +
+		"After edits, call changes to see what moved in the architecture since the baseline, and fix any new rule violation. " +
 		"Call selection to see what the person has selected on the map. Use show sparingly, only when you need the person to look at one specific thing."
 }
 
@@ -248,12 +248,12 @@ func tools() []tool {
 		},
 		{
 			Name:        "allowed",
-			Description: "Whether one module may depend on another under the layer rules, and which layers the first may use. Call before adding an import. Modules that do not exist yet are placed by the config.",
+			Description: "Whether one module may depend on another under the architecture's rules, the rule it would break, and what the first may use. Call before adding an import. Modules that do not exist yet are placed by the config.",
 			InputSchema: schema(map[string]string{"from": "The depending module, as an id such as go:internal/app or a path.", "to": "The module depended on, as an id or a path."}, "from", "to"),
 		},
 		{
 			Name:        "changes",
-			Description: "How the architecture differs from the baseline the person chose: new and fixed layer violations, contract changes, and module dependencies added and removed. Call after edits to check your work.",
+			Description: "How the architecture differs from the baseline the person chose: new and fixed rule violations and cycles, contract changes, and module dependencies added and removed. Call after edits to check your work.",
 			InputSchema: schema(nil),
 		},
 		{
@@ -272,7 +272,7 @@ func tools() []tool {
 			Name: "plan",
 			Description: "Save what you intend to build as unimplemented CML, in design syntax, under .treaty/designs/<name>.cml, replacing any design of that name. " +
 				"The plan shows on the person's map in teal and each item fills in as it is built. Returns what is not built yet, what differs from existing code, and layer problems. " +
-				"Syntax: file or module headers such as go:internal/app/ports.go or go:internal/adapters/mutation; native declarations indented two spaces, methods and fields under their type, no receivers; " +
+				"Syntax: file or module headers such as go:internal/app/ports.go or go:internal/adapters/postgres; native declarations indented two spaces, methods and fields under their type, no receivers; " +
 				"@depends <module or symbol id> to declare a planned dependency; @forbid <glob>; @expect instability|abstractness|distance >=|<= <number>.",
 			InputSchema: schema(map[string]string{"name": "The plan name: letters, digits, dots, dashes and underscores.", "cml": "The plan in CML design syntax. The cml 1 and design lines are added when missing."}, "name", "cml"),
 		},

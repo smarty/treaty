@@ -223,3 +223,79 @@ func write(t *testing.T, root, name, text string) {
 		t.Fatal(err)
 	}
 }
+
+func TestArchitectureView(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/shop\n")
+	write(t, root, "treaty.yaml", "layers:\n  domain: [\"core/**\"]\n  adapter:\n    driven: [\"store/**\"]\n")
+	write(t, root, "core/order.go", "package core\n\ntype Order struct{ ID string }\n")
+	write(t, root, "store/store.go", "package store\n\nimport \"example.com/shop/core\"\n\nfunc Save(order core.Order) error { return nil }\n")
+	git(t, root, "init", "-q")
+
+	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root))
+	live := app.NewLive(service, filesystem.NewWatcher(root), nil)
+	stop := make(chan struct{})
+	defer close(stop)
+	live.Start(stop)
+	server, err := Listen(live, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = server.Close() }()
+	architecture := func() string {
+		var view struct {
+			Architecture string `json:"architecture"`
+		}
+
+		_ = json.Unmarshal(get(t, server.URL()+"/api/view", http.StatusOK), &view)
+		return view.Architecture
+	}
+
+	// Previewing redraws the map, while checks and agents keep following
+	// treaty.yaml.
+	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"onion"}`, http.StatusBadRequest)
+	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"layered"}`, http.StatusOK)
+	state := live.State()
+	if state.View.Architecture != "layered" || state.View.Configured != "hexagonal" || state.View.AdoptAt.IsZero() {
+		t.Fatalf("view: %+v", state.View)
+	}
+
+	if got := architecture(); got != "layered" {
+		t.Fatalf("the map should draw layered, not %q", got)
+	}
+
+	if overview, _ := live.Overview(); !strings.Contains(overview, "adapters may not use each other") {
+		t.Fatalf("agents must keep following treaty.yaml:\n%s", overview)
+	}
+
+	// Choosing treaty.yaml's architecture again ends the preview.
+	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"hexagonal"}`, http.StatusOK)
+	if view := live.State().View; view.Architecture != "hexagonal" || !view.AdoptAt.IsZero() {
+		t.Fatalf("view: %+v", view)
+	}
+
+	// Adopting replaces treaty.yaml.
+	post(t, server.URL()+"/api/view/adopt", "application/json", `{}`, http.StatusBadRequest)
+	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"clean"}`, http.StatusOK)
+	post(t, server.URL()+"/api/view/adopt", "application/json", `{}`, http.StatusOK)
+	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), "architecture: clean") {
+		t.Fatalf("treaty.yaml:\n%s", data)
+	}
+
+	if view := live.State().View; view.Configured != "clean" || !view.AdoptAt.IsZero() {
+		t.Fatalf("view: %+v", view)
+	}
+
+	// A preview left alone becomes treaty.yaml.
+	live.SetAdoptAfter(200 * time.Millisecond)
+	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"layered"}`, http.StatusOK)
+	waitFor(t, func() bool { return live.State().View.Configured == "layered" })
+	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), "architecture: layered") {
+		t.Fatalf("treaty.yaml:\n%s", data)
+	}
+
+	if got := architecture(); got != "layered" {
+		t.Fatalf("the map should draw layered, not %q", got)
+	}
+}

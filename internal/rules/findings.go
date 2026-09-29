@@ -11,6 +11,7 @@ import (
 const (
 	FindingBreaking       = "breaking"
 	FindingCompatible     = "compatible"
+	FindingCycle          = "cycle"
 	FindingImplementation = "implementation"
 	FindingImplementers   = "implementers"
 	FindingLayerViolation = "layer_violation"
@@ -92,10 +93,15 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 	result := []Finding{}
 	for _, violation := range violations {
 		ref := violation.References[0]
+		title := "%s → %s breaks a layer rule"
+		if violation.Kind == FindingCycle {
+			title = "%s → %s closes a cycle"
+		}
+
 		result = append(result, Finding{
-			Severity: SeverityHigh, Kind: FindingLayerViolation,
-			Title:   fmt.Sprintf("%s → %s points outward", violation.From, violation.To),
-			Detail:  fmt.Sprintf("%s may not depend on %s; %d reference(s), first %s → %s at %s:%d", violation.FromLayer, violation.ToLayer, len(violation.References), ref.From, ref.To, ref.File, ref.Line),
+			Severity: SeverityHigh, Kind: violation.Kind,
+			Title:   fmt.Sprintf(title, violation.From, violation.To),
+			Detail:  fmt.Sprintf("%s; %d reference(s), first %s → %s at %s:%d", violation.Rule, len(violation.References), ref.From, ref.To, ref.File, ref.Line),
 			Targets: []string{violation.From, violation.To},
 			Blast:   blast[ref.To],
 		})
@@ -112,10 +118,15 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 		}
 
 		if base != nil && base.Module(module.ID) == nil {
+			detail := fmt.Sprintf("Placed in the %s layer.", module.Layer)
+			if module.Slice != "" {
+				detail = fmt.Sprintf("Placed in the %s layer of %s.", module.Layer, module.Slice)
+			}
+
 			result = append(result, Finding{
 				Severity: SeverityMedium, Kind: FindingNewModule,
 				Title:   fmt.Sprintf("New module %s", module.ID),
-				Detail:  fmt.Sprintf("Placed in the %s layer.", module.Layer),
+				Detail:  detail,
 				Targets: []string{module.ID},
 			})
 		}

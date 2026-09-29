@@ -29,7 +29,6 @@ type Slice struct {
 	Neighbors  []Neighbor        `json:"neighbors,omitempty"`
 	Dependents []string          `json:"dependents,omitempty"`
 	Violations []rules.Violation `json:"violations,omitempty"`
-	Tests      SliceTests        `json:"tests"`
 	Excluded   SliceExcluded     `json:"excluded"`
 }
 
@@ -61,12 +60,6 @@ type SliceSymbol struct {
 	Signature string `json:"signature"`
 }
 
-// SliceTests is the target's test strength, when it has been measured.
-type SliceTests struct {
-	Strength         *float64 `json:"strength"`
-	SurvivingMutants []string `json:"surviving_mutants"`
-}
-
 // Slice builds a context slice for a symbol or module in the working tree.
 //
 // Parameters:
@@ -89,14 +82,14 @@ func (this *Service) Slice(target string) (result Slice, err error) {
 
 func buildSlice(analysis *analysis, target string) (Slice, error) {
 	g := analysis.head
-	result := Slice{Schema: SliceSchema, Tests: SliceTests{SurvivingMutants: []string{}}}
+	result := Slice{Schema: SliceSchema}
 	included := map[string]bool{}
 	modules := map[string]bool{}
 	if symbol := g.Symbol(target); symbol != nil {
 		module := g.Module(symbol.Module)
 		result.TaskScope = SliceScope{Symbol: symbol.ID, File: symbol.File, Layer: module.Layer, Kind: symbol.Kind}
 		result.Contract = &SliceContract{Signature: symbol.Signature, Change: changeOf(analysis, symbol.ID)}
-		result.MayDepend = rules.AllowedLayers(module.Layer)
+		result.MayDepend = analysis.config.Architecture.MayUse(placement(module))
 		included[symbol.ID], modules[module.ID] = true, true
 		for _, edge := range g.Edges {
 			var other, relation string
@@ -126,7 +119,7 @@ func buildSlice(analysis *analysis, target string) (Slice, error) {
 		sort.Slice(result.Neighbors, func(i, j int) bool { return result.Neighbors[i].Symbol < result.Neighbors[j].Symbol })
 	} else if module := g.Module(target); module != nil {
 		result.TaskScope = SliceScope{Module: module.ID, Layer: module.Layer}
-		result.MayDepend = rules.AllowedLayers(module.Layer)
+		result.MayDepend = analysis.config.Architecture.MayUse(placement(module))
 		modules[module.ID] = true
 		for _, symbol := range g.SymbolsIn(module.ID) {
 			if symbol.Contract {

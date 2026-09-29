@@ -6,11 +6,14 @@ import (
 
 const ReportSchema = "treaty/report/v1"
 
-// ModuleReport is one module's layer and metrics.
+// ModuleReport is one module's placement and metrics. Section is the
+// vertical slice or bounded context holding it.
 type ModuleReport struct {
 	ID      string        `json:"id"`
 	Layer   string        `json:"layer"`
 	Side    string        `json:"side,omitempty"`
+	Section string        `json:"section,omitempty"`
+	Public  bool          `json:"public,omitempty"`
 	Before  *rules.Metric `json:"before,omitempty"`
 	Metrics rules.Metric  `json:"metrics"`
 }
@@ -23,15 +26,11 @@ type Report struct {
 	Changes    []rules.Change    `json:"changes,omitempty"`
 	Violations []rules.Violation `json:"violations"`
 	Findings   []rules.Finding   `json:"findings"`
-	Strength   string            `json:"strength"`
 	Failures   []string          `json:"failures"`
 }
 
 // Check runs every check on the working tree, and on the diff from base when
 // base is not empty.
-//
-// Notes:
-//   - Test strength is not computed yet; the report says so.
 //
 // Parameters:
 //   - base: the git ref to diff against, or empty for no diff.
@@ -55,7 +54,6 @@ func (this *analysis) report() Report {
 		Changes:    this.changes,
 		Violations: this.violations,
 		Findings:   this.findings,
-		Strength:   "not computed: mutation testing arrives in phase 3",
 		Failures:   this.failures(),
 	}
 
@@ -72,7 +70,7 @@ func (this *analysis) report() Report {
 	}
 
 	for _, module := range this.head.Modules {
-		entry := ModuleReport{ID: module.ID, Layer: module.Layer, Side: module.Side, Metrics: this.metrics[module.ID]}
+		entry := ModuleReport{ID: module.ID, Layer: module.Layer, Side: module.Side, Section: module.Slice, Public: module.Public, Metrics: this.metrics[module.ID]}
 		if before, ok := this.baseMetrics[module.ID]; ok {
 			entry.Before = &before
 		}

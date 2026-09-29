@@ -26,7 +26,7 @@ In one line: **CML is paths as headers, each language's own declarations beneath
 Several requirements in the first draft of the design document assumed CML would be a persistent file. They fell away:
 
 - **Git diffs.** "Must diff cleanly in git" became "output must be deterministic", which golden tests need.
-- **Content-hash references and stale markers.** Every graph is built from the tree it describes, so nothing can go stale. Symbol ids are enough. A hash of each function body survives only as the key for the mutation-result cache.
+- **Content-hash references and stale markers.** Every graph is built from the tree it describes, so nothing can go stale. Symbol ids are enough. A hash of each function body survives only to tell an implementation-only change from an unchanged symbol.
 - **A versioned JSON graph schema.** No graph file exists to version. JSON remains only for output that leaves the process on stdout: the check report and slices.
 - **`treaty export`.** Removed. `treaty map` builds, scores and renders in one pass.
 - **Round-tripping.** It became an internal test: graph → `treaty dump` → parser → the same graph.
@@ -46,9 +46,9 @@ go:injection
 
 go:injection/scope/scope.go
   @forbid go:injection/ports
+  @expect instability >= 0.50
   type Scope interface
     func Dispose() error
-      @expect strength >= 0.80
   func New(parent injection.Container) Scope
     @depends go:injection:Container
 ```
@@ -62,7 +62,7 @@ Why each piece is the way it is:
 | No receivers | Receivers sit below the level a contract map works at. The graph still records pointer vs value, the contract diff still reports a change as breaking, and the inspector shows it. |
 | Headers are `<lang>:<path>` with the file optional | A path ending in a source extension names a file; any other path names a module, for designs where no file has been chosen. Symbols are matched by id, so moving code between files never counts as drift. |
 | Layers come from the config only | `treaty.yaml` already places every module, including ones a design invents. A module that matches no glob shows up as Unclassified, a useful finding in itself. |
-| `@` marks directives | Bare keywords can collide with code: in C, `expect strength` parses as a declaration when `expect` is a typedef. No supported language starts a declaration with `@`. |
+| `@` marks directives | Bare keywords can collide with code: in C, `expect instability` parses as a declaration when `expect` is a typedef. No supported language starts a declaration with `@`. |
 | A fixed set of directives | Every check is already a short, closed list. An expression language would add an evaluator to the core. |
 | CML's parser reads only headers, indentation and directives | The text of each declaration goes to that language's hand-written contract scanner, the same one that reads source, which rebuilds a real declaration from the nesting. Backticks in Go struct tags need no escaping. |
 | Contract-ness comes from native syntax | In Go, exported names; for a method, an exported method on an exported type. No `internal` marker is needed. |
@@ -92,7 +92,7 @@ contractmap
 module go:injection/scope application
   interface Scope `type Scope interface{ Dispose() error }`
   method Scope.Dispose `func (Scope) Dispose() error`
-    expect strength >= 0.80
+  expect instability >= 0.50
 ```
 
 ## Known rough edges

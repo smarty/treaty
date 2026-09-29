@@ -8,17 +8,20 @@ import (
 	"github.com/smarty/treaty/internal/rules"
 )
 
-// MapEdge is one module-level dependency on the map.
+// MapEdge is one module-level dependency on the map. Rule is the rule a
+// violation breaks.
 type MapEdge struct {
 	From       string       `json:"from"`
 	To         string       `json:"to"`
 	Count      int          `json:"count"`
 	New        bool         `json:"new"`
 	Violation  bool         `json:"violation"`
+	Rule       string       `json:"rule,omitempty"`
 	References []graph.Edge `json:"references"`
 }
 
-// MapModule is one module hexagon on the map.
+// MapModule is one module hexagon on the map. Section is the vertical slice
+// or bounded context holding it, and Public marks a context's public API.
 type MapModule struct {
 	ID       string        `json:"id"`
 	Path     string        `json:"path"`
@@ -26,6 +29,8 @@ type MapModule struct {
 	Language string        `json:"language"`
 	Layer    string        `json:"layer"`
 	Side     string        `json:"side,omitempty"`
+	Section  string        `json:"section,omitempty"`
+	Public   bool          `json:"public,omitempty"`
 	New      bool          `json:"new"`
 	Design   bool          `json:"design"`
 	Files    []string      `json:"files"`
@@ -53,15 +58,20 @@ type MapSymbol struct {
 }
 
 // MapView is everything the renderer draws, built in the same run.
+// Architecture is the style that picks the layout, and Layers its layer
+// names, innermost or lowest first.
 type MapView struct {
-	Title    string          `json:"title"`
-	Base     string          `json:"base,omitempty"`
-	Modules  []MapModule     `json:"modules"`
-	Symbols  []MapSymbol     `json:"symbols"`
-	Edges    []MapEdge       `json:"edges"`
-	Links    []graph.Edge    `json:"links"`
-	Findings []rules.Finding `json:"findings"`
-	Designs  []string        `json:"designs,omitempty"`
+	Title        string          `json:"title"`
+	Architecture string          `json:"architecture"`
+	Layers       []string        `json:"layers"`
+	Summary      string          `json:"summary"`
+	Base         string          `json:"base,omitempty"`
+	Modules      []MapModule     `json:"modules"`
+	Symbols      []MapSymbol     `json:"symbols"`
+	Edges        []MapEdge       `json:"edges"`
+	Links        []graph.Edge    `json:"links"`
+	Findings     []rules.Finding `json:"findings"`
+	Designs      []string        `json:"designs,omitempty"`
 
 	// Problems are designs that could not be overlaid, and other trouble the
 	// live map reports without stopping.
@@ -100,10 +110,15 @@ func (this *Service) Map(base string, designs []string) (path string, err error)
 // designs overlaid. A tolerant build reports a broken design as a problem
 // instead of failing.
 func (this *Service) buildView(analysis *analysis, designs []string, tolerant bool) (MapView, error) {
-	view := MapView{Title: "Treaty", Base: analysis.baseRef, Findings: analysis.findings, Designs: designs, Links: analysis.head.Edges}
-	violations := map[[2]string]bool{}
+	architecture := analysis.config.Architecture
+	view := MapView{
+		Title: "Treaty", Architecture: architecture.Style, Layers: architecture.LayerNames(), Summary: architecture.Summary(),
+		Base: analysis.baseRef, Findings: analysis.findings, Designs: designs, Links: analysis.head.Edges,
+	}
+
+	violations := map[[2]string]string{}
 	for _, violation := range analysis.violations {
-		violations[[2]string{violation.From, violation.To}] = true
+		violations[[2]string{violation.From, violation.To}] = violation.Rule
 	}
 
 	baseEdges := map[[2]string]bool{}
@@ -117,14 +132,15 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 		key := [2]string{edge.From, edge.To}
 		view.Edges = append(view.Edges, MapEdge{
 			From: edge.From, To: edge.To, Count: len(edge.References), References: edge.References,
-			Violation: violations[key], New: analysis.base != nil && !baseEdges[key],
+			Violation: violations[key] != "", Rule: violations[key], New: analysis.base != nil && !baseEdges[key],
 		})
 	}
 
 	for _, module := range analysis.head.Modules {
 		entry := MapModule{
 			ID: module.ID, Path: module.Path, Label: label(module), Language: module.Language, Layer: module.Layer, Side: module.Side,
-			Files: module.Files, Metrics: analysis.metrics[module.ID], Guidance: guidance(module.Layer),
+			Section: module.Slice, Public: module.Public,
+			Files: module.Files, Metrics: analysis.metrics[module.ID], Guidance: architecture.Guidance(placement(module)),
 			New: analysis.base != nil && analysis.base.Module(module.ID) == nil,
 		}
 
@@ -175,8 +191,11 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 
 			if analysis.head.Module(element.Module) == nil && !hasModule(view.Modules, element.Module) {
 				language, modulePath, _ := strings.Cut(element.Module, ":")
-				layer, side := analysis.config.Layers.Resolve(modulePath)
-				view.Modules = append(view.Modules, MapModule{ID: element.Module, Path: modulePath, Label: modulePath, Language: language, Layer: layer, Side: side, Design: true, Guidance: guidance(layer)})
+				place := architecture.Resolve(modulePath)
+				view.Modules = append(view.Modules, MapModule{
+					ID: element.Module, Path: modulePath, Label: modulePath, Language: language, Layer: place.Layer, Side: place.Side,
+					Section: place.Slice, Public: place.Public, Design: true, Guidance: architecture.Guidance(place),
+				})
 			}
 
 			_, name := graph.SplitSymbolID(element.ID)
@@ -204,21 +223,6 @@ func (this *Service) source(cache map[string][]string, symbol *graph.Symbol) str
 	}
 
 	return strings.Join(lines[symbol.Line-1:end], "\n")
-}
-
-func guidance(layer string) string {
-	switch layer {
-	case graph.LayerDomain:
-		return "Domain: depends only on domain. Keep instability near 0; others build on it."
-	case graph.LayerApplication:
-		return "Application: may use domain and application. Ports here should be abstract."
-	case graph.LayerAdapter:
-		return "Adapter: may use domain and application, never another adapter. Instability near 1 is expected."
-	case graph.LayerComposition:
-		return "Composition: wires adapters into the core. The only layer allowed to use adapters; nothing may use it."
-	default:
-		return "Unclassified: add a glob to treaty.yaml so its dependencies are checked."
-	}
 }
 
 // label names a module for people: its path, or for the repository root,

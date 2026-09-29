@@ -7,7 +7,7 @@
 <style>
 :root {
   --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #d9d9d3;
-  --ring-domain: #eef1f6; --ring-app: #f4f5f8; --ring-adapter: #fafafa; --ring-stroke: #c9ccd4;
+  --ring-domain: #eef1f6; --ring-app: #f4f5f8; --ring-adapter: #fafafa; --ring-outer: #fdfdfc; --ring-stroke: #c9ccd4;
   --module: #ffffff; --module-stroke: #8a8f99; --hex-stroke: #c9ccd3; --group: rgba(120, 130, 150, .06); --group-collapsed: rgba(120, 130, 150, .16); --edge: #7f93bd; --arrow: #3f4654;
   --blue: #2563eb; --orange: #d97706; --magenta: #c026d3; --teal: #0d9488; --yellow: #a16207; --high: #dc2626; --medium: #d97706; --low: #6b7280;
   --code-bg: #f1f1ee; --focus: #2563eb; --glow: rgba(37, 99, 235, .85);
@@ -15,7 +15,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #141413; --panel: #1d1d1b; --ink: #ececea; --muted: #9b9b95; --line: #34342f;
-    --ring-domain: #1f2430; --ring-app: #1c1f27; --ring-adapter: #1a1b1f; --ring-stroke: #3b3f4a;
+    --ring-domain: #1f2430; --ring-app: #1c1f27; --ring-adapter: #1a1b1f; --ring-outer: #18181b; --ring-stroke: #3b3f4a;
     --module: #23232a; --module-stroke: #7d828c; --hex-stroke: #454a55; --group: rgba(160, 170, 195, .05); --group-collapsed: rgba(160, 170, 195, .14); --edge: #5f7196; --arrow: #d4d7dd;
     --blue: #60a5fa; --orange: #f59e0b; --magenta: #e879f9; --teal: #2dd4bf; --yellow: #facc15; --high: #f87171; --medium: #fbbf24; --low: #9ca3af;
     --code-bg: #25251f; --focus: #60a5fa; --glow: rgba(147, 197, 253, .95);
@@ -23,7 +23,7 @@
 }
 :root[data-theme="dark"] {
   --bg: #141413; --panel: #1d1d1b; --ink: #ececea; --muted: #9b9b95; --line: #34342f;
-  --ring-domain: #1f2430; --ring-app: #1c1f27; --ring-adapter: #1a1b1f; --ring-stroke: #3b3f4a;
+  --ring-domain: #1f2430; --ring-app: #1c1f27; --ring-adapter: #1a1b1f; --ring-outer: #18181b; --ring-stroke: #3b3f4a;
   --module: #23232a; --module-stroke: #7d828c; --hex-stroke: #454a55; --group: rgba(160, 170, 195, .05); --group-collapsed: rgba(160, 170, 195, .14); --edge: #5f7196; --arrow: #d4d7dd;
   --blue: #60a5fa; --orange: #f59e0b; --magenta: #e879f9; --teal: #2dd4bf; --yellow: #facc15; --high: #f87171; --medium: #fbbf24; --low: #9ca3af;
   --code-bg: #25251f; --focus: #60a5fa; --glow: rgba(147, 197, 253, .95);
@@ -41,6 +41,7 @@ header input[hidden] { display: none; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--low); }
 .dot.on { background: var(--teal); } .dot.error { background: var(--high); }
 .status { color: var(--muted); } .status.error { color: var(--high); }
+.adopt { color: var(--teal); display: inline-flex; gap: 6px; align-items: center; } .adopt[hidden] { display: none; }
 .offer { position: absolute; left: 10px; bottom: 10px; max-width: min(420px, calc(100% - 70px)); background: var(--panel); border: 1px solid var(--teal); border-left-width: 4px; border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.25); display: grid; gap: 6px; }
 .offer[hidden] { display: none; }
 .offer .who { color: var(--teal); font-weight: 600; }
@@ -124,6 +125,8 @@ table.metrics td:first-child, table.metrics th:first-child { text-align: left; }
     <label>Baseline <select id="baseline-mode"><option value="head">HEAD</option><option value="pr">Pull request</option><option value="ref">Ref</option></select></label>
     <input id="baseline-arg" type="text" size="16" spellcheck="false" aria-label="Baseline ref or target branch">
     <button id="baseline-apply" type="button">Apply</button>
+    <label title="Preview the code in another architecture; treaty.yaml switches after 5 minutes or when you choose to use it">Architecture <select id="architecture"><option value="hexagonal">Hexagonal</option><option value="clean">Clean</option><option value="layered">Layered</option><option value="slices">Vertical slices</option><option value="modular">Modular monolith</option></select></label>
+    <span class="adopt" id="adopt-bar" role="status" hidden>treaty.yaml switches in <span id="adopt-countdown"></span> <button id="adopt" type="button">Use this architecture</button> <button id="adopt-cancel" type="button">Keep treaty.yaml</button></span>
     <span class="status" id="status" role="status"></span>
     <label title="When on, Claude's show requests move the view, but only while you are not using the map"><input type="checkbox" id="follow"> Follow Claude</label>
   </span>
@@ -165,6 +168,8 @@ function ingest(data) {
   byModule = new Map();
   for (const s of D.symbols) { if (!byModule.has(s.module)) byModule.set(s.module, []); byModule.get(s.module).push(s); }
   edges = D.edges; links = D.links;
+  const note = document.getElementById("legend-public");
+  if (note) note.hidden = D.architecture !== "modular";
   groups = new Map((D.layout.groups || []).map(g => [g.id, g]));
   groupOf = new Map();
   for (const g of D.layout.groups || []) for (const id of g.modules) if (!groupOf.has(id) || groups.get(groupOf.get(id)).depth < g.depth) groupOf.set(id, g.id);
@@ -281,6 +286,12 @@ function anchorOf(moduleId) {
   return p ? { key: moduleId, x: p.x, y: p.y, r: D.layout.size, label: m.label || m.path, layer: m.layer } : null;
 }
 function collapsedSignature() { return (D.layout.groups || []).filter(isCollapsed).map(g => g.id).join("|"); }
+// placeName says where the architecture puts a module: its slice or
+// context, its layer and side, and whether it is public.
+function placeName(m) {
+  const within = m.section ? m.section.split("/").pop() + " · " : "";
+  return within + m.layer + (m.side ? ` (${m.side})` : "") + (m.public ? " (public)" : "");
+}
 // moduleLabel names a module relative to the group drawn around it, so a
 // group's children don't all repeat its path.
 function moduleLabel(m) {
@@ -319,14 +330,18 @@ function draw() {
   applyView();
   state.signature = collapsedSignature();
   const rel = related();
-  const ringFill = { domain: "--ring-domain", application: "--ring-app", adapter: "--ring-adapter" };
-  for (const ring of [...D.layout.rings].reverse()) {
-    el("polygon", { points: hexPoints(0, 0, ring.radius).map(p => p.join(",")).join(" "), fill: color(ringFill[ring.layer]), stroke: color("--ring-stroke") }, svg);
-    el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, 0, -ring.radius * Math.sin(Math.PI / 3) + 16, {}, true, true)).textContent = ring.layer;
+  // Rings for hexagonal and clean; bands, slices, cells and contexts as
+  // regions for the other architectures.
+  const tones = ["--ring-domain", "--ring-app", "--ring-adapter", "--ring-outer"];
+  for (const ring of [...(D.layout.rings || [])].reverse()) {
+    el("polygon", { points: hexPoints(0, 0, ring.radius).map(p => p.join(",")).join(" "), fill: color(tones[ring.tone] || tones[3]), stroke: color("--ring-stroke") }, svg);
+    el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, 0, -ring.radius * Math.sin(Math.PI / 3) + 16, {}, true, true)).textContent = ring.layer.replace(/_/g, " ");
   }
-  const outer = D.layout.rings[D.layout.rings.length - 1].radius;
-  el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, -outer * 0.72, outer * 0.95, {}, true, true)).textContent = "driving";
-  el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, outer * 0.72, outer * 0.95, {}, true, true)).textContent = "driven";
+  for (const r of D.layout.regions || []) {
+    el("rect", { x: r.x, y: r.y, width: r.w, height: r.h, rx: 8, fill: color(tones[r.tone] || tones[3]), stroke: color("--ring-stroke"), "vector-effect": "non-scaling-stroke" }, svg);
+    el("text", { x: 0, y: 0, class: "ring-label" }, anchored(svg, r.x + 10, r.y + 17, {}, true, true)).textContent = r.label;
+  }
+  for (const l of D.layout.labels || []) el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, l.x, l.y, {}, true, true)).textContent = l.text;
 
   // Groups, outermost first. A collapsed group hides everything inside it.
   const hidden = new Set();
@@ -381,7 +396,7 @@ function draw() {
       const width = e.violation ? 2.5 : 1 + 3 * part.refs.length / maxCount;
       const dimmed = rel && !(relatedKey(rel, e.from) && relatedKey(rel, e.to));
       const kinds = part.inherit ? [...new Set(part.refs.map(r => r.kind))].join(", ") : "uses";
-      const label = `${from.label} → ${to.label} · ${kinds} · ${part.refs.length} reference${part.refs.length === 1 ? "" : "s"}${e.violation ? " · layer violation" : ""}`;
+      const label = `${from.label} → ${to.label} · ${kinds} · ${part.refs.length} reference${part.refs.length === 1 ? "" : "s"}${e.violation ? " · violation" + (e.rule ? ": " + e.rule : "") : ""}`;
       const path = el("path", { d: `M${a.x},${a.y} Q${cx},${cy} ${b.x},${b.y}`, fill: "none", stroke, "stroke-width": width, "marker-end": part.inherit ? "url(#inherit)" : "url(#arrow)", "vector-effect": "non-scaling-stroke", "data-label": label, class: dimmed && !e.violation ? "dim" : "", tabindex: 0, role: "button", "aria-label": `${part.inherit ? "Inherits" : "Dependency"} ${from.label} to ${to.label}${e.violation ? ", layer violation" : ""}` }, edgeLayer);
       if (part.inherit) path.setAttribute("stroke-dasharray", "6 4");
       path.dataset.edge = e.from + "|" + e.to;
@@ -408,12 +423,15 @@ function draw() {
   state.symbolPos = new Map();
   for (const m of D.modules) {
     const p = pos[m.id]; if (!p || hidden.has(m.id)) continue;
-    const g = el("g", { class: "module" + (rel && !rel.has(m.id) ? " dim" : ""), "data-module": m.id, tabindex: 0, role: "button", "aria-label": `Module ${m.id}, ${m.layer}`, "data-label": `${m.label || m.path} · ${m.layer}${m.side ? " (" + m.side + ")" : ""}${m.design ? " · planned, not built" : ""}` }, svg);
+    const g = el("g", { class: "module" + (rel && !rel.has(m.id) ? " dim" : ""), "data-module": m.id, tabindex: 0, role: "button", "aria-label": `Module ${m.id}, ${m.layer}`, "data-label": `${m.label || m.path} · ${placeName(m)}${m.design ? " · planned, not built" : ""}` }, svg);
     const hex = el("polygon", { points: hexPoints(p.x, p.y, S).map(q => q.join(",")).join(" "), fill: color("--module"), stroke: m.new ? color("--blue") : m.design ? color("--teal") : state.selected && state.selected.id === m.id ? color("--yellow") : color("--hex-stroke"), "stroke-width": state.selected && state.selected.id === m.id ? 2.5 : 1.4, "vector-effect": "non-scaling-stroke" }, g);
     if (m.new || m.design) hex.setAttribute("stroke-dasharray", "5 3");
     // Composition wires adapters into the core: a double outline marks the
     // only modules allowed to depend on adapters.
     if (m.layer === "composition") el("polygon", { points: hexPoints(p.x, p.y, S * 0.84).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--hex-stroke"), "stroke-width": 1, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
+    // A context's public API is the only part other contexts may use: a
+    // bold outline marks it.
+    if (m.public) el("polygon", { points: hexPoints(p.x, p.y, S * 1.12).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--module-stroke"), "stroke-width": 2.4, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
     el("text", { x: 0, y: 0, "text-anchor": "middle", class: "module-label" + (state.selected && state.selected.type === "module" && state.selected.id === m.id ? " selected-label" : "") }, anchored(g, p.x, p.y + S + 13, {}, true, true)).textContent = moduleLabel(m);
     const pick = () => select({ type: "module", id: m.id });
     g.addEventListener("click", ev => { ev.stopPropagation(); if (ev.target === hex || ev.target.tagName === "text") pick(); });
@@ -469,8 +487,6 @@ function placeSymbol(g, s, x, y, r, rel) {
   const label = `${s.name} · ${s.kind}${s.contract ? "" : " · internal"}${s.change ? " · " + s.change : ""}${s.design ? " · planned, not built" : ""}`;
   const sg = anchored(g, x, y, { "data-symbol": s.id, tabindex: 0, role: "button", "aria-label": `${s.kind} ${s.id}${s.change ? ", " + s.change : ""}`, "data-label": label, class: rel && !rel.has(s.id) ? "dim" : "" });
   const shape = drawShape(sg, s.kind, 0, 0, (state.selected && state.selected.id === s.id) ? r * 1.6 : r, s.change, s.design);
-  const strength = s.strength;
-  if (typeof strength === "number") { const c = 2 * Math.PI * (r + 3); el("circle", { cx: 0, cy: 0, r: r + 3, fill: "none", stroke: color("--blue"), "stroke-dasharray": `${c * strength} ${c}` }, sg); }
   sg.style.cursor = "pointer";
   const pick = ev => { ev.stopPropagation(); select({ type: "symbol", id: s.id }); };
   sg.addEventListener("click", pick);
@@ -514,7 +530,6 @@ function inspect() {
     if (s.before) { sig.appendChild(h("div", { class: "sig-old" }, "- " + s.before)); sig.appendChild(h("div", { class: "sig-new" }, "+ " + s.signature)); }
     else sig.textContent = s.signature;
     box.appendChild(h("h2", {}, "Signature")); box.appendChild(sig);
-    box.appendChild(h("h2", {}, "Test strength")); box.appendChild(h("p", { class: "empty" }, "Not measured yet: mutation testing arrives in phase 3."));
     const uses = links.filter(l => l.from === s.id).map(l => l.to), callers = links.filter(l => l.to === s.id).map(l => l.from);
     if (uses.length) { box.appendChild(h("h2", {}, "Uses")); const c = h("div", { class: "chips" }); [...new Set(uses)].forEach(id => chip(id, c)); box.appendChild(c); }
     if (callers.length) { box.appendChild(h("h2", {}, "Callers")); const c = h("div", { class: "chips" }); [...new Set(callers)].forEach(id => chip(id, c)); box.appendChild(c); }
@@ -523,7 +538,7 @@ function inspect() {
   } else if (sel.type === "module") {
     const m = modules.get(sel.id); if (!m) return;
     box.appendChild(h("h3", {}, m.label || m.path));
-    dl(box, [["Id", m.id], ["Layer", m.layer + (m.side ? ` (${m.side})` : "")], ["Status", m.design ? "planned, not built" : m.new ? "new" : ""]]);
+    dl(box, [["Id", m.id], ["Layer", m.layer + (m.side ? ` (${m.side})` : "")], [D.architecture === "modular" ? "Context" : "Slice", m.section || ""], ["API", m.public ? "public" : ""], ["Status", m.design ? "planned, not built" : m.new ? "new" : ""]]);
     box.appendChild(h("p", {}, m.guidance));
     const t = h("table", { class: "metrics" }); t.innerHTML = "<tr><th>Metric</th><th>Before</th><th>After</th></tr>";
     for (const [label, key] of [["Ca", "ca"], ["Ce", "ce"], ["I", "instability"], ["A", "abstractness"], ["D", "distance"]]) {
@@ -540,11 +555,11 @@ function inspect() {
     const a = end(e.from), b = end(e.to);
     box.appendChild(h("h3", {}, `${shortName(a.label)} → ${shortName(b.label)}`));
     const p = h("p"); p.appendChild(h("span", { class: "pill " + (e.violation ? "fail" : "pass") }, e.violation ? "Violation" : "Allowed"));
-    p.appendChild(document.createTextNode(` ${a.layer} → ${b.layer}: ${e.violation ? "dependencies may not point outward" : "points inward or sideways"}.`));
+    p.appendChild(document.createTextNode(` ${a.layer} → ${b.layer}: ${e.violation ? e.rule || "breaks the architecture's rules" : "allowed by the architecture's rules"}.`));
     box.appendChild(p);
     box.appendChild(h("h2", {}, `References (${e.references.length})`));
     const ul = h("ul"); for (const r of e.references) { const li = h("li"); li.appendChild(h("code", {}, `${r.from.split(":").pop()} → ${r.to.split(":").pop()}`)); li.appendChild(document.createTextNode(` ${r.kind} at ${r.file}:${r.line}`)); ul.appendChild(li); } box.appendChild(ul);
-    const slice = { schema: "treaty/slice/v1", violation: e.violation ? { rule: `${a.layer} may not depend on ${b.layer}`, from: e.from, to: e.to, references: e.references } : null };
+    const slice = { schema: "treaty/slice/v1", violation: e.violation ? { rule: e.rule || `${a.layer} may not depend on ${b.layer}`, from: e.from, to: e.to, references: e.references } : null };
     if (e.violation) sliceBlock(box, slice);
   } else if (sel.type === "group") {
     const g = groups.get(sel.id); if (!g) return;
@@ -594,7 +609,10 @@ function buildLegend() {
   legend.appendChild(h("br"));
   legend.appendChild(document.createTextNode("blue + added · orange Δ compatible, ! breaking, ~ implementation, → moved · teal dashed = planned, not built"));
   legend.appendChild(h("br"));
-  legend.appendChild(document.createTextNode("solid ▶ uses · dashed ▷ implements or embeds · magenta ! = layer violation · double hexagon = composition"));
+  legend.appendChild(document.createTextNode("solid ▶ uses · dashed ▷ implements or embeds · magenta ! = rule violation · double hexagon = composition"));
+  // The legend is built before a live map has its data, so ingest shows this
+  // note once it knows the architecture.
+  legend.appendChild(h("span", { id: "legend-public", hidden: "" }, " · bold outline = public API"));
 }
 function updateMeta() {
   const meta = `${D.modules.length} modules · ${D.symbols.filter(s => s.contract).length} contracts · ${D.findings.length} findings`;
@@ -811,6 +829,33 @@ function showState(st) {
     arg.value = st.baseline.mode === "pr" ? st.baseline.target || "" : st.baseline.ref || "";
     syncBaselineInput();
   }
+  showView(st.view);
+}
+// showView reflects which architecture the map draws: treaty.yaml's, or a
+// preview counting down to replacing it.
+function showView(view) {
+  if (!view || !view.configured) return;
+  const select = document.getElementById("architecture");
+  for (const option of select.options) option.textContent = option.textContent.replace(/ \(treaty\.yaml\)$/, "") + (option.value === view.configured ? " (treaty.yaml)" : "");
+  if (document.activeElement !== select) select.value = view.architecture;
+  document.getElementById("adopt-bar").hidden = !view.adopt_at;
+  document.getElementById("adopt-cancel").textContent = `Keep ${view.configured}`;
+  tickAdopt();
+}
+function tickAdopt() {
+  const view = live.state && live.state.view;
+  if (!view || !view.adopt_at) return;
+  const left = Math.max(0, Math.round((Date.parse(view.adopt_at) - Date.now()) / 1000));
+  document.getElementById("adopt-countdown").textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+}
+async function postView(path, body, failure) {
+  try {
+    const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!response.ok) throw new Error((await response.text()).trim());
+    showState(await response.json());
+  } catch (err) {
+    setStatus(`${failure}: ${err.message}`, true);
+  }
 }
 function syncBaselineInput() {
   const mode = document.getElementById("baseline-mode").value, arg = document.getElementById("baseline-arg");
@@ -849,6 +894,10 @@ function startLive() {
   document.getElementById("baseline-mode").addEventListener("change", syncBaselineInput);
   document.getElementById("baseline-apply").addEventListener("click", applyBaseline);
   document.getElementById("baseline-arg").addEventListener("keydown", ev => { if (ev.key === "Enter") applyBaseline(); });
+  document.getElementById("architecture").addEventListener("change", ev => { setStatus("switching architecture…"); postView("/api/view", { architecture: ev.target.value }, "architecture not changed"); });
+  document.getElementById("adopt").addEventListener("click", () => postView("/api/view/adopt", {}, "treaty.yaml not switched"));
+  document.getElementById("adopt-cancel").addEventListener("click", () => postView("/api/view", { architecture: live.state.view.configured }, "architecture not changed"));
+  setInterval(tickAdopt, 1000);
   const events = new EventSource("/api/events");
   events.onmessage = ev => { const st = JSON.parse(ev.data); showState(st); if (st.version !== live.shown) refreshView(); };
   events.onerror = () => { const dot = document.getElementById("live-dot"); dot.classList.remove("on"); dot.title = "disconnected"; setStatus("disconnected from treaty; retrying…", true); };

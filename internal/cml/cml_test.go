@@ -13,7 +13,7 @@ go:injection/scope/scope.go
   @forbid go:injection/ports
   type Scope interface
     func Dispose() error
-      @expect strength >= 0.80
+      @depends go:injection/errs:ErrDisposed
   func New(parent injection.Container) Scope
     @depends go:injection:Container
 `
@@ -34,7 +34,7 @@ func TestParseDesign(t *testing.T) {
 	}
 
 	scope := block.Nodes[0]
-	if scope.Text != "type Scope interface" || len(scope.Children) != 1 || scope.Children[0].Directives[0].Name != "expect" {
+	if scope.Text != "type Scope interface" || len(scope.Children) != 1 || scope.Children[0].Directives[0].Name != "depends" {
 		t.Fatalf("scope: %+v", scope)
 	}
 
@@ -49,7 +49,7 @@ go:injection/scope/scope.go
   @forbid go:injection/ports
   type Scope interface
     func Dispose() error
-      @expect strength >= 0.80
+      @depends go:injection/errs:ErrDisposed
   func New(parent injection.Container) Scope
     @depends go:injection:Container
 ` {

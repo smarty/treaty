@@ -23,7 +23,10 @@ const (
 	LayerAdapter      = "adapter"
 	LayerApplication  = "application"
 	LayerComposition  = "composition"
+	LayerContext      = "context"
 	LayerDomain       = "domain"
+	LayerShared       = "shared"
+	LayerSlice        = "slice"
 	LayerUnclassified = "unclassified"
 
 	SideDriven  = "driven"
@@ -57,7 +60,9 @@ type Graph struct {
 
 // Module is a unit of code placed into one layer, such as a Go package.
 // Name is what the language calls it, and Entry marks a program's entry
-// point, such as a Go main package, which nothing can import.
+// point, such as a Go main package, which nothing can import. Slice is the
+// root path of the vertical slice or bounded context holding the module, and
+// Public marks a context's packages that other contexts may use.
 type Module struct {
 	ID       string   `json:"id"`
 	Language string   `json:"language"`
@@ -66,6 +71,8 @@ type Module struct {
 	Entry    bool     `json:"entry,omitempty"`
 	Layer    string   `json:"layer"`
 	Side     string   `json:"side,omitempty"`
+	Slice    string   `json:"slice,omitempty"`
+	Public   bool     `json:"public,omitempty"`
 	Files    []string `json:"files"`
 }
 

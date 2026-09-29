@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/smarty/treaty/internal/app"
+	"github.com/smarty/treaty/internal/graph"
 	"github.com/smarty/treaty/internal/rules"
 )
 
@@ -55,21 +57,19 @@ type serverInfo struct {
 	PID int    `json:"pid"`
 }
 
-// configFile is the YAML shape of treaty.yaml.
+// configFile is the YAML shape of treaty.yaml. Layers stays a node because
+// its order carries meaning: top to bottom for layered and slices.
 type configFile struct {
-	Layers struct {
-		Composition []string `yaml:"composition"`
-		Domain      []string `yaml:"domain"`
-		Application []string `yaml:"application"`
-		Adapter     struct {
-			Driving []string `yaml:"driving"`
-			Driven  []string `yaml:"driven"`
-		} `yaml:"adapter"`
-	} `yaml:"layers"`
-	Rules struct {
-		FailOn            []string `yaml:"fail_on"`
-		WarnOn            []string `yaml:"warn_on"`
-		StrengthThreshold *float64 `yaml:"strength_threshold"`
+	Architecture string    `yaml:"architecture"`
+	Composition  []string  `yaml:"composition"`
+	Layers       yaml.Node `yaml:"layers"`
+	Shared       []string  `yaml:"shared"`
+	Slices       []string  `yaml:"slices"`
+	Contexts     []string  `yaml:"contexts"`
+	Public       []string  `yaml:"public"`
+	Rules        struct {
+		FailOn []string `yaml:"fail_on"`
+		WarnOn []string `yaml:"warn_on"`
 	} `yaml:"rules"`
 }
 
@@ -114,9 +114,8 @@ func NewWorkspace(root string) *Workspace {
 //   - err: the file could not be read or parsed.
 func (this *Config) Load() (config app.Config, found bool, err error) {
 	config = app.Config{
-		FailOn:            []string{rules.FindingBreaking, rules.FindingLayerViolation},
-		WarnOn:            []string{rules.FindingUnclassified, "weak_contract"},
-		StrengthThreshold: 0.60,
+		FailOn: []string{rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingCycle},
+		WarnOn: []string{rules.FindingUnclassified},
 	}
 
 	data, err := os.ReadFile(filepath.Join(this.root, ConfigFile))
@@ -133,12 +132,8 @@ func (this *Config) Load() (config app.Config, found bool, err error) {
 		return config, true, fmt.Errorf("%s: %w", ConfigFile, err)
 	}
 
-	config.Layers = rules.Layers{
-		Composition: file.Layers.Composition,
-		Domain:      file.Layers.Domain,
-		Application: file.Layers.Application,
-		Driving:     file.Layers.Adapter.Driving,
-		Driven:      file.Layers.Adapter.Driven,
+	if config.Architecture, err = file.architecture(); err != nil {
+		return config, true, fmt.Errorf("%s: %w", ConfigFile, err)
 	}
 
 	if file.Rules.FailOn != nil {
@@ -147,10 +142,6 @@ func (this *Config) Load() (config app.Config, found bool, err error) {
 
 	if file.Rules.WarnOn != nil {
 		config.WarnOn = file.Rules.WarnOn
-	}
-
-	if file.Rules.StrengthThreshold != nil {
-		config.StrengthThreshold = *file.Rules.StrengthThreshold
 	}
 
 	return config, true, nil
@@ -372,6 +363,19 @@ func (this *Workspace) ReadDesign(name string) (result string, err error) {
 	return string(data), err
 }
 
+// WriteConfig replaces treaty.yaml.
+//
+// Parameters:
+//   - text: the new config.
+//
+// Returns:
+//   - path: where the config was written.
+//   - err: the write failed.
+func (this *Workspace) WriteConfig(text string) (path string, err error) {
+	path = filepath.Join(this.root, ConfigFile)
+	return path, os.WriteFile(path, []byte(text), 0o644)
+}
+
 // WriteConfigDraft writes treaty.yaml, or a draft beside the existing
 // one in .treaty/out when a config is already present.
 //
@@ -406,6 +410,86 @@ func (this *Workspace) WriteOutput(name string, data []byte) (path string, err e
 
 	path = filepath.Join(this.root, Directory, "out", name)
 	return path, os.WriteFile(path, data, 0o644)
+}
+
+// architecture builds the rules from the file, innermost layer first.
+//
+// Returns:
+//   - result: the validated architecture.
+//   - err: the layers do not parse, or the architecture is invalid.
+func (this configFile) architecture() (result rules.Architecture, err error) {
+	result = rules.Architecture{Style: this.Architecture, Composition: this.Composition, Shared: this.Shared, Public: this.Public}
+	if result.Style == "" {
+		result.Style = rules.StyleHexagonal
+	}
+
+	switch {
+	case result.Style == rules.StyleModular && len(this.Slices) > 0:
+		return result, fmt.Errorf("%w: the modular architecture lists contexts, not slices", rules.ErrArchitecture)
+	case result.Style != rules.StyleModular && len(this.Contexts) > 0:
+		return result, fmt.Errorf("%w: contexts apply only to the modular architecture", rules.ErrArchitecture)
+	case result.Style == rules.StyleModular:
+		result.Slices = this.Contexts
+	default:
+		result.Slices = this.Slices
+	}
+
+	if this.Layers.Kind != 0 && this.Layers.Kind != yaml.MappingNode {
+		return result, fmt.Errorf("%w: layers must map each layer name to its globs", rules.ErrArchitecture)
+	}
+
+	var listed []rules.Layer
+	for i := 0; i+1 < len(this.Layers.Content); i += 2 {
+		name, value := this.Layers.Content[i].Value, this.Layers.Content[i+1]
+		if result.Style == rules.StyleHexagonal && name == graph.LayerAdapter {
+			var sides struct {
+				Driving []string `yaml:"driving"`
+				Driven  []string `yaml:"driven"`
+			}
+
+			if err := value.Decode(&sides); err != nil {
+				return result, fmt.Errorf("layers.adapter: %w", err)
+			}
+
+			listed = append(listed, rules.Layer{Name: name, Side: graph.SideDriving, Globs: sides.Driving}, rules.Layer{Name: name, Side: graph.SideDriven, Globs: sides.Driven})
+			continue
+		}
+
+		var globs []string
+		if err := value.Decode(&globs); err != nil {
+			return result, fmt.Errorf("layers.%s: %w", name, err)
+		}
+
+		if result.Style == rules.StyleHexagonal && name == graph.LayerComposition {
+			result.Composition = append(result.Composition, globs...)
+			continue
+		}
+
+		listed = append(listed, rules.Layer{Name: name, Globs: globs})
+	}
+
+	switch result.Style {
+	case rules.StyleHexagonal, rules.StyleClean:
+		order := rules.HexagonalLayers
+		if result.Style == rules.StyleClean {
+			order = rules.CleanLayers
+		}
+
+		rank := func(name string) int {
+			if index := slices.Index(order, name); index >= 0 {
+				return index
+			}
+
+			return len(order)
+		}
+
+		sort.SliceStable(listed, func(i, j int) bool { return rank(listed[i].Name) < rank(listed[j].Name) })
+	default:
+		slices.Reverse(listed)
+	}
+
+	result.Layers = listed
+	return result, result.Validate()
 }
 
 func (this *Workspace) designPath(name string) (string, error) {

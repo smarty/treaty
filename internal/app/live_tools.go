@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -31,16 +32,19 @@ func (this *Live) Allowed(from, to string) (result string, err error) {
 		return "", err
 	}
 
-	fromID, fromLayer, fromSide := current.locate(from)
-	toID, toLayer, toSide := current.locate(to)
-	verdict := "allowed"
-	if fromID != toID && !rules.Allowed(fromLayer, toLayer) {
-		verdict = "not allowed"
+	architecture := current.config.Architecture
+	fromID, fromPlace := current.locate(from)
+	toID, toPlace := current.locate(to)
+	verdict, rule := "allowed", ""
+	if fromID != toID {
+		if allowed, broken := architecture.Check(fromPlace, toPlace); !allowed {
+			verdict, rule = "not allowed", "rule: "+broken+"\n"
+		}
 	}
 
-	return fmt.Sprintf("%s: %s (%s) → %s (%s)\n%s may depend on: %s\n",
-		verdict, fromID, layerName(fromLayer, fromSide), toID, layerName(toLayer, toSide),
-		layerName(fromLayer, fromSide), strings.Join(rules.AllowedLayers(fromLayer), ", ")), nil
+	return fmt.Sprintf("%s: %s (%s) → %s (%s)\n%s%s may depend on: %s\n",
+		verdict, fromID, placeName(fromPlace), toID, placeName(toPlace), rule,
+		placeName(fromPlace), strings.Join(architecture.MayUse(fromPlace), ", ")), nil
 }
 
 // Changes describes how the architecture differs from the baseline: contract
@@ -103,7 +107,7 @@ func (this *Live) Changes() (result string, err error) {
 	}
 
 	baseViolations := map[string]bool{}
-	for _, violation := range rules.Violations(current.base) {
+	for _, violation := range current.config.Architecture.Violations(current.base) {
 		baseViolations[violation.From+" → "+violation.To] = true
 	}
 
@@ -114,7 +118,7 @@ func (this *Live) Changes() (result string, err error) {
 		headViolations[key] = true
 		if !baseViolations[key] {
 			ref := violation.References[0]
-			newViolations = append(newViolations, fmt.Sprintf("%s (%s may not depend on %s; first at %s:%d)", key, violation.FromLayer, violation.ToLayer, ref.File, ref.Line))
+			newViolations = append(newViolations, fmt.Sprintf("%s (%s; first at %s:%d)", key, violation.Rule, ref.File, ref.Line))
 		}
 	}
 
@@ -309,8 +313,7 @@ func (this *Live) Impact(target string) (result string, err error) {
 			return symbols[i].ID < symbols[j].ID
 		})
 
-		layer, side := layerOf(g, module)
-		fmt.Fprintf(&builder, "\n%s (%s)\n", module, layerName(layer, side))
+		fmt.Fprintf(&builder, "\n%s (%s)\n", module, placeName(placeOf(g, module)))
 		for _, symbol := range symbols {
 			_, name := graph.SplitSymbolID(symbol.ID)
 			marker := " "
@@ -348,14 +351,14 @@ func (this *Live) Overview() (result string, err error) {
 
 	byLayer := map[string][]*graph.Module{}
 	for _, module := range g.Modules {
-		key := layerName(module.Layer, module.Side)
+		key := placeName(placement(module))
 		byLayer[key] = append(byLayer[key], module)
 	}
 
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "%d modules, %d symbols, baseline %s\n", len(g.Modules), len(g.Symbols), current.baseRef)
-	builder.WriteString("Rules: domain may use domain; application and adapters may use domain and application; composition may use everything; nothing may use composition; adapters may not use each other.\n")
-	for _, layer := range []string{"domain", "application", "adapter (driving)", "adapter (driven)", "composition", "unclassified"} {
+	builder.WriteString(current.config.Architecture.Summary() + "\n")
+	for _, layer := range overviewOrder(current.config.Architecture, byLayer) {
 		modules := byLayer[layer]
 		if len(modules) == 0 {
 			continue
@@ -486,15 +489,16 @@ func (this *Live) Slice(target string) (result Slice, err error) {
 	return buildSlice(current, target)
 }
 
-// locate finds a module by id or path, and the layer it has or would have.
-func (this *analysis) locate(module string) (id, layer, side string) {
+// locate finds a module by id or path, and the placement it has or would
+// have.
+func (this *analysis) locate(module string) (id string, place rules.Placement) {
 	if found := this.head.Module(module); found != nil {
-		return found.ID, found.Layer, found.Side
+		return found.ID, placement(found)
 	}
 
 	for _, found := range this.head.Modules {
 		if found.Path == module {
-			return found.ID, found.Layer, found.Side
+			return found.ID, placement(found)
 		}
 	}
 
@@ -503,8 +507,7 @@ func (this *analysis) locate(module string) (id, layer, side string) {
 		path = rest
 	}
 
-	layer, side = this.config.Layers.Resolve(path)
-	return module + " (not built)", layer, side
+	return module + " (not built)", this.config.Architecture.Resolve(path)
 }
 
 func changeDetail(change rules.Change) string {
@@ -524,20 +527,69 @@ func changeDetail(change rules.Change) string {
 	return strings.Join(parts, "; ")
 }
 
-func layerName(layer, side string) string {
-	if side != "" {
-		return fmt.Sprintf("%s (%s)", layer, side)
+// overviewOrder lists the overview's groups: hexagonal and clean from the
+// center outward, layered from the top down, and slices and contexts by
+// name, with composition, shared and unclassified around them.
+func overviewOrder(architecture rules.Architecture, groups map[string][]*graph.Module) []string {
+	if architecture.Style == rules.StyleHexagonal {
+		return []string{"domain", "application", "adapter (driving)", "adapter (driven)", "composition", "unclassified"}
 	}
 
-	return layer
+	var middle []string
+	for key := range groups {
+		if key != graph.LayerComposition && key != graph.LayerShared && key != graph.LayerUnclassified {
+			middle = append(middle, key)
+		}
+	}
+
+	names := architecture.LayerNames()
+	if architecture.Style == rules.StyleLayered {
+		slices.Reverse(names)
+	}
+
+	sort.Slice(middle, func(i, j int) bool {
+		a, b := slices.Index(names, middle[i]), slices.Index(names, middle[j])
+		if a != b {
+			return a < b
+		}
+
+		return middle[i] < middle[j]
+	})
+
+	return append(append([]string{graph.LayerComposition}, middle...), graph.LayerShared, graph.LayerUnclassified)
 }
 
-func layerOf(g *graph.Graph, module string) (layer, side string) {
+// placeName names a placement for people: its layer and side, its slice
+// and the layer inside it, or its context and whether it is public.
+func placeName(place rules.Placement) string {
+	switch {
+	case place.Slice == "":
+		if place.Side != "" {
+			return fmt.Sprintf("%s (%s)", place.Layer, place.Side)
+		}
+
+		return place.Layer
+	case place.Layer == graph.LayerContext && place.Public:
+		return fmt.Sprintf("context %s (public)", place.Slice)
+	case place.Layer == graph.LayerContext:
+		return "context " + place.Slice
+	case place.Layer == graph.LayerSlice:
+		return "slice " + place.Slice
+	default:
+		return fmt.Sprintf("slice %s: %s", place.Slice, place.Layer)
+	}
+}
+
+func placeOf(g *graph.Graph, module string) rules.Placement {
 	if found := g.Module(module); found != nil {
-		return found.Layer, found.Side
+		return placement(found)
 	}
 
-	return graph.LayerUnclassified, ""
+	return rules.Placement{Layer: graph.LayerUnclassified}
+}
+
+func placement(module *graph.Module) rules.Placement {
+	return rules.Placement{Layer: module.Layer, Side: module.Side, Slice: module.Slice, Public: module.Public}
 }
 
 func moduleEdgeSet(g *graph.Graph) map[string]bool {

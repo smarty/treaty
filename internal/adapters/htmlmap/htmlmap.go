@@ -46,7 +46,7 @@ func (this *Renderer) Payload(view app.MapView) (result []byte, err error) {
 	return json.Marshal(struct {
 		app.MapView
 		Layout Layout `json:"layout"`
-	}{view, ComputeLayout(view.Modules)})
+	}{view, ComputeLayout(view)})
 }
 
 // Render lays out the modules and embeds the view and layout in the page.

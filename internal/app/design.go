@@ -60,10 +60,6 @@ type designWalk struct {
 
 // DesignCheck compares a design in the workspace with the working tree.
 //
-// Notes:
-//   - Strength expectations are reported as unverified until mutation testing
-//     exists, and do not count as failures.
-//
 // Parameters:
 //   - name: the design name, without directory or extension.
 //
@@ -194,7 +190,7 @@ func (this *designWalk) block(block *cml.Block) error {
 
 	modulePath := dialect.ModulePath(block.Path)
 	moduleID := graph.ModuleID(block.Language, modulePath)
-	layer, _ := this.analysis.config.Layers.Resolve(modulePath)
+	layer := this.analysis.config.Architecture.Resolve(modulePath).Layer
 	if layer == graph.LayerUnclassified {
 		this.add(ItemUnclassified, moduleID, block.Line, "treaty.yaml places %s in no layer", moduleID)
 	}
@@ -231,15 +227,17 @@ func (this *designWalk) directive(directive cml.Directive, moduleID, symbolID, l
 			targetModule = module
 		}
 
-		targetLayer := graph.LayerUnclassified
+		architecture := this.analysis.config.Architecture
+		target := rules.Placement{Layer: graph.LayerUnclassified}
 		if module := g.Module(targetModule); module != nil {
-			targetLayer = module.Layer
+			target = placement(module)
 		} else if _, path, ok := strings.Cut(targetModule, ":"); ok {
-			targetLayer, _ = this.analysis.config.Layers.Resolve(path)
+			target = architecture.Resolve(path)
 		}
 
-		if targetModule != moduleID && !rules.Allowed(layer, targetLayer) {
-			this.add(ItemLayer, owner, directive.Line, "%s (%s) may not depend on %s (%s)", moduleID, layer, directive.Args[0], targetLayer)
+		_, fromPath, _ := strings.Cut(moduleID, ":")
+		if allowed, rule := architecture.Check(architecture.Resolve(fromPath), target); targetModule != moduleID && !allowed {
+			this.add(ItemLayer, owner, directive.Line, "%s may not depend on %s: %s", moduleID, directive.Args[0], rule)
 		}
 	case "forbid":
 		if len(directive.Args) != 1 {
@@ -272,11 +270,6 @@ func (this *designWalk) expect(directive cml.Directive, owner, moduleID, symbolI
 	want, err := strconv.ParseFloat(directive.Args[2], 64)
 	if err != nil || (op != ">=" && op != "<=") {
 		this.add(ItemExpectation, owner, directive.Line, "@expect %s: bad comparison %s %s", metricName, op, directive.Args[2])
-		return
-	}
-
-	if metricName == "strength" {
-		this.add(ItemUnverified, owner, directive.Line, "strength %s %.2f not checked: mutation testing arrives in phase 3", op, want)
 		return
 	}
 

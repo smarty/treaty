@@ -1,9 +1,10 @@
 # Treaty
 
-Treaty reads a codebase into a graph of its contracts, places them in
-hexagonal architecture layers, and checks, slices and draws that graph. You
-can use it for code review, for thinking through a design, and alongside a
-coding agent.
+Treaty reads a codebase into a graph of its contracts, places them in the
+architecture your team declares (hexagonal, clean, layered, vertical slices
+or modular monolith), and checks, slices and draws that graph. You can use it
+for code review, for thinking through a design, and alongside a coding
+agent.
 
 ## Why Treaty exists
 
@@ -33,20 +34,20 @@ implementation detail, and it is judged through the contracts that reach it.
 - **Contracts first.** Treaty ranks every change by what it does to a
   contract (breaking, compatible, added, removed, moved or implementation
   only), using signature comparison instead of a text diff. So reviewers see
-  breaking changes and layer violations first.
-- **Layers are declared and checked.** `treaty.yaml` assigns each module to
-  a hexagonal layer: domain, application, adapter (driving or driven), or
-  composition. A dependency may point inward or sideways, never outward.
-  Treaty fails the check when a dependency breaks that rule.
-- **Every score is mechanical.** Scores come from static analysis or test
-  execution, never from a model's judgment. There are no AI-generated
+  breaking changes and rule violations first.
+- **Architecture is declared and checked.** `treaty.yaml` names the
+  architecture and places each module in it. Treaty fails the check when a
+  dependency breaks that architecture's rules, and says which rule. Choosing
+  the architecture is up to the team; Treaty doesn't recommend one.
+- **Every score is mechanical.** Scores come from static analysis, never
+  from a model's judgment. There are no AI-generated
   scores, summaries or risk labels anywhere in the scoring path, so every
   result is reproducible.
 - **Ephemeral by design.** The graph lives in memory. Treaty doesn't
   communicate a design between people or keep it as a record. Nothing it
   writes is ever tracked in git. Its workspace, `.treaty/`, ignores itself.
 - **Give agents only what they need.** A context slice holds the contracts
-  around one symbol or module and the layer rules it must not break, and
+  around one symbol or module and the architecture rules it must not break, and
   counts what it left out. An agent can work on the right code without
   reading the whole repository.
 - **Small, hand-written scanners.** Treaty needs contracts, not a full
@@ -69,16 +70,17 @@ go install github.com/smarty/treaty/cmd/treaty@latest
 In the root of a Go repository:
 
 ```sh
-treaty init     # create .treaty/ and propose a treaty.yaml from the import graph
-treaty check    # check layer rules and contract changes; exits 1 on failure
+treaty init --architecture layered   # propose a treaty.yaml from the import graph
+treaty check                         # check the rules and contract changes; exits 1 on failure
 treaty serve --open
 ```
 
-`treaty init` works out the layers from the shape of the import graph, so
-its proposal has no violations. Directory names only act as hints. Review
-and edit the draft before you rely on it.
+`treaty init` fits the code to the architecture you name, using the shape of
+the import graph. Directory names only act as hints. Without
+`--architecture`, it proposes hexagonal. Review and edit the draft before you
+rely on it.
 
-A `treaty.yaml` looks like this:
+A hexagonal `treaty.yaml` looks like this:
 
 ```yaml
 layers:
@@ -90,18 +92,67 @@ layers:
     driven:    ["internal/adapters/golang/**", "internal/adapters/gitvcs/**"]
 rules:
   fail_on: [breaking, layer_violation]
-  warn_on: [unclassified, weak_contract]
-  strength_threshold: 0.60
+  warn_on: [unclassified]
 ```
+
+## Architectures
+
+Every architecture shares two rules: composition (usually `main`) may depend
+on everything, and nothing may depend on composition.
+
+| Architecture | Rules | Map |
+| --- | --- | --- |
+| `hexagonal` (default) | Dependencies point inward: domain ← application ← adapters. No adapter uses another adapter | Rings, with driving adapters on the left and driven on the right |
+| `clean` | Dependencies point inward: entities ← use cases ← interface adapters ← frameworks | Four rings |
+| `layered` | A layer may use itself and every layer below it. Skipping a layer is allowed; forbidding it is a team decision | Horizontal bands |
+| `slices` | A slice may use itself and shared code, never another slice. Optional layers inside every slice | A column per slice, or a grid of slices by layer |
+| `modular` | A context may use its own packages, other contexts' public packages and shared code. No cycles between contexts | An island per context |
+
+```yaml
+architecture: layered
+composition: ["cmd/**"]
+layers:                                # top to bottom
+  presentation: ["internal/web/**"]
+  business:     ["internal/service/**"]
+  data:         ["internal/store/**"]
+```
+
+```yaml
+architecture: slices
+composition: ["cmd/**"]
+shared:      ["internal/platform/**"]
+slices:      ["internal/features/*"]   # each match is one slice
+layers:                                # optional, inside every slice, top to bottom
+  api:   ["."]
+  store: ["store/**"]
+```
+
+```yaml
+architecture: modular
+composition: ["cmd/**"]
+shared:      ["internal/platform/**"]
+contexts:    ["internal/*"]            # each match is one context
+public:      [".", "api/**"]           # what other contexts may use, relative to each context
+```
+
+For `layered`, the layer names are yours. For `clean`, use
+the layer names `entities`, `use_cases`, `interface_adapters` and
+`frameworks`. The design document has the full rules.
 
 ## The live map
 
 `treaty serve` runs a server that holds the graph in memory, watches the
-working tree, and pushes each rebuild to the browser. The map shows modules
-in their hexagonal rings, with changes shown against a baseline: HEAD for
+working tree, and pushes each rebuild to the browser. The map lays modules
+out to match the architecture, with changes shown against a baseline: HEAD for
 uncommitted work, the merge base for a pull request, or any ref. You can
 change the baseline from the map's header while it runs. The server listens
 on `127.0.0.1` only, on port 7878 by default.
+
+The header also has an architecture dropdown. Picking another architecture
+previews your code in it, fitted the way `treaty init` would propose. Checks
+and agents keep following `treaty.yaml` until you press *Use this
+architecture*, or until the preview has been left in place for five minutes.
+Then `treaty.yaml` is replaced with the proposal.
 
 ## Working with Claude Code
 
@@ -139,7 +190,7 @@ map is already running. You and the agent always look at the same graph:
 | `treaty map [--base <ref>] [--design <name>]...` | Renders a static map to `.treaty/out/map.html` |
 | `treaty serve [--port <n>] [--open]` | Serves the live map until interrupted |
 | `treaty mcp [--port <n>]` | Serves the live graph over MCP on stdio, plus the live map |
-| `treaty init` | Creates `.treaty/` and proposes a `treaty.yaml` |
+| `treaty init [--architecture <name>]` | Creates `.treaty/` and proposes a `treaty.yaml` for `hexagonal` (default), `clean`, `layered`, `slices` or `modular` |
 | `treaty url` | Prints the live map's address for this directory |
 | `treaty here [--force]` | Registers Treaty in this repository's `.mcp.json` |
 
@@ -153,11 +204,9 @@ See [CML syntax proposal.md](CML%20syntax%20proposal.md).
 
 ## Status
 
-Treaty is early and changing fast. The contract graph, layer checks,
-contract diff, slices, designs, the live map and the MCP server all work.
-Contract-scoped mutation testing is still to come: it will score how well
-tests that enter through each contract kill mutants. Until then, test
-strength is reported as not computed.
+Treaty is early and changing fast. The contract graph, the five
+architectures, the contract diff, context slices, designs, the live map and
+the MCP server all work.
 
 The full design, including goals, non-goals, acceptance criteria and open
 questions, is in [Treaty design document.md](Treaty%20design%20document.md).
