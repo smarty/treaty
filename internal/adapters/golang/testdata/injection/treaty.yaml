@@ -1,0 +1,6 @@
+layers:
+  domain:      ["internal/graph/**"]
+  application: ["injection/**"]
+  adapter:
+    driving:   []
+    driven:    ["adapters/reflectx/**"]

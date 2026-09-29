@@ -1,0 +1,14 @@
+layers:
+  composition: ["cmd/**"]
+  domain:      ["internal/graph/**", "internal/rules/**", "internal/cml/**"]
+  application: ["internal/app/**"]
+  adapter:
+    driving:   ["internal/adapters/cli/**", "internal/adapters/mcp/**", "internal/adapters/web/**"]
+    driven:    ["internal/adapters/golang/**", "internal/adapters/filesystem/**", "internal/adapters/gitvcs/**", "internal/adapters/htmlmap/**"]
+rules:
+  fail_on: [breaking, layer_violation]
+  warn_on: [unclassified, weak_contract]
+  strength_threshold: 0.60
+mutation:
+  scope: blast_radius
+  timeout_per_mutant: 30s

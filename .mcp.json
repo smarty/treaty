@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "treaty": {
+      "command": "treaty",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}
