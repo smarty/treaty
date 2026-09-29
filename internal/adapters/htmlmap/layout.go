@@ -13,6 +13,10 @@ import (
 )
 
 const (
+	borderRoom  = 8.0
+	cellGap     = 2.0
+	cellPad     = 3.0
+	cellSize    = 14.0
 	groupLabel  = 16.0
 	groupPad    = 10.0
 	moduleSize  = 34.0
@@ -21,6 +25,18 @@ const (
 	ringGap     = 18.0
 	siblingGap  = 16.0
 )
+
+// Cell is one file drawn inside its module's hexagon, at an offset from the
+// module's center. Angle is the direction of the cell from the center, where
+// the file's contracts sit on the module's border. Symbols counts every
+// symbol declared in the file, so crowded files stand out.
+type Cell struct {
+	File    string  `json:"file"`
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Angle   float64 `json:"angle"`
+	Symbols int     `json:"symbols"`
+}
 
 // Group is a directory drawn as a hexagon around the modules beneath it.
 // Groups are visual only: rules and metrics stay per module.
@@ -44,15 +60,20 @@ type Label struct {
 }
 
 // Layout is the computed geometry of the map: rings for hexagonal and clean,
-// regions for layered, slices and modular.
+// regions for layered, slices and modular. Each module's hexagon holds a
+// ring of its files, every cell CellSize across, so a module with more files
+// is larger; Sizes gives each module's radius.
 type Layout struct {
-	Modules map[string]Point `json:"modules"`
-	Groups  []Group          `json:"groups"`
-	Rings   []Ring           `json:"rings"`
-	Regions []Region         `json:"regions"`
-	Labels  []Label          `json:"labels"`
-	Size    float64          `json:"size"`
-	Extent  float64          `json:"extent"`
+	Modules  map[string]Point   `json:"modules"`
+	Sizes    map[string]float64 `json:"sizes"`
+	Cells    map[string][]Cell  `json:"cells"`
+	CellSize float64            `json:"cell_size"`
+	Groups   []Group            `json:"groups"`
+	Rings    []Ring             `json:"rings"`
+	Regions  []Region           `json:"regions"`
+	Labels   []Label            `json:"labels"`
+	Size     float64            `json:"size"`
+	Extent   float64            `json:"extent"`
 }
 
 // Point is a position on the map.
@@ -111,6 +132,7 @@ type item struct {
 type node struct {
 	path     string
 	module   string
+	files    int
 	children map[string]*node
 }
 
@@ -266,16 +288,19 @@ func (this *gridBlock) place(result *Layout, x, y float64) {
 func ComputeLayout(view app.MapView) (result Layout) {
 	switch view.Architecture {
 	case rules.StyleLayered:
-		return bandLayout(view)
+		result = bandLayout(view)
 	case rules.StyleSlices:
-		return gridLayout(view)
+		result = gridLayout(view)
 	case rules.StyleModular:
-		return islandLayout(view)
+		result = islandLayout(view)
 	case rules.StyleClean:
-		return ringLayout(view.Modules, rules.CleanLayers, false)
+		result = ringLayout(view.Modules, rules.CleanLayers, false)
 	default:
-		return ringLayout(view.Modules, rules.HexagonalLayers, true)
+		result = ringLayout(view.Modules, rules.HexagonalLayers, true)
 	}
+
+	placeFiles(&result, view)
+	return result
 }
 
 // ringLayout places modules in concentric rings, innermost first, with
@@ -596,7 +621,9 @@ func hexRadius(inscribed float64) float64 {
 // apart: the center first, then ring after ring outward.
 func honeycomb(n int, spacing float64) [][2]float64 {
 	result := [][2]float64{{0, 0}}
-	directions := [][2]int{{1, 0}, {0, 1}, {-1, 1}, {-1, 0}, {0, -1}, {1, -1}}
+	// Each ring starts at its corner (-ring, ring) and walks its six sides in
+	// turn, starting along the side that leaves that corner.
+	directions := [][2]int{{0, -1}, {1, -1}, {1, 0}, {0, 1}, {-1, 1}, {-1, 0}}
 	for ring := 1; len(result) < n; ring++ {
 		q, r := -ring, ring
 		for side := 0; side < 6; side++ {
@@ -633,6 +660,43 @@ func members(placed *item) []string {
 	return result
 }
 
+// fileSlots places n file cells evenly around one ring, the first at the
+// top and the rest clockwise, leaving the middle empty. A single file sits
+// in the middle, since it has the whole border to itself.
+//
+// Returns:
+//   - result: each cell's center and its angle from the module's center.
+func fileSlots(n int) (result [][3]float64) {
+	if n == 1 {
+		return [][3]float64{{0, 0, -math.Pi / 2}}
+	}
+
+	// Neighbors a full cell apart never overlap, whatever their angle.
+	radius := (cellSize + cellGap/2) / math.Sin(math.Pi/float64(n))
+	for i := range n {
+		angle := -math.Pi/2 + 2*math.Pi*float64(i)/float64(n)
+		result = append(result, [3]float64{radius * math.Cos(angle), radius * math.Sin(angle), angle})
+	}
+
+	return result
+}
+
+// moduleRadius is the radius of a module hexagon that holds its file cells
+// with room for its contracts on the border, never smaller than moduleSize.
+// A module with no files, such as a planned one, has the plain size.
+func moduleRadius(files int) float64 {
+	if files == 0 {
+		return moduleSize
+	}
+
+	reach := 0.0
+	for _, slot := range fileSlots(files) {
+		reach = math.Max(reach, math.Hypot(slot[0], slot[1]))
+	}
+
+	return math.Max(moduleSize, hexRadius(reach+cellSize+borderRoom)+cellPad)
+}
+
 // pack lays out a group's items on a honeycomb, centers the cluster, and
 // sizes the group's hexagon to hold it with room for its label.
 func pack(group *item) {
@@ -659,7 +723,7 @@ func pack(group *item) {
 // group, or, for a directory with one child and no package, that child.
 func represent(current *node) *item {
 	if len(current.children) == 0 {
-		return &item{module: current.module, radius: moduleSpace}
+		return &item{module: current.module, radius: moduleRadius(current.files) * moduleSpace / moduleSize}
 	}
 
 	if current.module == "" && len(current.children) == 1 {
@@ -670,7 +734,7 @@ func represent(current *node) *item {
 
 	group := &item{path: current.path}
 	if current.module != "" {
-		group.items = append(group.items, &item{module: current.module, radius: moduleSpace})
+		group.items = append(group.items, &item{module: current.module, radius: moduleRadius(current.files) * moduleSpace / moduleSize})
 	}
 
 	for _, name := range sortedKeys(current.children) {
@@ -711,7 +775,7 @@ func topItems(modules []app.MapModule) []*item {
 			current = child
 		}
 
-		current.module = module.ID
+		current.module, current.files = module.ID, len(module.Files)
 	}
 
 	var result []*item
@@ -815,4 +879,32 @@ func stack(above []*box, block *gridBlock, below ...*box) (result Layout) {
 	result.Extent = math.Max(width, height)/2 + moduleSize + 3*groupLabel
 	sortGroups(&result)
 	return result
+}
+
+// placeFiles gives every module its radius and its file cells, in file
+// name order around the ring.
+func placeFiles(result *Layout, view app.MapView) {
+	counts := map[string]int{}
+	for _, symbol := range view.Symbols {
+		if symbol.File != "" {
+			counts[symbol.Module+"\x00"+symbol.File]++
+		}
+	}
+
+	result.Sizes, result.Cells, result.CellSize = map[string]float64{}, map[string][]Cell{}, cellSize
+	for _, module := range view.Modules {
+		result.Sizes[module.ID] = round(moduleRadius(len(module.Files)))
+		if len(module.Files) == 0 {
+			continue
+		}
+
+		files := slices.Clone(module.Files)
+		sort.Strings(files)
+		for i, slot := range fileSlots(len(files)) {
+			result.Cells[module.ID] = append(result.Cells[module.ID], Cell{
+				File: files[i], X: round(slot[0]), Y: round(slot[1]), Angle: math.Round(slot[2]*1000) / 1000,
+				Symbols: counts[module.ID+"\x00"+files[i]],
+			})
+		}
+	}
 }

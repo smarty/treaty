@@ -143,7 +143,11 @@ the layer names `entities`, `use_cases`, `interface_adapters` and
 
 `treaty serve` runs a server that holds the graph in memory, watches the
 working tree, and pushes each rebuild to the browser. The map lays modules
-out to match the architecture, with changes shown against a baseline: HEAD for
+out to match the architecture. Each module holds a ring of cells, one per file,
+darker for files with more symbols, so crowded files stand out. The module's
+contracts stay on its border, each on the stretch facing its file; zoom in and
+each file shows its internals as dots, and pointing at a file or a contract
+lights up the other. Changes are shown against a baseline: HEAD for
 uncommitted work, the merge base for a pull request, or any ref. You can
 change the baseline from the map's header while it runs. The server listens
 on `127.0.0.1` only, on port 7878 by default.

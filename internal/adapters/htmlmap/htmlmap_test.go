@@ -259,3 +259,89 @@ func TestCleanRings(t *testing.T) {
 		}
 	}
 }
+
+func TestFileCells(t *testing.T) {
+	view := app.MapView{Modules: []app.MapModule{
+		{ID: "go:app", Path: "app", Layer: graph.LayerApplication, Files: []string{"app/a.go", "app/b.go", "app/c.go", "app/d.go", "app/e.go", "app/f.go", "app/g.go", "app/h.go", "app/i.go"}},
+		{ID: "go:core", Path: "core", Layer: graph.LayerDomain, Files: []string{"core/core.go"}},
+		{ID: "go:planned", Path: "planned", Layer: graph.LayerDomain, Design: true},
+	}}
+
+	for i := range 5 {
+		view.Symbols = append(view.Symbols, app.MapSymbol{ID: fmt.Sprintf("go:app:S%d", i), Module: "go:app", File: "app/e.go"})
+	}
+
+	view.Symbols = append(view.Symbols, app.MapSymbol{ID: "go:app:T", Module: "go:app", File: "app/a.go"})
+	layout := ComputeLayout(view)
+
+	if layout.Sizes["go:planned"] != moduleSize || layout.Sizes["go:core"] != moduleSize || len(layout.Cells["go:planned"]) != 0 {
+		t.Fatalf("sizes %v, cells %v", layout.Sizes, layout.Cells["go:planned"])
+	}
+
+	cells := layout.Cells["go:app"]
+	if len(cells) != 9 || layout.Sizes["go:app"] <= moduleSize {
+		t.Fatalf("app: %d cells, size %.1f", len(cells), layout.Sizes["go:app"])
+	}
+
+	if cells[0].File != "app/a.go" || cells[0].Symbols != 1 || cells[4].File != "app/e.go" || cells[4].Symbols != 5 {
+		t.Fatalf("cells must run in file order and count symbols: %+v", cells)
+	}
+
+	// The files sit evenly around one ring, the first at the top, and none
+	// in the middle.
+	ring := math.Hypot(cells[0].X, cells[0].Y)
+	for i, cell := range cells {
+		want := -math.Pi/2 + 2*math.Pi*float64(i)/float64(len(cells))
+		if math.Abs(cell.Angle-want) > 0.001 || math.Abs(math.Hypot(cell.X, cell.Y)-ring) > 0.2 || ring < cellSize {
+			t.Errorf("%s at %.1f, %.1f, angle %.3f; want angle %.3f on a ring of %.1f", cell.File, cell.X, cell.Y, cell.Angle, want, ring)
+		}
+	}
+
+	if only := layout.Cells["go:core"]; len(only) != 1 || only[0].X != 0 || only[0].Y != 0 {
+		t.Errorf("a single file sits in the middle: %+v", only)
+	}
+
+	inscribed := math.Cos(math.Pi / 6)
+	for i, a := range cells {
+		if math.Hypot(a.X, a.Y)+cellSize > layout.Sizes["go:app"]*inscribed+0.5 {
+			t.Errorf("%s sticks out of its module", a.File)
+		}
+
+		for _, b := range cells[i+1:] {
+			if math.Hypot(a.X-b.X, a.Y-b.Y) < 2*cellSize*inscribed-0.5 {
+				t.Errorf("%s and %s overlap", a.File, b.File)
+			}
+		}
+	}
+
+	// A larger module takes more room, so nothing overlaps it.
+	for a, pa := range layout.Modules {
+		for b, pb := range layout.Modules {
+			if a < b && math.Hypot(pa.X-pb.X, pa.Y-pb.Y) < layout.Sizes[a]+layout.Sizes[b] {
+				t.Errorf("%s and %s overlap", a, b)
+			}
+		}
+	}
+}
+
+func TestHoneycombRings(t *testing.T) {
+	slots := honeycomb(19, 10)
+	for i, a := range slots {
+		want := 10.0
+		if i == 0 {
+			want = 0
+		} else if i > 6 {
+			want = 17.3
+		}
+
+		if distance := math.Hypot(a[0], a[1]); distance < want-0.1 || distance > 20.1 {
+			t.Errorf("slot %d at %.1f from the center", i, distance)
+		}
+
+		for j, b := range slots[i+1:] {
+			if math.Hypot(a[0]-b[0], a[1]-b[1]) < 10-0.01 {
+				t.Errorf("slots %d and %d overlap", i, i+1+j)
+			}
+		}
+	}
+}

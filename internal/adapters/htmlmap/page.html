@@ -49,14 +49,23 @@ header input[hidden] { display: none; }
 .offer .actions { display: flex; gap: 6px; }
 /* Selection glows yellow and Claude's show requests glow teal. Both pulse
    unless the person prefers reduced motion. */
-.selected-glow { filter: drop-shadow(0 0 3px var(--yellow)) drop-shadow(0 0 7px var(--yellow)); }
-.pointed-glow { filter: drop-shadow(0 0 3px var(--teal)) drop-shadow(0 0 8px var(--teal)); }
+/* Glow lengths are in the element's own units, which zoom with the map;
+   sizeGlows sets --u to one screen pixel in those units, so every glow keeps
+   the same size on screen at any zoom, peaking at 10px. */
+.selected-glow { filter: drop-shadow(0 0 calc(3px * var(--u, 1)) var(--yellow)) drop-shadow(0 0 calc(8px * var(--u, 1)) var(--yellow)); }
+.pointed-glow { filter: drop-shadow(0 0 calc(3px * var(--u, 1)) var(--teal)) drop-shadow(0 0 calc(8px * var(--u, 1)) var(--teal)); }
+/* A file and its contracts light up together while one of them is pointed at
+   or selected. */
+.file-arc { stroke-opacity: .45; }
+.file-cell.file-hot, .file-cell.file-picked { stroke: var(--yellow); stroke-width: 1.8; }
+.file-arc.file-hot, .file-arc.file-picked { stroke: var(--yellow); stroke-opacity: 1; }
+[data-symbol].file-hot, [data-symbol].file-picked { filter: drop-shadow(0 0 2px var(--yellow)); }
 .selected-label { fill: var(--yellow) !important; font-weight: 700; }
 @media (prefers-reduced-motion: no-preference) {
   .selected-glow { animation: selected-pulse 1.6s ease-in-out infinite; }
   .pointed-glow { animation: pointed-pulse 1.1s ease-in-out infinite; }
-  @keyframes selected-pulse { 0%, 100% { filter: drop-shadow(0 0 1px var(--yellow)); } 50% { filter: drop-shadow(0 0 4px var(--yellow)) drop-shadow(0 0 10px var(--yellow)); } }
-  @keyframes pointed-pulse { 0%, 100% { filter: drop-shadow(0 0 1px var(--teal)); } 50% { filter: drop-shadow(0 0 5px var(--teal)) drop-shadow(0 0 12px var(--teal)); } }
+  @keyframes selected-pulse { 0%, 100% { filter: drop-shadow(0 0 calc(1px * var(--u, 1)) var(--yellow)); } 50% { filter: drop-shadow(0 0 calc(4px * var(--u, 1)) var(--yellow)) drop-shadow(0 0 calc(10px * var(--u, 1)) var(--yellow)); } }
+  @keyframes pointed-pulse { 0%, 100% { filter: drop-shadow(0 0 calc(1px * var(--u, 1)) var(--teal)); } 50% { filter: drop-shadow(0 0 calc(4px * var(--u, 1)) var(--teal)) drop-shadow(0 0 calc(10px * var(--u, 1)) var(--teal)); } }
 }
 header label, header button { font-size: 12px; color: var(--ink); }
 button { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; color: var(--ink); }
@@ -74,7 +83,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: v
 .sev.high { background: var(--high); } .sev.medium { background: var(--medium); border-radius: 3px; } .sev.low { background: var(--low); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 #map { width: 100%; height: 100%; display: block; }
 .map-wrap { position: relative; overflow: hidden; }
-.glow { filter: drop-shadow(0 0 3px var(--glow)) drop-shadow(0 0 7px var(--glow)); }
+.glow { filter: drop-shadow(0 0 calc(3px * var(--u, 1)) var(--glow)) drop-shadow(0 0 calc(7px * var(--u, 1)) var(--glow)); }
 .tip { position: fixed; z-index: 10; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: 12px/1.3 ui-monospace, "SF Mono", Menlo, monospace; box-shadow: 0 2px 8px rgba(0,0,0,.25); max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: none; }
 .zoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
 .zoom button { width: 32px; height: 32px; padding: 0; font-size: 16px; background: var(--panel); }
@@ -179,6 +188,9 @@ const ICON_GROWTH = 0.4;
 const inherits = kind => kind === "implements" || kind === "embeds";
 const HIT_SLOP = 12;
 const AUTO_COLLAPSE_PX = 45;
+// A file cell shows its symbols once it is this many pixels across; smaller,
+// the symbols stay on the module's border and the cells show only shading.
+const CELL_DETAIL_PX = 20;
 const LABEL_MIN_PX = 9;
 const state = { pointer: null, selected: null, internals: false, symbolPos: new Map(), view: null, groupOpen: {}, signature: undefined, rendering: false };
 const home = () => { const E = D.layout.extent + 20; return { x: -E, y: -E, w: 2 * E, h: 2 * E }; };
@@ -199,7 +211,16 @@ function applyView() {
     node.setAttribute("transform", `translate(${node.dataset.ax} ${node.dataset.ay}) scale(${scale})`);
   }
 
+  sizeGlows();
   if (!state.rendering && state.signature !== undefined && typeof collapsedSignature === "function" && collapsedSignature() !== state.signature) render();
+}
+// sizeGlows gives each glowing element --u, one screen pixel in its own
+// units, so its glow is the same size on screen at any zoom.
+function sizeGlows() {
+  for (const node of document.querySelectorAll("#map .selected-glow, #map .pointed-glow, #map .glow")) {
+    const m = node.getScreenCTM && node.getScreenCTM();
+    if (m) node.style.setProperty("--u", (1 / (Math.hypot(m.a, m.b) || 1)).toFixed(4));
+  }
 }
 // anchored draws children around (0, 0) and scales them by only part of the
 // zoom (see ICON_GROWTH); cap lets them shrink fully when zoomed out.
@@ -238,6 +259,13 @@ function hexPoints(cx, cy, r) {
   const pts = [];
   for (let i = 0; i < 6; i++) { const a = Math.PI / 3 * i; pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); }
   return pts;
+}
+// onBorder finds where a ray from a flat-top hexagon's center at an angle
+// meets its border, scaled by inset.
+function onBorder(cx, cy, r, angle, inset = 1) {
+  const normal = Math.PI / 6 + Math.PI / 3 * Math.round((angle - Math.PI / 6) / (Math.PI / 3));
+  const d = inset * r * Math.cos(Math.PI / 6) / Math.cos(angle - normal);
+  return [cx + d * Math.cos(angle), cy + d * Math.sin(angle)];
 }
 function onPerimeter(cx, cy, r, t) {
   const pts = hexPoints(cx, cy, r); const seg = t * 6; const i = Math.floor(seg) % 6; const f = seg - Math.floor(seg);
@@ -283,15 +311,20 @@ function isCollapsed(g) {
 function anchorOf(moduleId) {
   for (const g of ancestors(groupOf.get(moduleId))) if (isCollapsed(g)) return { key: g.id, x: g.x, y: g.y, r: g.radius * Math.cos(Math.PI / 6), label: g.path + "/", layer: g.layer, group: g };
   const p = D.layout.modules[moduleId], m = modules.get(moduleId);
-  return p ? { key: moduleId, x: p.x, y: p.y, r: D.layout.size, label: m.label || m.path, layer: m.layer } : null;
+  return p ? { key: moduleId, x: p.x, y: p.y, r: moduleSize(moduleId), label: m.label || m.path, layer: m.layer } : null;
 }
-function collapsedSignature() { return (D.layout.groups || []).filter(isCollapsed).map(g => g.id).join("|"); }
+function cellDetail() { return (D.layout.cell_size || 0) * pixelsPerUnit() >= CELL_DETAIL_PX; }
+function collapsedSignature() { return (D.layout.groups || []).filter(isCollapsed).map(g => g.id).join("|") + (cellDetail() ? "|cells" : ""); }
 // placeName says where the architecture puts a module: its slice or
 // context, its layer and side, and whether it is public.
 function placeName(m) {
   const within = m.section ? m.section.split("/").pop() + " · " : "";
   return within + m.layer + (m.side ? ` (${m.side})` : "") + (m.public ? " (public)" : "");
 }
+// moduleSize is a module hexagon's radius: larger for a module with more
+// files, since each file is a cell inside it.
+function fileKey(moduleId, file) { return moduleId + "|" + file; }
+function moduleSize(moduleId) { return (D.layout.sizes || {})[moduleId] || D.layout.size; }
 // moduleLabel names a module relative to the group drawn around it, so a
 // group's children don't all repeat its path.
 function moduleLabel(m) {
@@ -419,10 +452,14 @@ function draw() {
   const hollow = el("marker", { id: "inherit", viewBox: "-1 -1 12 12", refX: 10, refY: 5, markerWidth: 13, markerHeight: 13, markerUnits: "userSpaceOnUse", orient: "auto" }, defs);
   el("path", { d: "M0,0 L10,5 L0,10 z", fill: color("--bg"), stroke: color("--arrow"), "stroke-width": 1.2 }, hollow);
 
-  const pos = D.layout.modules; const S = D.layout.size;
+  const pos = D.layout.modules;
+  const cellsOf = D.layout.cells || {};
+  // A file's shade grows with its share of the most crowded file's symbols.
+  const crowded = Math.max(1, ...Object.values(cellsOf).flat().map(c => c.symbols));
   state.symbolPos = new Map();
   for (const m of D.modules) {
     const p = pos[m.id]; if (!p || hidden.has(m.id)) continue;
+    const S = moduleSize(m.id);
     const g = el("g", { class: "module" + (rel && !rel.has(m.id) ? " dim" : ""), "data-module": m.id, tabindex: 0, role: "button", "aria-label": `Module ${m.id}, ${m.layer}`, "data-label": `${m.label || m.path} · ${placeName(m)}${m.design ? " · planned, not built" : ""}` }, svg);
     const hex = el("polygon", { points: hexPoints(p.x, p.y, S).map(q => q.join(",")).join(" "), fill: color("--module"), stroke: m.new ? color("--blue") : m.design ? color("--teal") : state.selected && state.selected.id === m.id ? color("--yellow") : color("--hex-stroke"), "stroke-width": state.selected && state.selected.id === m.id ? 2.5 : 1.4, "vector-effect": "non-scaling-stroke" }, g);
     if (m.new || m.design) hex.setAttribute("stroke-dasharray", "5 3");
@@ -434,7 +471,7 @@ function draw() {
     if (m.public) el("polygon", { points: hexPoints(p.x, p.y, S * 1.12).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--module-stroke"), "stroke-width": 2.4, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
     el("text", { x: 0, y: 0, "text-anchor": "middle", class: "module-label" + (state.selected && state.selected.type === "module" && state.selected.id === m.id ? " selected-label" : "") }, anchored(g, p.x, p.y + S + 13, {}, true, true)).textContent = moduleLabel(m);
     const pick = () => select({ type: "module", id: m.id });
-    g.addEventListener("click", ev => { ev.stopPropagation(); if (ev.target === hex || ev.target.tagName === "text") pick(); });
+    g.addEventListener("click", ev => { ev.stopPropagation(); if (ev.target === hex || ev.target.tagName === "text" || ev.target.classList.contains("file-cell")) pick(); });
     g.addEventListener("keydown", ev => { if (ev_is(ev)) { ev.preventDefault(); pick(); } });
     const all = byModule.get(m.id) || [];
     const contract = all.filter(s => s.contract && !s.name.includes("."));
@@ -442,10 +479,45 @@ function draw() {
     const border = [...contract, ...members];
     const touched = rel ? all.filter(s => !s.contract && rel.has(s.id)) : [];
     const internals = state.internals ? all.filter(s => !s.contract) : touched;
-    const r = Math.max(2.4, Math.min(5, 90 / Math.max(border.length, 1)));
-    border.forEach((s, i) => placeSymbol(g, s, ...onPerimeter(p.x, p.y, S, (i + 0.5) / border.length), r, rel));
-    const cols = Math.ceil(Math.sqrt(internals.length || 1)), step = (S * 1.1) / cols;
-    internals.forEach((s, i) => placeSymbol(g, s, p.x - S * 0.55 + step * (i % cols + 0.5), p.y - S * 0.55 + step * (Math.floor(i / cols) + 0.5), Math.min(r, step / 3), rel));
+    const cells = cellsOf[m.id] || [];
+    if (cells.length) {
+      // The border is the module's contract surface at every zoom. Each
+      // file's contracts sit on the stretch of border facing its cell, marked
+      // by a bracket; inside, each cell holds the file's internals: full
+      // symbols when shown or touched, plain dots when zoomed in otherwise.
+      const C = D.layout.cell_size, detail = cellDetail();
+      const r = Math.max(2.4, Math.min(5, 90 / Math.max(border.length, 1)));
+      const span = cells.length > 1 ? 2 * Math.PI / cells.length * 0.84 : 2 * Math.PI;
+      const byFile = new Map(cells.map(c => [c.file, []])), loose = [];
+      for (const s of border) (byFile.get(s.file) || loose).push(s);
+      const shownInternal = new Set(internals.map(s => s.id));
+      for (const cell of cells) {
+        const cx = p.x + cell.x, cy = p.y + cell.y, key = fileKey(m.id, cell.file), mine = byFile.get(cell.file);
+        const label = `${cell.file} · ${cell.symbols} symbol${cell.symbols === 1 ? "" : "s"}, ${mine.length} contract${mine.length === 1 ? "" : "s"}`;
+        el("polygon", { class: "file-cell", "data-file": key, "data-label": label, points: hexPoints(cx, cy, C).map(q => q.join(",")).join(" "), fill: color("--blue"), "fill-opacity": (0.04 + 0.3 * cell.symbols / crowded).toFixed(3), stroke: color("--hex-stroke"), "stroke-width": 0.8, "vector-effect": "non-scaling-stroke" }, g);
+        const inner = all.filter(s => !s.contract && s.file === cell.file && (detail || shownInternal.has(s.id)));
+        const cols = Math.ceil(Math.sqrt(inner.length || 1)), step = (C * 1.15) / cols;
+        inner.forEach((s, i) => {
+          const x = cx - C * 0.575 + step * (i % cols + 0.5), y = cy - C * 0.575 + step * (Math.floor(i / cols) + 0.5);
+          if (shownInternal.has(s.id)) placeSymbol(g, s, x, y, Math.max(1.6, Math.min(4, step / 2.6)), rel, key);
+          else el("circle", { cx: x, cy: y, r: Math.min(1.3, step / 4), fill: color("--muted"), "pointer-events": "none" }, g);
+        });
+        mine.forEach((s, i) => placeSymbol(g, s, ...onBorder(p.x, p.y, S, cell.angle - span / 2 + span * (i + 0.5) / mine.length), r, rel, key));
+        if (cells.length > 1 && mine.length) {
+          const points = [];
+          for (let k = 0; k <= 16; k++) points.push(onBorder(p.x, p.y, S, cell.angle - span / 2 + span * k / 16, 0.88).join(","));
+          el("polyline", { class: "file-arc", "data-file": key, "data-label": label, points: points.join(" "), fill: "none", stroke: color("--blue"), "stroke-width": 2, "stroke-linecap": "round", "vector-effect": "non-scaling-stroke" }, g);
+        }
+      }
+      // Planned contracts have no file yet; they wait in the empty middle.
+      const cols = Math.ceil(Math.sqrt(loose.length || 1)), step = (C * 1.2) / cols;
+      loose.forEach((s, i) => placeSymbol(g, s, p.x - C * 0.6 + step * (i % cols + 0.5), p.y - C * 0.6 + step * (Math.floor(i / cols) + 0.5), 3, rel));
+    } else {
+      const r = Math.max(2.4, Math.min(5, 90 / Math.max(border.length, 1)));
+      border.forEach((s, i) => placeSymbol(g, s, ...onPerimeter(p.x, p.y, S, (i + 0.5) / border.length), r, rel));
+      const cols = Math.ceil(Math.sqrt(internals.length || 1)), step = (S * 1.1) / cols;
+      internals.forEach((s, i) => placeSymbol(g, s, p.x - S * 0.55 + step * (i % cols + 0.5), p.y - S * 0.55 + step * (Math.floor(i / cols) + 0.5), Math.min(r, step / 3), rel));
+    }
   }
   if (state.selected && state.selected.type === "symbol") {
     const layer = el("g", {}, svg);
@@ -461,6 +533,9 @@ function draw() {
       el("text", { x: 6, y: -6, "font-size": 10, fill: color("--ink") }, anchored(layer, o[0], o[1], {}, false, true)).textContent = (symbols.get(other) || {}).name || other;
     }
   }
+  const picked = state.selected && state.selected.type === "symbol" && symbols.get(state.selected.id);
+  lightFile(picked && picked.file ? fileKey(picked.module, picked.file) : "", "file-picked");
+  state.hotFile = "";
   const selectedNode = state.selected && (state.selected.type === "edge" ? svg.querySelector(`[data-edge="${CSS.escape(state.selected.from + "|" + state.selected.to)}"]`) : glowNode(state.selected.id));
   if (selectedNode) selectedNode.classList.add("selected-glow");
   const pointedNode = state.pointer && Date.now() < state.pointer.until && glowNode(state.pointer.target);
@@ -482,12 +557,13 @@ function glowNode(id) {
 }
 function toggleGroup(id) { const g = groups.get(id); state.groupOpen[id] = isCollapsed(g); render(); inspect(); }
 function ev_is(ev) { return ev.key === "Enter" || ev.key === " "; }
-function placeSymbol(g, s, x, y, r, rel) {
+function placeSymbol(g, s, x, y, r, rel, file) {
   state.symbolPos.set(s.id, [x, y]);
   const label = `${s.name} · ${s.kind}${s.contract ? "" : " · internal"}${s.change ? " · " + s.change : ""}${s.design ? " · planned, not built" : ""}`;
   const sg = anchored(g, x, y, { "data-symbol": s.id, tabindex: 0, role: "button", "aria-label": `${s.kind} ${s.id}${s.change ? ", " + s.change : ""}`, "data-label": label, class: rel && !rel.has(s.id) ? "dim" : "" });
   const shape = drawShape(sg, s.kind, 0, 0, (state.selected && state.selected.id === s.id) ? r * 1.6 : r, s.change, s.design);
   sg.style.cursor = "pointer";
+  if (file) sg.setAttribute("data-file", file);
   const pick = ev => { ev.stopPropagation(); select({ type: "symbol", id: s.id }); };
   sg.addEventListener("click", pick);
   sg.addEventListener("keydown", ev => { if (ev_is(ev)) { ev.preventDefault(); pick(ev); } });
@@ -609,7 +685,7 @@ function buildLegend() {
   legend.appendChild(h("br"));
   legend.appendChild(document.createTextNode("blue + added · orange Δ compatible, ! breaking, ~ implementation, → moved · teal dashed = planned, not built"));
   legend.appendChild(h("br"));
-  legend.appendChild(document.createTextNode("solid ▶ uses · dashed ▷ implements or embeds · magenta ! = rule violation · double hexagon = composition"));
+  legend.appendChild(document.createTextNode("solid ▶ uses · dashed ▷ implements or embeds · magenta ! = rule violation · double hexagon = composition · inner cells = files, darker = more symbols; a file's contracts sit on the border facing it"));
   // The legend is built before a live map has its data, so ingest shows this
   // note once it knows the architecture.
   legend.appendChild(h("span", { id: "legend-public", hidden: "" }, " · bold outline = public API"));
@@ -669,14 +745,22 @@ mapEl.addEventListener("click", ev => {
 // setGlow lights up the thing under the pointer: a symbol's icon, a module's
 // hexagon outline, or the visible line behind an edge's wider hit strip.
 let glowing = null;
+// lightFile lights up every element of one file with a class: its cell, its
+// bracket and its contracts.
+function lightFile(key, name) {
+  for (const node of document.querySelectorAll("." + name)) node.classList.remove(name);
+  if (key) for (const node of document.querySelectorAll(`[data-file="${CSS.escape(key)}"]`)) node.classList.add(name);
+}
 function setGlow(target) {
+  const file = target && target.dataset ? target.dataset.file || "" : "";
+  if (file !== state.hotFile) { state.hotFile = file; lightFile(file, "file-hot"); }
   let node = target;
   if (node && node.glowTarget) node = node.glowTarget;
   else if (node && node.classList && (node.classList.contains("module") || node.classList.contains("group"))) node = node.querySelector("polygon");
   if (node === glowing) return;
   if (glowing) glowing.classList.remove("glow");
   glowing = node && node.isConnected ? node : null;
-  if (glowing) glowing.classList.add("glow");
+  if (glowing) { glowing.classList.add("glow"); sizeGlows(); }
 }
 const tip = document.getElementById("tip");
 mapEl.addEventListener("pointermove", ev => {
