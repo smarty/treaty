@@ -14,14 +14,16 @@ var ErrUnknownLanguage = errors.New("unknown language")
 
 // Service runs every Treaty use case against one repository.
 type Service struct {
-	agents    AgentConfig
-	root      string
-	config    ConfigSource
-	dialects  map[string]Dialect
-	extractor SourceExtractor
-	renderer  MapRenderer
-	vcs       VersionControl
-	workspace Workspace
+	agents      AgentConfig
+	root        string
+	config      ConfigSource
+	dialects    map[string]Dialect
+	extractor   SourceExtractor
+	renderer    MapRenderer
+	preferences PreferenceStore
+	themes      ThemeSource
+	vcs         VersionControl
+	workspace   Workspace
 }
 
 // analysis is everything one run computes, kept in memory only.
@@ -48,24 +50,28 @@ type analysis struct {
 //   - workspace: the .treaty directory.
 //   - renderer: the map renderer.
 //   - agents: where coding agents find the repository's MCP servers.
+//   - themes: the map's color themes.
+//   - preferences: where a person's choices on the map are kept.
 //
 // Returns:
 //   - result: the service.
-func NewService(root string, config ConfigSource, extractor SourceExtractor, dialects []Dialect, vcs VersionControl, workspace Workspace, renderer MapRenderer, agents AgentConfig) *Service {
+func NewService(root string, config ConfigSource, extractor SourceExtractor, dialects []Dialect, vcs VersionControl, workspace Workspace, renderer MapRenderer, agents AgentConfig, themes ThemeSource, preferences PreferenceStore) *Service {
 	byLanguage := map[string]Dialect{}
 	for _, dialect := range dialects {
 		byLanguage[dialect.Language()] = dialect
 	}
 
 	return &Service{
-		agents:    agents,
-		root:      root,
-		config:    config,
-		dialects:  byLanguage,
-		extractor: extractor,
-		renderer:  renderer,
-		vcs:       vcs,
-		workspace: workspace,
+		agents:      agents,
+		root:        root,
+		config:      config,
+		dialects:    byLanguage,
+		extractor:   extractor,
+		renderer:    renderer,
+		themes:      themes,
+		preferences: preferences,
+		vcs:         vcs,
+		workspace:   workspace,
 	}
 }
 

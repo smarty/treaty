@@ -3,6 +3,8 @@
 package app
 
 import (
+	"encoding/json"
+
 	"github.com/smarty/treaty/internal/graph"
 	"github.com/smarty/treaty/internal/rules"
 )
@@ -127,6 +129,49 @@ type SourceExtractor interface {
 
 	// Source reads one file under root, for embedding in the map.
 	Source(root, file string) ([]byte, error)
+}
+
+// Preferences are one person's choices on the live map, kept across sessions
+// and repositories: the theme, whether the map follows Claude, and the panel
+// layout. Layout is the page's own JSON, kept as it is. A nil or empty field
+// means no choice has been made.
+type Preferences struct {
+	Theme  string          `json:"theme,omitempty"`
+	Follow *bool           `json:"follow,omitempty"`
+	Layout json.RawMessage `json:"layout,omitempty"`
+}
+
+// PreferenceStore keeps a person's preferences.
+type PreferenceStore interface {
+	// Load reads the preferences, empty when none have been saved.
+	Load() (Preferences, error)
+
+	// Save replaces the preferences.
+	Save(preferences Preferences) error
+}
+
+// Theme is a named set of the map's color tokens, such as bg, ink, added
+// and violation. Base is light or dark. Group is standard, accessibility or
+// style for the themes Treaty ships, and yours for a person's own. Default
+// marks a theme Treaty ships and rewrites.
+type Theme struct {
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Base    string            `json:"base"`
+	Group   string            `json:"group"`
+	Default bool              `json:"default"`
+	Colors  map[string]string `json:"colors"`
+}
+
+// ThemeSource provides the map's themes: the defaults and any a person adds.
+type ThemeSource interface {
+	// Install writes the default themes where people keep theirs, replacing
+	// earlier copies of them and removing defaults that no longer ship.
+	Install() error
+
+	// Themes lists every theme, the defaults first. A theme that cannot be
+	// read is left out and reported in err, alongside the others.
+	Themes() (result []Theme, err error)
 }
 
 // VersionControl materializes other revisions of the repository.

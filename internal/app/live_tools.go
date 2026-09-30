@@ -461,8 +461,13 @@ func (this *Live) Selected() (selection Selection, slice *Slice, err error) {
 	selection = this.selection
 	this.mutex.Unlock()
 	target := selection.ID
-	if selection.Type == "edge" {
+	switch selection.Type {
+	case "edge":
 		target = selection.From
+	case "file":
+		// A file's id is its module id and path, joined by "|"; the slice is
+		// its module's.
+		target, _, _ = strings.Cut(selection.ID, "|")
 	}
 
 	if built, err := buildSlice(current, target); err == nil {

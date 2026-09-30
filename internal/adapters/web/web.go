@@ -63,6 +63,8 @@ func Listen(live *app.Live, port int) (result *Server, err error) {
 	mux.HandleFunc("POST /api/baseline", result.baseline)
 	mux.HandleFunc("POST /api/selection", result.selection)
 	mux.HandleFunc("POST /api/show", result.show)
+	mux.HandleFunc("GET /api/preferences", result.preferences)
+	mux.HandleFunc("POST /api/preferences", result.savePreferences)
 	mux.HandleFunc("POST /api/view", result.setView)
 	mux.HandleFunc("POST /api/view/adopt", result.adopt)
 	result.server = &http.Server{Handler: result.guard(mux), ReadHeaderTimeout: 5 * time.Second}
@@ -258,6 +260,38 @@ func (this *Server) page(writer http.ResponseWriter, _ *http.Request) {
 	_, _ = writer.Write(this.live.Page())
 }
 
+// preferences serves the person's saved choices on the map.
+func (this *Server) preferences(writer http.ResponseWriter, _ *http.Request) {
+	preferences, err := this.live.Preferences()
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	respond(writer, preferences)
+}
+
+// savePreferences merges the fields sent into the saved choices.
+func (this *Server) savePreferences(writer http.ResponseWriter, request *http.Request) {
+	var update app.Preferences
+	if !decode(writer, request, &update) {
+		return
+	}
+
+	preferences, err := this.live.SavePreferences(update)
+	if errors.Is(err, app.ErrPreferences) {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	respond(writer, preferences)
+}
+
 func (this *Server) selection(writer http.ResponseWriter, request *http.Request) {
 	var selection app.Selection
 	if !decode(writer, request, &selection) {
@@ -342,4 +376,11 @@ func decode(writer http.ResponseWriter, request *http.Request, target any) bool 
 	}
 
 	return true
+}
+
+// respond writes a value as JSON that no cache keeps.
+func respond(writer http.ResponseWriter, value any) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(writer).Encode(value)
 }

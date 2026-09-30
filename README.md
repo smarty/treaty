@@ -146,7 +146,7 @@ working tree, and pushes each rebuild to the browser. The map lays modules
 out to match the architecture. Each module holds a ring of cells, one per file,
 darker for files with more symbols, so crowded files stand out. The module's
 contracts stay on its border, each on the stretch facing its file; zoom in and
-each file shows its internals as dots, and pointing at a file or a contract
+each file shows its internals as their kind, and pointing at a file or a contract
 lights up the other. Changes are shown against a baseline: HEAD for
 uncommitted work, the merge base for a pull request, or any ref. You can
 change the baseline from the map's header while it runs. The server listens
@@ -157,6 +157,24 @@ previews your code in it, fitted the way `treaty init` would propose. Checks
 and agents keep following `treaty.yaml` until you press *Use this
 architecture*, or until the preview has been left in place for five minutes.
 Then `treaty.yaml` is replaced with the proposal.
+
+The review queue and the inspector are tabs in drawers beside the map. Drag
+a divider to resize a drawer. Drag a tab to move its panel into another
+drawer, split a drawer, join the map as a tab, or float it over the map.
+*Reset layout* restores the default.
+Click a file's cell to select it, just like a module or symbol.
+
+The Theme menu offers System (following your OS) and 18 themes: Light and
+Dark in the style of VS Code's defaults; High Contrast and Color-blind Safe
+versions of each for accessibility; and Dawn, Dusk, Fjord, Vampire, Harvest,
+Blossom, Great Wave, Gumdrop, Gumdrop Light, Neon Rain, Comic and Midnight.
+Themes are JSON files in `~/.treaty/themes/`. Treaty rewrites its own there
+every time a server starts, so copy one to a new name to make your own; any
+other `.json` file there shows up in the menu under Yours.
+
+Your theme, layout and *Follow Claude* choice are saved in
+`~/.treaty/settings.json`, so they follow you across repositories, browsers
+and sessions.
 
 ## Working with Claude Code
 

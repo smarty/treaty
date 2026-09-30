@@ -6,27 +6,13 @@
 <title>Treaty</title>
 <style>
 :root {
-  --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #d9d9d3;
-  --ring-domain: #eef1f6; --ring-app: #f4f5f8; --ring-adapter: #fafafa; --ring-outer: #fdfdfc; --ring-stroke: #c9ccd4;
-  --module: #ffffff; --module-stroke: #8a8f99; --hex-stroke: #c9ccd3; --group: rgba(120, 130, 150, .06); --group-collapsed: rgba(120, 130, 150, .16); --edge: #7f93bd; --arrow: #3f4654;
-  --blue: #2563eb; --orange: #d97706; --magenta: #c026d3; --teal: #0d9488; --yellow: #a16207; --high: #dc2626; --medium: #d97706; --low: #6b7280;
-  --code-bg: #f1f1ee; --focus: #2563eb; --glow: rgba(37, 99, 235, .85);
+  /* Every color is a token. Themes set these from JSON when the map data
+     loads; the values here only paint the page before that, following the
+     system's light or dark preference. */
+  --bg: #f8f8f8; --panel: #ffffff; --ink: #3b3b3b; --muted: #616161; --line: #e5e5e5; --ring-domain: #f3f3f3; --ring-app: #f7f7f7; --ring-adapter: #fbfbfb; --ring-outer: #fdfdfd; --ring-stroke: #d4d4d4; --module: #ffffff; --module-stroke: #9a9a9a; --hex-stroke: #c9c9c9; --group: rgba(59, 59, 59, .06); --group-collapsed: rgba(59, 59, 59, .16); --edge: #8c9bb0; --arrow: #525252; --code-bg: #f3f3f3; --accent: #005fb8; --focus: #005fb8; --glow: rgba(0, 95, 184, .9); --added: #388a34; --changed: #895503; --violation: #e51400; --planned: #af00db; --selection: #005fb8; --claude: #267f99; --high: #e51400; --medium: #bf8803; --low: #6f6f6f;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #141413; --panel: #1d1d1b; --ink: #ececea; --muted: #9b9b95; --line: #34342f;
-    --ring-domain: #1f2430; --ring-app: #1c1f27; --ring-adapter: #1a1b1f; --ring-outer: #18181b; --ring-stroke: #3b3f4a;
-    --module: #23232a; --module-stroke: #7d828c; --hex-stroke: #454a55; --group: rgba(160, 170, 195, .05); --group-collapsed: rgba(160, 170, 195, .14); --edge: #5f7196; --arrow: #d4d7dd;
-    --blue: #60a5fa; --orange: #f59e0b; --magenta: #e879f9; --teal: #2dd4bf; --yellow: #facc15; --high: #f87171; --medium: #fbbf24; --low: #9ca3af;
-    --code-bg: #25251f; --focus: #60a5fa; --glow: rgba(147, 197, 253, .95);
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #141413; --panel: #1d1d1b; --ink: #ececea; --muted: #9b9b95; --line: #34342f;
-  --ring-domain: #1f2430; --ring-app: #1c1f27; --ring-adapter: #1a1b1f; --ring-outer: #18181b; --ring-stroke: #3b3f4a;
-  --module: #23232a; --module-stroke: #7d828c; --hex-stroke: #454a55; --group: rgba(160, 170, 195, .05); --group-collapsed: rgba(160, 170, 195, .14); --edge: #5f7196; --arrow: #d4d7dd;
-  --blue: #60a5fa; --orange: #f59e0b; --magenta: #e879f9; --teal: #2dd4bf; --yellow: #facc15; --high: #f87171; --medium: #fbbf24; --low: #9ca3af;
-  --code-bg: #25251f; --focus: #60a5fa; --glow: rgba(147, 197, 253, .95);
+  :root { --bg: #181818; --panel: #1f1f1f; --ink: #cccccc; --muted: #9d9d9d; --line: #2b2b2b; --ring-domain: #262626; --ring-app: #232323; --ring-adapter: #202020; --ring-outer: #1c1c1c; --ring-stroke: #3c3c3c; --module: #252526; --module-stroke: #727272; --hex-stroke: #454545; --group: rgba(204, 204, 204, .05); --group-collapsed: rgba(204, 204, 204, .14); --edge: #5a6b85; --arrow: #b6b6b6; --code-bg: #2a2a2a; --accent: #3794ff; --focus: #0078d4; --glow: rgba(0, 120, 212, .9); --added: #81b88b; --changed: #e2c08d; --violation: #f14c4c; --planned: #c586c0; --selection: #3794ff; --claude: #4ec9b0; --high: #f14c4c; --medium: #cca700; --low: #8b8b8b; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; height: 100vh; }
@@ -39,12 +25,12 @@ header .live[hidden] { display: none; }
 header select, header input { font: inherit; font-size: 12px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
 header input[hidden] { display: none; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--low); }
-.dot.on { background: var(--teal); } .dot.error { background: var(--high); }
+.dot.on { background: var(--claude); } .dot.error { background: var(--high); }
 .status { color: var(--muted); } .status.error { color: var(--high); }
-.adopt { color: var(--teal); display: inline-flex; gap: 6px; align-items: center; } .adopt[hidden] { display: none; }
-.offer { position: absolute; left: 10px; bottom: 10px; max-width: min(420px, calc(100% - 70px)); background: var(--panel); border: 1px solid var(--teal); border-left-width: 4px; border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.25); display: grid; gap: 6px; }
+.adopt { color: var(--claude); display: inline-flex; gap: 6px; align-items: center; } .adopt[hidden] { display: none; }
+.offer { position: absolute; left: 10px; bottom: 10px; max-width: min(420px, calc(100% - 70px)); background: var(--panel); border: 1px solid var(--claude); border-left-width: 4px; border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.25); display: grid; gap: 6px; }
 .offer[hidden] { display: none; }
-.offer .who { color: var(--teal); font-weight: 600; }
+.offer .who { color: var(--claude); font-weight: 600; }
 .offer .why { color: var(--muted); }
 .offer .actions { display: flex; gap: 6px; }
 /* Selection glows yellow and Claude's show requests glow teal. Both pulse
@@ -52,27 +38,56 @@ header input[hidden] { display: none; }
 /* Glow lengths are in the element's own units, which zoom with the map;
    sizeGlows sets --u to one screen pixel in those units, so every glow keeps
    the same size on screen at any zoom, peaking at 10px. */
-.selected-glow { filter: drop-shadow(0 0 calc(3px * var(--u, 1)) var(--yellow)) drop-shadow(0 0 calc(8px * var(--u, 1)) var(--yellow)); }
-.pointed-glow { filter: drop-shadow(0 0 calc(3px * var(--u, 1)) var(--teal)) drop-shadow(0 0 calc(8px * var(--u, 1)) var(--teal)); }
+.selected-glow { filter: drop-shadow(0 0 calc(3px * var(--u, 1)) var(--selection)) drop-shadow(0 0 calc(8px * var(--u, 1)) var(--selection)); }
+.pointed-glow { filter: drop-shadow(0 0 calc(3px * var(--u, 1)) var(--claude)) drop-shadow(0 0 calc(8px * var(--u, 1)) var(--claude)); }
 /* A file and its contracts light up together while one of them is pointed at
    or selected. */
 .file-arc { stroke-opacity: .45; }
-.file-cell.file-hot, .file-cell.file-picked { stroke: var(--yellow); stroke-width: 1.8; }
-.file-arc.file-hot, .file-arc.file-picked { stroke: var(--yellow); stroke-opacity: 1; }
-[data-symbol].file-hot, [data-symbol].file-picked { filter: drop-shadow(0 0 2px var(--yellow)); }
-.selected-label { fill: var(--yellow) !important; font-weight: 700; }
+.file-cell.file-hot, .file-cell.file-picked { stroke: var(--selection); stroke-width: 1.8; }
+.file-arc.file-hot, .file-arc.file-picked { stroke: var(--selection); stroke-opacity: 1; }
+[data-symbol].file-hot, [data-symbol].file-picked { filter: drop-shadow(0 0 2px var(--selection)); }
+.selected-label { fill: var(--selection) !important; font-weight: 700; }
 @media (prefers-reduced-motion: no-preference) {
   .selected-glow { animation: selected-pulse 1.6s ease-in-out infinite; }
   .pointed-glow { animation: pointed-pulse 1.1s ease-in-out infinite; }
-  @keyframes selected-pulse { 0%, 100% { filter: drop-shadow(0 0 calc(1px * var(--u, 1)) var(--yellow)); } 50% { filter: drop-shadow(0 0 calc(4px * var(--u, 1)) var(--yellow)) drop-shadow(0 0 calc(10px * var(--u, 1)) var(--yellow)); } }
-  @keyframes pointed-pulse { 0%, 100% { filter: drop-shadow(0 0 calc(1px * var(--u, 1)) var(--teal)); } 50% { filter: drop-shadow(0 0 calc(4px * var(--u, 1)) var(--teal)) drop-shadow(0 0 calc(10px * var(--u, 1)) var(--teal)); } }
+  @keyframes selected-pulse { 0%, 100% { filter: drop-shadow(0 0 calc(1px * var(--u, 1)) var(--selection)); } 50% { filter: drop-shadow(0 0 calc(4px * var(--u, 1)) var(--selection)) drop-shadow(0 0 calc(10px * var(--u, 1)) var(--selection)); } }
+  @keyframes pointed-pulse { 0%, 100% { filter: drop-shadow(0 0 calc(1px * var(--u, 1)) var(--claude)); } 50% { filter: drop-shadow(0 0 calc(4px * var(--u, 1)) var(--claude)) drop-shadow(0 0 calc(10px * var(--u, 1)) var(--claude)); } }
 }
 header label, header button { font-size: 12px; color: var(--ink); }
 button { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; color: var(--ink); }
 button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-main { display: grid; grid-template-columns: 300px minmax(0, 1fr) 360px; flex: 1; min-height: 0; }
-aside { overflow: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 12px; }
-aside.inspector { border-right: 0; border-left: 1px solid var(--line); }
+/* The workspace: drawers left, right and bottom around the center, each a
+   column (or, at the bottom, a row) of tab stacks; floating windows hover
+   above. Empty drawers take no room. */
+main#workspace { position: relative; display: grid; grid-template-columns: var(--left, 300px) auto minmax(0, 1fr) auto var(--right, 360px); flex: 1; min-height: 0; }
+.dock { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.dock[hidden], .splitter[hidden] { display: none; }
+/* Each piece keeps its column, so a hidden drawer leaves the others in place. */
+#dock-left { grid-column: 1; } [data-splitter="left"] { grid-column: 2; } .center-col { grid-column: 3; } [data-splitter="right"] { grid-column: 4; } #dock-right { grid-column: 5; }
+#dock-left, #dock-right, .center-col, [data-splitter="left"], [data-splitter="right"] { grid-row: 1; }
+.dock.bottom { flex-direction: row; height: var(--bottom, 240px); flex: none; }
+.center-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#dock-center { flex: 1; min-height: 0; display: flex; }
+.splitter { background: var(--line); flex: none; touch-action: none; }
+.splitter.col { width: 5px; cursor: col-resize; background: linear-gradient(var(--line), var(--line)) center / 1px 100% no-repeat; }
+.splitter.row { height: 5px; cursor: row-resize; background: linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat; }
+.splitter:hover, .splitter.dragging, .splitter:focus-visible { background: var(--focus); outline: none; }
+.stack { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; background: var(--panel); }
+.tabbar { display: flex; gap: 2px; padding: 4px 6px 0; border-bottom: 1px solid var(--line); background: var(--bg); flex: none; overflow-x: auto; }
+.tab { font-size: 12px; padding: 4px 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: transparent; color: var(--muted); cursor: grab; white-space: nowrap; -webkit-user-select: none; user-select: none; touch-action: none; }
+.tab.pinned { cursor: pointer; }
+.tab.active { background: var(--panel); border-color: var(--line); color: var(--ink); }
+.stack-body { flex: 1; min-height: 0; overflow: auto; position: relative; }
+.stack-body.fill { overflow: hidden; }
+.panel { padding: 12px; }
+.map-panel { padding: 0; height: 100%; }
+.map-panel .map-wrap { height: 100%; }
+.float { position: absolute; z-index: 6; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,.35); overflow: hidden; }
+.float .tabbar { cursor: move; }
+.float-resize { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--line) 50%); }
+.drop-hint { position: absolute; z-index: 7; pointer-events: none; background: color-mix(in srgb, var(--focus) 16%, transparent); border: 2px solid var(--focus); border-radius: 6px; }
+.drop-hint[hidden] { display: none; }
+.tab-ghost { position: fixed; z-index: 20; pointer-events: none; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: var(--panel); color: var(--ink); border: 1px solid var(--focus); box-shadow: 0 4px 12px rgba(0,0,0,.3); }
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 10px; }
 .queue-item { display: grid; grid-template-columns: 22px 1fr; gap: 6px; padding: 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
 .queue-item:hover { background: var(--bg); }
@@ -83,6 +98,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: v
 .sev.high { background: var(--high); } .sev.medium { background: var(--medium); border-radius: 3px; } .sev.low { background: var(--low); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 #map { width: 100%; height: 100%; display: block; }
 .map-wrap { position: relative; overflow: hidden; }
+#panels { display: none; }
 .glow { filter: drop-shadow(0 0 calc(3px * var(--u, 1)) var(--glow)) drop-shadow(0 0 calc(7px * var(--u, 1)) var(--glow)); }
 .tip { position: fixed; z-index: 10; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: 12px/1.3 ui-monospace, "SF Mono", Menlo, monospace; box-shadow: 0 2px 8px rgba(0,0,0,.25); max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: none; }
 .zoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
@@ -95,6 +111,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: v
 #map :focus, #map :focus-visible { outline: none; }
 .legend { position: absolute; left: 10px; top: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 11px; color: var(--muted); }
 .legend svg { vertical-align: middle; }
+.legend .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; vertical-align: -1px; }
 .ring-label { font-size: 10px; fill: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
 .module-label { font-size: 10px; fill: var(--ink); pointer-events: none; }
 .group { cursor: pointer; }
@@ -106,21 +123,22 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: v
 .inspector dt { color: var(--muted); }
 .inspector dd { margin: 0; word-break: break-word; }
 pre { background: var(--code-bg); padding: 8px; border-radius: 6px; overflow: auto; font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; margin: 0 0 12px; }
-.sig-old { color: var(--high); } .sig-new { color: var(--blue); }
+.sig-old { color: var(--high); } .sig-new { color: var(--added); }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
 .chip { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; cursor: pointer; background: var(--bg); color: var(--ink); }
 table.metrics { border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 12px; }
 table.metrics td, table.metrics th { border-bottom: 1px solid var(--line); padding: 3px 4px; text-align: right; }
 table.metrics td:first-child, table.metrics th:first-child { text-align: left; }
 .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
-.pill.fail { background: var(--high); color: #fff; } .pill.pass { background: var(--blue); color: #fff; }
+.pill.fail { background: var(--high); color: #fff; } .pill.pass { background: var(--accent); color: #fff; }
 .empty { color: var(--muted); }
 .slice-head { display: flex; justify-content: space-between; align-items: center; }
 @media (max-width: 900px) {
   body { height: auto; }
-  main { grid-template-columns: 1fr; }
-  aside { border: 0; border-bottom: 1px solid var(--line); max-height: none; }
-  .map-wrap { height: 70vh; }
+  main#workspace { display: flex; flex-direction: column; }
+  .dock, .dock.bottom { height: auto; flex-direction: column; }
+  .splitter { display: none; }
+  #dock-center, .map-panel .map-wrap { height: 70vh; }
 }
 @media (prefers-reduced-motion: no-preference) { .queue-item, .chip { transition: background .12s; } }
 </style>
@@ -141,10 +159,25 @@ table.metrics td:first-child, table.metrics th:first-child { text-align: left; }
   </span>
   <span class="spacer"></span>
   <label><input type="checkbox" id="internals"> Show internals</label>
-  <button id="theme" type="button" aria-label="Toggle theme">Theme</button>
+  <button id="layout-reset" type="button" title="Put every panel back in its drawer">Reset layout</button>
+  <label>Theme <select id="theme"><option value="system">System</option></select></label>
 </header>
-<main>
-  <aside aria-label="Review queue"><h2>Review queue</h2><div id="queue"></div></aside>
+<main id="workspace">
+  <div class="dock" id="dock-left" data-dock="left"></div>
+  <div class="splitter col" data-splitter="left" role="separator" aria-orientation="vertical" aria-label="Resize the left drawer" tabindex="0"></div>
+  <div class="center-col">
+    <div id="dock-center" data-dock="center"></div>
+    <div class="splitter row" data-splitter="bottom" role="separator" aria-orientation="horizontal" aria-label="Resize the bottom drawer" tabindex="0"></div>
+    <div class="dock bottom" id="dock-bottom" data-dock="bottom"></div>
+  </div>
+  <div class="splitter col" data-splitter="right" role="separator" aria-orientation="vertical" aria-label="Resize the right drawer" tabindex="0"></div>
+  <div class="dock" id="dock-right" data-dock="right"></div>
+  <div class="drop-hint" id="drop-hint" hidden></div>
+</main>
+<!-- Every panel lives here until the layout places it in a stack. -->
+<div id="panels">
+  <section class="panel" data-panel="queue" aria-label="Review queue"><div id="queue"></div></section>
+  <section class="panel map-panel" data-panel="map" aria-label="Map">
   <div class="map-wrap">
     <svg id="map" role="application" aria-label="Hexagon map of modules and contracts"></svg>
     <div class="legend" id="legend"></div>
@@ -160,8 +193,9 @@ table.metrics td:first-child, table.metrics th:first-child { text-align: left; }
       <button type="button" id="zoom-fit" aria-label="Fit to view" title="Fit (0)">⤢</button>
     </div>
   </div>
-  <aside class="inspector" aria-label="Inspector"><h2>Inspector</h2><div id="inspector"><p class="empty">Select a module, symbol, edge or queue item.</p></div></aside>
-</main>
+  </section>
+  <section class="panel inspector" data-panel="inspector" aria-label="Inspector"><div id="inspector"><p class="empty">Select a module, file, symbol, edge or queue item.</p></div></section>
+</div>
 <script>
 let D = /*DATA*/null;
 // With no data embedded, the page is the live map: it loads the view from the
@@ -182,6 +216,8 @@ function ingest(data) {
   groups = new Map((D.layout.groups || []).map(g => [g.id, g]));
   groupOf = new Map();
   for (const g of D.layout.groups || []) for (const id of g.modules) if (!groupOf.has(id) || groups.get(groupOf.get(id)).depth < g.depth) groupOf.set(id, g.id);
+  // The caller draws next, so the theme only sets the tokens here.
+  fillThemeMenu(); applyTheme(false);
 }
 const NS = "http://www.w3.org/2000/svg";
 const ICON_GROWTH = 0.4;
@@ -283,10 +319,10 @@ function glyph(change) { return { added: "+", contract: "Δ", breaking: "!", rem
 // Designed or planned symbols that are not built yet are teal with a dashed
 // outline, so the state never relies on color alone.
 function drawShape(g, kind, x, y, r, change, design) {
-  const hue = change === "added" ? color("--blue") : change ? color("--orange") : color("--module-stroke");
+  const hue = change === "added" ? color("--added") : change ? color("--changed") : color("--module-stroke");
   const hollow = kind === "function" || kind === "interface";
   const common = { fill: hollow ? color("--module") : hue, stroke: hue, "stroke-width": hollow ? 1.6 : 1 };
-  if (design) Object.assign(common, { fill: color("--module"), stroke: color("--teal"), "stroke-width": 1.6, "stroke-dasharray": "2 1.5" });
+  if (design) Object.assign(common, { fill: color("--module"), stroke: color("--planned"), "stroke-width": 1.6, "stroke-dasharray": "2 1.5" });
   let shape;
   if (kind === "interface" || kind === "type") shape = el("rect", { ...common, x: x - r * 0.85, y: y - r * 0.85, width: r * 1.7, height: r * 1.7 }, g);
   else if (kind === "value") shape = el("polygon", { ...common, points: `${x},${y - r} ${x + r},${y + r * 0.8} ${x - r},${y + r * 0.8}` }, g);
@@ -324,6 +360,9 @@ function placeName(m) {
 // moduleSize is a module hexagon's radius: larger for a module with more
 // files, since each file is a cell inside it.
 function fileKey(moduleId, file) { return moduleId + "|" + file; }
+// fileOf splits a file selection's id into its module and path.
+function fileOf(key) { const at = key.indexOf("|"); return { module: key.slice(0, at), file: key.slice(at + 1) }; }
+function fileCell(key) { const f = fileOf(key); return ((D.layout.cells || {})[f.module] || []).find(c => c.file === f.file); }
 function moduleSize(moduleId) { return (D.layout.sizes || {})[moduleId] || D.layout.size; }
 // moduleLabel names a module relative to the group drawn around it, so a
 // group's children don't all repeat its path.
@@ -344,6 +383,11 @@ function related() {
   } else if (sel.type === "module") {
     set.add(sel.id); for (const s of byModule.get(sel.id) || []) set.add(s.id);
     for (const e of edges) if (e.from === sel.id || e.to === sel.id) { set.add(e.from); set.add(e.to); }
+  } else if (sel.type === "file") {
+    const f = fileOf(sel.id); set.add(sel.id); set.add(f.module);
+    const own = new Set((byModule.get(f.module) || []).filter(s => s.file === f.file).map(s => s.id));
+    for (const id of own) set.add(id);
+    for (const l of links) if (own.has(l.from) || own.has(l.to)) { set.add(l.from); set.add(l.to); const a = symbols.get(l.from), b = symbols.get(l.to); if (a) set.add(a.module); if (b) set.add(b.module); }
   } else if (sel.type === "group") {
     const g = groups.get(sel.id); set.add(sel.id);
     for (const id of g.modules) { set.add(id); for (const s of byModule.get(id) || []) set.add(s.id); }
@@ -367,11 +411,11 @@ function draw() {
   // regions for the other architectures.
   const tones = ["--ring-domain", "--ring-app", "--ring-adapter", "--ring-outer"];
   for (const ring of [...(D.layout.rings || [])].reverse()) {
-    el("polygon", { points: hexPoints(0, 0, ring.radius).map(p => p.join(",")).join(" "), fill: color(tones[ring.tone] || tones[3]), stroke: color("--ring-stroke") }, svg);
+    el("polygon", { class: "backdrop", points: hexPoints(0, 0, ring.radius).map(p => p.join(",")).join(" "), fill: color(tones[ring.tone] || tones[3]), stroke: color("--ring-stroke") }, svg);
     el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, 0, -ring.radius * Math.sin(Math.PI / 3) + 16, {}, true, true)).textContent = ring.layer.replace(/_/g, " ");
   }
   for (const r of D.layout.regions || []) {
-    el("rect", { x: r.x, y: r.y, width: r.w, height: r.h, rx: 8, fill: color(tones[r.tone] || tones[3]), stroke: color("--ring-stroke"), "vector-effect": "non-scaling-stroke" }, svg);
+    el("rect", { class: "backdrop", x: r.x, y: r.y, width: r.w, height: r.h, rx: 8, fill: color(tones[r.tone] || tones[3]), stroke: color("--ring-stroke"), "vector-effect": "non-scaling-stroke" }, svg);
     el("text", { x: 0, y: 0, class: "ring-label" }, anchored(svg, r.x + 10, r.y + 17, {}, true, true)).textContent = r.label;
   }
   for (const l of D.layout.labels || []) el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, l.x, l.y, {}, true, true)).textContent = l.text;
@@ -388,7 +432,7 @@ function draw() {
     const parentPath = (groups.get(g.parent) || {}).path;
     const name = parentPath ? g.path.slice(parentPath.length + 1) : g.path;
     const node = el("g", { class: "group" + (relatedKey(rel, g.id) ? "" : " dim"), "data-group": g.id, tabindex: 0, role: "button", "aria-label": `Group ${g.path}, ${count} modules${collapsed ? ", collapsed" : ""}`, "data-label": `${g.path}/ · ${count} module${count === 1 ? "" : "s"} · ${contracts} contracts · ${collapsed ? "double-click to expand" : "double-click to collapse"}` }, groupLayer);
-    el("polygon", { points: hexPoints(g.x, g.y, g.radius).map(q => q.join(",")).join(" "), fill: color(collapsed ? "--group-collapsed" : "--group"), stroke: selected ? color("--yellow") : color("--hex-stroke"), "stroke-width": selected ? 2.5 : 1, "vector-effect": "non-scaling-stroke" }, node);
+    el("polygon", { points: hexPoints(g.x, g.y, g.radius).map(q => q.join(",")).join(" "), fill: color(collapsed ? "--group-collapsed" : "--group"), stroke: selected ? color("--selection") : color("--hex-stroke"), "stroke-width": selected ? 2.5 : 1, "vector-effect": "non-scaling-stroke" }, node);
     const top = g.y - g.radius * Math.cos(Math.PI / 6);
     if (collapsed) {
       el("text", { x: 0, y: 0, "text-anchor": "middle", class: "group-name" + (selected ? " selected-label" : "") }, anchored(node, g.x, g.y - 4, {}, true, true)).textContent = name + "/";
@@ -425,7 +469,7 @@ function draw() {
       const cx = mx - dy * part.bend, cy = my + dx * part.bend;
       const trim = (p, toward, by) => { const vx = toward[0] - p.x, vy = toward[1] - p.y, d = Math.hypot(vx, vy) || 1; return { x: p.x + vx / d * by, y: p.y + vy / d * by }; };
       const a = trim(from, [cx, cy], from.r + 4), b = trim(to, [cx, cy], to.r + 8);
-      const stroke = e.violation ? color("--magenta") : e.new ? color("--blue") : color("--edge");
+      const stroke = e.violation ? color("--violation") : e.new ? color("--added") : color("--edge");
       const width = e.violation ? 2.5 : 1 + 3 * part.refs.length / maxCount;
       const dimmed = rel && !(relatedKey(rel, e.from) && relatedKey(rel, e.to));
       const kinds = part.inherit ? [...new Set(part.refs.map(r => r.kind))].join(", ") : "uses";
@@ -441,7 +485,7 @@ function draw() {
       if (e.violation && index === 0) {
         const qx = 0.25 * a.x + 0.5 * cx + 0.25 * b.x, qy = 0.25 * a.y + 0.5 * cy + 0.25 * b.y;
         const mark = anchored(edgeLayer, qx, qy, { "data-label": `Layer violation: ${from.label} → ${to.label}` });
-        el("circle", { cx: 0, cy: 0, r: 8, fill: color("--magenta") }, mark);
+        el("circle", { cx: 0, cy: 0, r: 8, fill: color("--violation") }, mark);
         el("text", { x: 0, y: 4, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "#fff", "pointer-events": "none" }, mark).textContent = "!";
       }
     });
@@ -461,7 +505,7 @@ function draw() {
     const p = pos[m.id]; if (!p || hidden.has(m.id)) continue;
     const S = moduleSize(m.id);
     const g = el("g", { class: "module" + (rel && !rel.has(m.id) ? " dim" : ""), "data-module": m.id, tabindex: 0, role: "button", "aria-label": `Module ${m.id}, ${m.layer}`, "data-label": `${m.label || m.path} · ${placeName(m)}${m.design ? " · planned, not built" : ""}` }, svg);
-    const hex = el("polygon", { points: hexPoints(p.x, p.y, S).map(q => q.join(",")).join(" "), fill: color("--module"), stroke: m.new ? color("--blue") : m.design ? color("--teal") : state.selected && state.selected.id === m.id ? color("--yellow") : color("--hex-stroke"), "stroke-width": state.selected && state.selected.id === m.id ? 2.5 : 1.4, "vector-effect": "non-scaling-stroke" }, g);
+    const hex = el("polygon", { points: hexPoints(p.x, p.y, S).map(q => q.join(",")).join(" "), fill: color("--module"), stroke: m.new ? color("--added") : m.design ? color("--planned") : state.selected && state.selected.id === m.id ? color("--selection") : color("--hex-stroke"), "stroke-width": state.selected && state.selected.id === m.id ? 2.5 : 1.4, "vector-effect": "non-scaling-stroke" }, g);
     if (m.new || m.design) hex.setAttribute("stroke-dasharray", "5 3");
     // Composition wires adapters into the core: a double outline marks the
     // only modules allowed to depend on adapters.
@@ -471,8 +515,16 @@ function draw() {
     if (m.public) el("polygon", { points: hexPoints(p.x, p.y, S * 1.12).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--module-stroke"), "stroke-width": 2.4, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
     el("text", { x: 0, y: 0, "text-anchor": "middle", class: "module-label" + (state.selected && state.selected.type === "module" && state.selected.id === m.id ? " selected-label" : "") }, anchored(g, p.x, p.y + S + 13, {}, true, true)).textContent = moduleLabel(m);
     const pick = () => select({ type: "module", id: m.id });
-    g.addEventListener("click", ev => { ev.stopPropagation(); if (ev.target === hex || ev.target.tagName === "text" || ev.target.classList.contains("file-cell")) pick(); });
-    g.addEventListener("keydown", ev => { if (ev_is(ev)) { ev.preventDefault(); pick(); } });
+    g.addEventListener("click", ev => {
+      ev.stopPropagation();
+      if (ev.target.dataset && ev.target.dataset.file && !ev.target.closest("[data-symbol]")) select({ type: "file", id: ev.target.dataset.file });
+      else if (ev.target === hex || ev.target.tagName === "text") pick();
+    });
+    g.addEventListener("keydown", ev => {
+      if (!ev_is(ev)) return;
+      ev.preventDefault();
+      if (ev.target.classList.contains("file-cell")) select({ type: "file", id: ev.target.dataset.file }); else pick();
+    });
     const all = byModule.get(m.id) || [];
     const contract = all.filter(s => s.contract && !s.name.includes("."));
     const members = all.filter(s => s.contract && s.name.includes("."));
@@ -483,8 +535,9 @@ function draw() {
     if (cells.length) {
       // The border is the module's contract surface at every zoom. Each
       // file's contracts sit on the stretch of border facing its cell, marked
-      // by a bracket; inside, each cell holds the file's internals: full
-      // symbols when shown or touched, plain dots when zoomed in otherwise.
+      // by a bracket; inside, each cell holds the file's internals, drawn as
+      // their kind once the cell is large enough, or earlier when shown or
+      // touched by the selection.
       const C = D.layout.cell_size, detail = cellDetail();
       const r = Math.max(2.4, Math.min(5, 90 / Math.max(border.length, 1)));
       const span = cells.length > 1 ? 2 * Math.PI / cells.length * 0.84 : 2 * Math.PI;
@@ -494,19 +547,18 @@ function draw() {
       for (const cell of cells) {
         const cx = p.x + cell.x, cy = p.y + cell.y, key = fileKey(m.id, cell.file), mine = byFile.get(cell.file);
         const label = `${cell.file} · ${cell.symbols} symbol${cell.symbols === 1 ? "" : "s"}, ${mine.length} contract${mine.length === 1 ? "" : "s"}`;
-        el("polygon", { class: "file-cell", "data-file": key, "data-label": label, points: hexPoints(cx, cy, C).map(q => q.join(",")).join(" "), fill: color("--blue"), "fill-opacity": (0.04 + 0.3 * cell.symbols / crowded).toFixed(3), stroke: color("--hex-stroke"), "stroke-width": 0.8, "vector-effect": "non-scaling-stroke" }, g);
+        el("polygon", { class: "file-cell", "data-file": key, "data-label": label, tabindex: 0, role: "button", "aria-label": `File ${cell.file}`, points: hexPoints(cx, cy, C).map(q => q.join(",")).join(" "), fill: color("--accent"), "fill-opacity": (0.04 + 0.3 * cell.symbols / crowded).toFixed(3), stroke: color("--hex-stroke"), "stroke-width": 0.8, "vector-effect": "non-scaling-stroke" }, g);
         const inner = all.filter(s => !s.contract && s.file === cell.file && (detail || shownInternal.has(s.id)));
         const cols = Math.ceil(Math.sqrt(inner.length || 1)), step = (C * 1.15) / cols;
         inner.forEach((s, i) => {
           const x = cx - C * 0.575 + step * (i % cols + 0.5), y = cy - C * 0.575 + step * (Math.floor(i / cols) + 0.5);
-          if (shownInternal.has(s.id)) placeSymbol(g, s, x, y, Math.max(1.6, Math.min(4, step / 2.6)), rel, key);
-          else el("circle", { cx: x, cy: y, r: Math.min(1.3, step / 4), fill: color("--muted"), "pointer-events": "none" }, g);
+          placeSymbol(g, s, x, y, Math.max(1.6, Math.min(4, step / 2.6)), rel, key);
         });
         mine.forEach((s, i) => placeSymbol(g, s, ...onBorder(p.x, p.y, S, cell.angle - span / 2 + span * (i + 0.5) / mine.length), r, rel, key));
         if (cells.length > 1 && mine.length) {
           const points = [];
           for (let k = 0; k <= 16; k++) points.push(onBorder(p.x, p.y, S, cell.angle - span / 2 + span * k / 16, 0.88).join(","));
-          el("polyline", { class: "file-arc", "data-file": key, "data-label": label, points: points.join(" "), fill: "none", stroke: color("--blue"), "stroke-width": 2, "stroke-linecap": "round", "vector-effect": "non-scaling-stroke" }, g);
+          el("polyline", { class: "file-arc", "data-file": key, "data-label": label, points: points.join(" "), fill: "none", stroke: color("--accent"), "stroke-width": 2, "stroke-linecap": "round", "vector-effect": "non-scaling-stroke" }, g);
         }
       }
       // Planned contracts have no file yet; they wait in the empty middle.
@@ -527,14 +579,15 @@ function draw() {
     for (const l of links) {
       if (l.from !== state.selected.id && l.to !== state.selected.id) continue;
       const a = where(l.from), b = where(l.to); if (!a || !b) continue;
-      const line = el("line", { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: color("--blue"), "stroke-width": 1.5, "vector-effect": "non-scaling-stroke" }, layer);
+      const line = el("line", { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: color("--accent"), "stroke-width": 1.5, "vector-effect": "non-scaling-stroke" }, layer);
       if (inherits(l.kind)) line.setAttribute("stroke-dasharray", "5 3");
       const other = l.from === state.selected.id ? l.to : l.from, o = where(other);
       el("text", { x: 6, y: -6, "font-size": 10, fill: color("--ink") }, anchored(layer, o[0], o[1], {}, false, true)).textContent = (symbols.get(other) || {}).name || other;
     }
   }
   const picked = state.selected && state.selected.type === "symbol" && symbols.get(state.selected.id);
-  lightFile(picked && picked.file ? fileKey(picked.module, picked.file) : "", "file-picked");
+  const pickedFile = state.selected && state.selected.type === "file" ? state.selected.id : picked && picked.file ? fileKey(picked.module, picked.file) : "";
+  lightFile(pickedFile, "file-picked");
   state.hotFile = "";
   const selectedNode = state.selected && (state.selected.type === "edge" ? svg.querySelector(`[data-edge="${CSS.escape(state.selected.from + "|" + state.selected.to)}"]`) : glowNode(state.selected.id));
   if (selectedNode) selectedNode.classList.add("selected-glow");
@@ -548,6 +601,9 @@ function glowNode(id) {
   const svg = document.getElementById("map");
   const symbol = svg.querySelector(`[data-symbol="${CSS.escape(id)}"]`);
   if (symbol) return symbol;
+  const cell = svg.querySelector(`.file-cell[data-file="${CSS.escape(id)}"]`);
+  if (cell) return cell;
+  if (id.includes("|")) id = fileOf(id).module;
   if (groups.has(id)) { const g = svg.querySelector(`[data-group="${CSS.escape(id)}"] polygon`); if (g) return g; }
   const s = symbols.get(id), moduleId = s ? s.module : id;
   const module = svg.querySelector(`[data-module="${CSS.escape(moduleId)}"] polygon`);
@@ -573,7 +629,7 @@ function placeSymbol(g, s, x, y, r, rel, file) {
 function select(sel) {
   state.selected = sel;
   if (LIVE) postSelection(sel);
-  const moduleId = sel && (sel.type === "module" ? sel.id : sel.type === "symbol" ? (symbols.get(sel.id) || {}).module : null);
+  const moduleId = sel && (sel.type === "module" ? sel.id : sel.type === "symbol" ? (symbols.get(sel.id) || {}).module : sel.type === "file" ? fileOf(sel.id).module : null);
   if (moduleId) {
     for (const g of ancestors(groupOf.get(moduleId))) if (isCollapsed(g)) state.groupOpen[g.id] = true;
     const p = D.layout.modules[moduleId], v = state.view;
@@ -611,6 +667,24 @@ function inspect() {
     if (callers.length) { box.appendChild(h("h2", {}, "Callers")); const c = h("div", { class: "chips" }); [...new Set(callers)].forEach(id => chip(id, c)); box.appendChild(c); }
     if (s.source) { box.appendChild(h("h2", {}, "Code")); box.appendChild(h("pre", {}, s.source)); }
     sliceBlock(box, s.slice);
+  } else if (sel.type === "file") {
+    const f = fileOf(sel.id), cell = fileCell(sel.id), m = modules.get(f.module); if (!cell || !m) return;
+    const own = (byModule.get(f.module) || []).filter(s => s.file === f.file);
+    const contracts = own.filter(s => s.contract), internal = own.filter(s => !s.contract), changed = own.filter(s => s.change);
+    box.appendChild(h("h3", {}, f.file.split("/").pop()));
+    dl(box, [["Path", f.file], ["Module", m.label || m.path], ["Symbols", String(own.length)], ["Contracts", String(contracts.length)], ["Internal", String(internal.length)], ["Changed", changed.length ? String(changed.length) : ""]]);
+    const moduleChip = h("div", { class: "chips" }); chip(m.id, moduleChip); box.appendChild(moduleChip);
+    const ids = new Set(own.map(s => s.id)), uses = new Set(), usedBy = new Set();
+    for (const l of links) {
+      const a = symbols.get(l.from), b = symbols.get(l.to); if (!a || !b) continue;
+      const name = x => x.file && x.module === f.module ? x.file : (modules.get(x.module) || {}).label || x.module;
+      if (ids.has(l.from) && !ids.has(l.to)) uses.add(name(b));
+      if (ids.has(l.to) && !ids.has(l.from)) usedBy.add(name(a));
+    }
+    const list = (title, values) => { if (!values.size) return; box.appendChild(h("h2", {}, `${title} (${values.size})`)); const ul = h("ul"); [...values].sort().forEach(v => ul.appendChild(h("li", {}, v))); box.appendChild(ul); };
+    list("Uses", uses); list("Used by", usedBy);
+    if (contracts.length) { box.appendChild(h("h2", {}, `Contracts (${contracts.length})`)); const c = h("div", { class: "chips" }); contracts.forEach(s => chip(s.id, c)); box.appendChild(c); }
+    if (internal.length) { box.appendChild(h("h2", {}, `Internal (${internal.length})`)); const c = h("div", { class: "chips" }); internal.forEach(s => chip(s.id, c)); box.appendChild(c); }
   } else if (sel.type === "module") {
     const m = modules.get(sel.id); if (!m) return;
     box.appendChild(h("h3", {}, m.label || m.path));
@@ -683,9 +757,13 @@ function buildLegend() {
     const span = h("span"); span.appendChild(svg); span.appendChild(document.createTextNode(" " + label + "  ")); legend.appendChild(span);
   }
   legend.appendChild(h("br"));
-  legend.appendChild(document.createTextNode("blue + added · orange Δ compatible, ! breaking, ~ implementation, → moved · teal dashed = planned, not built"));
+  // Colors show as swatches of the live tokens, never by name, so the legend
+  // stays true in every theme and in the color-blind safe variants.
+  const swatch = (token, text) => { legend.appendChild(h("span", { class: "swatch", style: `background: var(--${token})` })); legend.appendChild(document.createTextNode(text)); };
+  swatch("added", " + added · "); swatch("changed", " Δ compatible, ! breaking, ~ implementation, → moved · "); swatch("planned", " dashed = planned, not built");
   legend.appendChild(h("br"));
-  legend.appendChild(document.createTextNode("solid ▶ uses · dashed ▷ implements or embeds · magenta ! = rule violation · double hexagon = composition · inner cells = files, darker = more symbols; a file's contracts sit on the border facing it"));
+  legend.appendChild(document.createTextNode("solid ▶ uses · dashed ▷ implements or embeds · "));
+  swatch("violation", " ! = rule violation · double hexagon = composition · inner cells = files, darker = more symbols; a file's contracts sit on the border facing it");
   // The legend is built before a live map has its data, so ingest shows this
   // note once it knows the architecture.
   legend.appendChild(h("span", { id: "legend-public", hidden: "" }, " · bold outline = public API"));
@@ -695,10 +773,58 @@ function updateMeta() {
   document.getElementById("meta").textContent = LIVE ? meta : meta + (D.base ? " · base " + D.base : "");
 }
 document.getElementById("internals").addEventListener("change", ev => { state.internals = ev.target.checked; render(); });
-document.getElementById("theme").addEventListener("click", () => {
-  const root = document.documentElement; const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-  root.dataset.theme = dark ? "light" : "dark"; render();
+// Themes come with the map data: Treaty's defaults, grouped as standard,
+// accessibility and style, and any a person keeps in ~/.treaty/themes. The
+// menu offers System, which follows the operating system between the Light
+// and Dark themes, and every theme by group. Each browser remembers the
+// choice.
+let themeChoice = "system";
+try { themeChoice = localStorage.getItem("treaty.theme") || "system"; } catch (err) { /* storage unavailable */ }
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+const THEME_GROUPS = { standard: "Standard", accessibility: "Accessibility", style: "Style", yours: "Yours" };
+function themeList() { return (D && D.themes) || []; }
+function currentTheme() {
+  const themes = themeList(), base = darkQuery.matches ? "dark" : "light";
+  const want = themeChoice === "system" ? base : themeChoice;
+  return themes.find(t => t.id === want) || themes.find(t => t.id === base) || themes[0];
+}
+// fillThemeMenu lists the themes by group, keeping the choice when it still
+// exists.
+function fillThemeMenu() {
+  const select = document.getElementById("theme"), themes = themeList();
+  const wanted = ["system", ...themes.map(t => t.id + ":" + t.group)].join("|");
+  if (select.dataset.ids !== wanted) {
+    select.innerHTML = "";
+    select.appendChild(h("option", { value: "system" }, "System"));
+    for (const [group, label] of Object.entries(THEME_GROUPS)) {
+      const members = themes.filter(t => t.group === group);
+      if (!members.length) continue;
+      const optgroup = h("optgroup", { label });
+      for (const t of members) optgroup.appendChild(h("option", { value: t.id }, t.name));
+      select.appendChild(optgroup);
+    }
+    select.dataset.ids = wanted;
+  }
+  select.value = themes.some(t => t.id === themeChoice) ? themeChoice : "system";
+}
+// applyTheme sets every color token from the chosen theme.
+function applyTheme(redraw = true) {
+  const root = document.documentElement, theme = currentTheme();
+  if (!theme) return;
+  const set = Array.from({ length: root.style.length }, (_, i) => root.style.item(i));
+  for (const name of set) if (name.startsWith("--")) root.style.removeProperty(name);
+  for (const [name, value] of Object.entries(theme.colors)) root.style.setProperty("--" + name, value);
+  root.style.colorScheme = theme.base;
+  root.dataset.theme = theme.base;
+  if (redraw && modules) render();
+}
+document.getElementById("theme").addEventListener("change", ev => {
+  themeChoice = ev.target.value;
+  try { localStorage.setItem("treaty.theme", themeChoice); } catch (err) { /* storage unavailable */ }
+  savePreferences({ theme: themeChoice });
+  applyTheme();
 });
+darkQuery.addEventListener("change", () => { if (themeChoice === "system") applyTheme(); });
 const mapEl = document.getElementById("map");
 let drag = null;
 mapEl.addEventListener("wheel", ev => {
@@ -740,7 +866,9 @@ function symbolElement(id) { return id ? mapEl.querySelector(`[data-symbol="${CS
 mapEl.addEventListener("click", ev => {
   const nearest = nearestSymbol(ev.clientX, ev.clientY);
   if (nearest) { ev.stopPropagation(); select({ type: "symbol", id: nearest }); return; }
-  if (ev.target === mapEl || (ev.target.tagName === "polygon" && ev.target.parentNode === mapEl)) select(null);
+  // Rings, bands, slices and islands are backdrop: clicking them clears the
+  // selection like clicking empty map.
+  if (ev.target === mapEl || ev.target.classList.contains("backdrop")) select(null);
 }, true);
 // setGlow lights up the thing under the pointer: a symbol's icon, a module's
 // hexagon outline, or the visible line behind an edge's wider hit strip.
@@ -794,7 +922,7 @@ window.addEventListener("keydown", ev => {
 function selectFromHash() {
   if (location.hash.length <= 1) return;
   const id = decodeURIComponent(location.hash.slice(1));
-  if (symbols.has(id)) select({ type: "symbol", id }); else if (modules.has(id)) select({ type: "module", id });
+  if (symbols.has(id)) select({ type: "symbol", id }); else if (modules.has(id)) select({ type: "module", id }); else if (id.includes("|") && fileCell(id)) select({ type: "file", id });
 }
 
 // Live map. The server pushes its state after every rebuild; a new version
@@ -850,6 +978,7 @@ function positionOf(sel) {
   if (!sel) return null;
   if (sel.type === "module") { const a = anchorOf(sel.id); return a && { x: a.x, y: a.y }; }
   if (sel.type === "group") { const g = groups.get(sel.id); return g && { x: g.x, y: g.y }; }
+  if (sel.type === "file") { const f = fileOf(sel.id), a = anchorOf(f.module), c = fileCell(sel.id); return a && (c && a.key === f.module ? { x: a.x + c.x, y: a.y + c.y } : { x: a.x, y: a.y }); }
   if (sel.type === "symbol") { const at = state.symbolPos.get(sel.id); if (at) return { x: at[0], y: at[1] }; const s = symbols.get(sel.id), a = s && anchorOf(s.module); return a && { x: a.x, y: a.y }; }
   if (sel.type === "edge") { const a = anchorOf(sel.from), b = anchorOf(sel.to); return a && b && { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
   return null;
@@ -859,6 +988,7 @@ function stillExists(sel) {
   if (sel.type === "symbol") return symbols.has(sel.id);
   if (sel.type === "module") return modules.has(sel.id);
   if (sel.type === "group") return groups.has(sel.id);
+  if (sel.type === "file") return !!fileCell(sel.id);
   if (sel.type === "edge") { const e = edges.find(x => x.from === sel.from && x.to === sel.to); if (e) sel.edge = e; return !!e; }
   return false;
 }
@@ -964,11 +1094,42 @@ function postSelection(sel) {
   const body = sel ? { type: sel.type, id: sel.id || "", from: sel.from || "", to: sel.to || "" } : {};
   fetch("/api/selection", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
 }
+// A person's theme, layout and "Follow Claude" choice are kept by the server
+// in ~/.treaty/settings.json, so they follow them across repositories,
+// browsers and ports. Browser storage keeps a copy, for static maps and for
+// the moment before the server answers. Changes are sent in batches.
+// Nothing is sent until the saved preferences have loaded, so the layout the
+// page starts with can never overwrite the one the person saved.
+let pendingPreferences = null, preferencesTimer = 0, preferencesLoaded = false;
+function savePreferences(update) {
+  if (!LIVE || !preferencesLoaded) return;
+  pendingPreferences = { ...(pendingPreferences || {}), ...update };
+  clearTimeout(preferencesTimer);
+  preferencesTimer = setTimeout(() => {
+    const body = JSON.stringify(pendingPreferences); pendingPreferences = null;
+    fetch("/api/preferences", { method: "POST", headers: { "Content-Type": "application/json" }, body }).catch(() => {});
+  }, 400);
+}
+// loadPreferences applies what the server keeps. When it keeps nothing yet,
+// this browser's choices become the saved ones.
+async function loadPreferences() {
+  let saved = {};
+  try { const response = await fetch("/api/preferences", { cache: "no-store" }); if (!response.ok) return; saved = await response.json(); } catch (err) { return; }
+  preferencesLoaded = true;
+  const follow = document.getElementById("follow");
+  if (saved.theme) { themeChoice = saved.theme; fillThemeMenu(); applyTheme(); }
+  else if (themeChoice !== "system") savePreferences({ theme: themeChoice });
+  if (typeof saved.follow === "boolean") follow.checked = saved.follow;
+  else if (follow.checked) savePreferences({ follow: true });
+  if (saved.layout) { dock = loadLayout(saved.layout); renderLayout(); }
+  else if (storedLayout()) savePreferences({ layout: dock });
+}
 function startLive() {
   document.getElementById("live").hidden = false;
   const follow = document.getElementById("follow");
   try { follow.checked = localStorage.getItem("treaty.follow") === "1"; } catch (err) { /* storage unavailable */ }
-  follow.addEventListener("change", () => { try { localStorage.setItem("treaty.follow", follow.checked ? "1" : "0"); } catch (err) { /* storage unavailable */ } });
+  follow.addEventListener("change", () => { try { localStorage.setItem("treaty.follow", follow.checked ? "1" : "0"); } catch (err) { /* storage unavailable */ } savePreferences({ follow: follow.checked }); });
+  loadPreferences();
   document.getElementById("offer-go").addEventListener("click", () => {
     const target = offered; dismissOffer(); if (!target) return;
     goTo(target); select(symbols.has(target) ? { type: "symbol", id: target } : { type: "module", id: target });
@@ -986,6 +1147,248 @@ function startLive() {
   events.onmessage = ev => { const st = JSON.parse(ev.data); showState(st); if (st.version !== live.shown) refreshView(); };
   events.onerror = () => { const dot = document.getElementById("live-dot"); dot.classList.remove("on"); dot.title = "disconnected"; setStatus("disconnected from treaty; retrying…", true); };
 }
+
+// ---- Panels and docking ----
+// The workspace is a layout of tab stacks: drawers on the left, right and
+// bottom, the center around the map, and floating windows above it. Every
+// panel is in exactly one stack. Dragging a tab moves its panel: onto a
+// stack's middle merges it there, onto a drawer stack's near edge splits the
+// drawer, onto the workspace's edge docks it in that drawer, and anywhere
+// else floats it. The map stays in the center. The layout is remembered per
+// browser.
+const PANELS = { map: { title: "Map", pinned: true }, queue: { title: "Review queue" }, inspector: { title: "Inspector" } };
+const LAYOUT_KEY = "treaty.layout.v1";
+const DRAWER_MIN = 160, CENTER_MIN = 240, EDGE_ZONE = 28, DRAG_START = 5, SPLIT_ZONE = 0.3, STACK_MIN = 60;
+const SIDES = ["left", "right", "bottom"];
+function defaultLayout() {
+  return {
+    left: { size: 300, stacks: [{ tabs: ["queue"], active: "queue", weight: 1 }] },
+    right: { size: 360, stacks: [{ tabs: ["inspector"], active: "inspector", weight: 1 }] },
+    bottom: { size: 240, stacks: [] },
+    center: { tabs: ["map"], active: "map" },
+    floating: [],
+  };
+}
+// loadLayout reads the remembered layout and repairs it: unknown or repeated
+// panels are dropped, missing ones go back to their default drawer, and the
+// map returns to the center.
+function storedLayout() { try { return JSON.parse(localStorage.getItem(LAYOUT_KEY)); } catch (err) { return null; } }
+function loadLayout(layout) {
+  const fresh = defaultLayout();
+  if (!layout || !layout.center || !Array.isArray(layout.floating) || !SIDES.every(side => layout[side] && Array.isArray(layout[side].stacks))) return fresh;
+  const seen = new Set();
+  const keep = stack => { stack.tabs = (stack.tabs || []).filter(id => PANELS[id] && !seen.has(id) && (id !== "map" || stack === layout.center) && seen.add(id)); if (!stack.tabs.includes(stack.active)) stack.active = stack.tabs[0]; return stack.tabs.length > 0; };
+  keep(layout.center);
+  for (const side of SIDES) layout[side].stacks = layout[side].stacks.filter(keep);
+  layout.floating = layout.floating.filter(keep);
+  if (!seen.has("map")) { layout.center.tabs.unshift("map"); layout.center.active = layout.center.active || "map"; seen.add("map"); }
+  for (const side of SIDES) for (const stack of fresh[side].stacks) for (const id of stack.tabs) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (layout[side].stacks.length) layout[side].stacks[0].tabs.push(id); else layout[side].stacks.push({ tabs: [id], active: id, weight: 1 });
+  }
+  return layout;
+}
+let dock = loadLayout(storedLayout());
+function saveLayout() {
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(dock)); } catch (err) { /* storage unavailable */ }
+  savePreferences({ layout: dock });
+}
+function panelEl(id) { return document.querySelector(`[data-panel="${id}"]`); }
+function workspaceRect() { return document.getElementById("workspace").getBoundingClientRect(); }
+// renderLayout rebuilds the drawers, the center and the floating windows
+// from the layout, moving each panel's element into place so its state and
+// listeners survive.
+function renderLayout() {
+  const store = document.getElementById("panels"), ws = document.getElementById("workspace");
+  for (const id of Object.keys(PANELS)) store.appendChild(panelEl(id));
+  ws.querySelectorAll(".float").forEach(node => node.remove());
+  for (const side of SIDES) {
+    const drawer = document.getElementById("dock-" + side), stacks = dock[side].stacks;
+    drawer.innerHTML = "";
+    stacks.forEach((stack, i) => {
+      if (i > 0) drawer.appendChild(stackSplitter(side, i));
+      drawer.appendChild(stackEl(stack, { side, index: i }));
+    });
+    drawer.hidden = stacks.length === 0;
+    document.querySelector(`[data-splitter="${side}"]`).hidden = stacks.length === 0;
+    ws.style.setProperty("--" + side, stacks.length ? dock[side].size + "px" : "0px");
+  }
+  const center = document.getElementById("dock-center");
+  center.innerHTML = "";
+  center.appendChild(stackEl(dock.center, { side: "center" }));
+  for (const float of dock.floating) ws.appendChild(floatEl(float));
+  saveLayout();
+  layoutChanged();
+}
+function stackEl(stack, where) {
+  const node = h("div", { class: "stack" });
+  node.style.flexGrow = String(stack.weight || 1);
+  node.stackRef = stack; node.where = where;
+  const bar = h("div", { class: "tabbar", role: "tablist" });
+  for (const id of stack.tabs) {
+    const active = id === stack.active;
+    const tab = h("button", { class: "tab" + (active ? " active" : "") + (PANELS[id].pinned ? " pinned" : ""), type: "button", role: "tab", "aria-selected": String(active), "data-tab": id, title: PANELS[id].pinned ? PANELS[id].title : `${PANELS[id].title}: drag to move` }, PANELS[id].title);
+    tab.addEventListener("click", () => { if (stack.active !== id) { stack.active = id; renderLayout(); } });
+    tab.addEventListener("pointerdown", ev => startTabDrag(ev, id, stack));
+    bar.appendChild(tab);
+  }
+  const body = h("div", { class: "stack-body" + (stack.active === "map" ? " fill" : "") });
+  body.appendChild(panelEl(stack.active));
+  node.append(bar, body);
+  return node;
+}
+function floatEl(float) {
+  const ws = workspaceRect();
+  float.w = Math.min(Math.max(float.w, 200), ws.width); float.h = Math.min(Math.max(float.h, 140), ws.height);
+  float.x = Math.min(Math.max(float.x, 0), ws.width - float.w); float.y = Math.min(Math.max(float.y, 0), ws.height - float.h);
+  const node = stackEl(float, { side: "float" });
+  node.classList.add("float");
+  const place = () => Object.assign(node.style, { left: float.x + "px", top: float.y + "px", width: float.w + "px", height: float.h + "px" });
+  place();
+  // Dragging the tab bar's empty space moves the window; the corner resizes it.
+  const bar = node.querySelector(".tabbar");
+  bar.addEventListener("pointerdown", ev => {
+    if (ev.target !== bar || ev.button !== 0) return;
+    ev.preventDefault();
+    const start = { x: ev.clientX - float.x, y: ev.clientY - float.y };
+    track(e => { float.x = Math.min(Math.max(e.clientX - start.x, 0), ws.width - float.w); float.y = Math.min(Math.max(e.clientY - start.y, 0), ws.height - float.h); place(); }, saveLayout);
+  });
+  const grip = h("div", { class: "float-resize", "aria-hidden": "true" });
+  grip.addEventListener("pointerdown", ev => {
+    ev.preventDefault();
+    const start = { x: ev.clientX - float.w, y: ev.clientY - float.h };
+    track(e => { float.w = Math.min(Math.max(e.clientX - start.x, 200), ws.width - float.x); float.h = Math.min(Math.max(e.clientY - start.y, 140), ws.height - float.y); place(); layoutChanged(); }, saveLayout);
+  });
+  node.appendChild(grip);
+  return node;
+}
+// track follows the pointer until it is released.
+function track(onMove, onDone) {
+  const up = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); if (onDone) onDone(); };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+}
+function startTabDrag(ev, id, source) {
+  if (ev.button !== 0 || PANELS[id].pinned) return;
+  const start = { x: ev.clientX, y: ev.clientY };
+  let ghost = null, target = null;
+  track(e => {
+    if (!ghost) {
+      if (Math.hypot(e.clientX - start.x, e.clientY - start.y) < DRAG_START) return;
+      ghost = h("div", { class: "tab-ghost" }, PANELS[id].title);
+      document.body.appendChild(ghost);
+    }
+    Object.assign(ghost.style, { left: e.clientX + 12 + "px", top: e.clientY + 8 + "px" });
+    target = dropTarget(e.clientX, e.clientY, source);
+    showHint(target);
+  }, () => {
+    if (!ghost) return;
+    ghost.remove(); showHint(null);
+    // The click that ends a drag must not also activate a tab.
+    const swallow = e => { e.stopPropagation(); window.removeEventListener("click", swallow, true); };
+    window.addEventListener("click", swallow, true); setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+    if (target) moveTab(id, source, target);
+  });
+}
+// dropTarget decides what releasing a dragged tab at a point would do, and
+// the screen rectangle to preview it with.
+function dropTarget(x, y, source) {
+  const ws = workspaceRect();
+  const inside = r => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  if (!inside(ws)) return null;
+  for (const node of [...document.querySelectorAll("#workspace .float")].reverse()) {
+    const r = node.getBoundingClientRect();
+    if (inside(r)) return node.stackRef === source ? null : { kind: "merge", stack: node.stackRef, rect: r };
+  }
+  const strip = (side) => side === "left" ? { left: ws.left, top: ws.top, width: 140, height: ws.height } : side === "right" ? { left: ws.right - 140, top: ws.top, width: 140, height: ws.height } : { left: ws.left, top: ws.bottom - 110, width: ws.width, height: 110 };
+  if (x - ws.left < EDGE_ZONE) return { kind: "dock", side: "left", rect: strip("left") };
+  if (ws.right - x < EDGE_ZONE) return { kind: "dock", side: "right", rect: strip("right") };
+  if (ws.bottom - y < EDGE_ZONE) return { kind: "dock", side: "bottom", rect: strip("bottom") };
+  for (const node of document.querySelectorAll("#workspace .stack:not(.float)")) {
+    const r = node.getBoundingClientRect();
+    if (!inside(r)) continue;
+    const where = node.where;
+    if (where.side === "center") return node.stackRef === source ? null : { kind: "merge", stack: node.stackRef, rect: r };
+    const vertical = where.side !== "bottom";
+    const f = vertical ? (y - r.top) / r.height : (x - r.left) / r.width;
+    const part = (from, to) => vertical ? { left: r.left, top: r.top + r.height * from, width: r.width, height: r.height * (to - from) } : { left: r.left + r.width * from, top: r.top, width: r.width * (to - from), height: r.height };
+    if (f < SPLIT_ZONE) return { kind: "split", side: where.side, index: where.index, rect: part(0, 0.5) };
+    if (f > 1 - SPLIT_ZONE) return { kind: "split", side: where.side, index: where.index + 1, rect: part(0.5, 1) };
+    return node.stackRef === source ? null : { kind: "merge", stack: node.stackRef, rect: r };
+  }
+  return { kind: "float", x: x - ws.left - 24, y: y - ws.top - 12, rect: { left: x - 24, top: y - 12, width: 320, height: 360 } };
+}
+function showHint(target) {
+  const hint = document.getElementById("drop-hint");
+  hint.hidden = !target;
+  if (!target) return;
+  const ws = workspaceRect(), r = target.rect;
+  Object.assign(hint.style, { left: r.left - ws.left + "px", top: r.top - ws.top + "px", width: r.width + "px", height: r.height + "px" });
+}
+function moveTab(id, source, target) {
+  source.tabs = source.tabs.filter(tab => tab !== id);
+  if (source.active === id) source.active = source.tabs[0];
+  const stack = { tabs: [id], active: id, weight: 1 };
+  if (target.kind === "merge") { target.stack.tabs.push(id); target.stack.active = id; }
+  else if (target.kind === "split") dock[target.side].stacks.splice(target.index, 0, stack);
+  else if (target.kind === "dock") dock[target.side].stacks.push(stack);
+  else dock.floating.push({ ...stack, x: target.x, y: target.y, w: 320, h: 360 });
+  // The source may now be empty; drop it only after the insert, so the
+  // split index above still counted it.
+  for (const side of SIDES) dock[side].stacks = dock[side].stacks.filter(s => s.tabs.length);
+  dock.floating = dock.floating.filter(s => s.tabs.length);
+  renderLayout();
+}
+// stackSplitter resizes two neighboring stacks in a drawer.
+function stackSplitter(side, index) {
+  const vertical = side !== "bottom";
+  const node = h("div", { class: "splitter " + (vertical ? "row" : "col"), role: "separator", "aria-orientation": vertical ? "horizontal" : "vertical", "aria-label": "Resize panels", tabindex: 0 });
+  const resize = (delta) => {
+    const a = node.previousElementSibling, b = node.nextElementSibling, stacks = dock[side].stacks;
+    const size = el => vertical ? el.getBoundingClientRect().height : el.getBoundingClientRect().width;
+    const total = size(a) + size(b), weights = stacks[index - 1].weight + stacks[index].weight;
+    const first = Math.min(Math.max(size(a) + delta, STACK_MIN), total - STACK_MIN);
+    stacks[index - 1].weight = weights * first / total; stacks[index].weight = weights - stacks[index - 1].weight;
+    a.style.flexGrow = String(stacks[index - 1].weight); b.style.flexGrow = String(stacks[index].weight);
+  };
+  node.addEventListener("pointerdown", ev => {
+    ev.preventDefault(); node.classList.add("dragging");
+    let last = vertical ? ev.clientY : ev.clientX;
+    track(e => { const now = vertical ? e.clientY : e.clientX; resize(now - last); last = now; layoutChanged(); }, () => { node.classList.remove("dragging"); saveLayout(); });
+  });
+  node.addEventListener("keydown", ev => { const step = { ArrowUp: -16, ArrowLeft: -16, ArrowDown: 16, ArrowRight: 16 }[ev.key]; if (step) { ev.preventDefault(); resize(step); layoutChanged(); saveLayout(); } });
+  return node;
+}
+// The drawer splitters set each drawer's width, or the bottom one's height.
+function resizeDrawer(side, size) {
+  const ws = workspaceRect(), others = SIDES.filter(s => s !== side && s !== "bottom" && dock[s].stacks.length).reduce((sum, s) => sum + dock[s].size, 0);
+  const most = side === "bottom" ? ws.height - CENTER_MIN / 2 : ws.width - others - CENTER_MIN;
+  dock[side].size = Math.round(Math.min(Math.max(size, DRAWER_MIN), Math.max(DRAWER_MIN, most)));
+  document.getElementById("workspace").style.setProperty("--" + side, dock[side].size + "px");
+  layoutChanged();
+}
+for (const node of document.querySelectorAll("[data-splitter]")) {
+  const side = node.dataset.splitter;
+  node.addEventListener("pointerdown", ev => {
+    ev.preventDefault(); node.classList.add("dragging");
+    track(e => { const ws = workspaceRect(); resizeDrawer(side, side === "left" ? e.clientX - ws.left : side === "right" ? ws.right - e.clientX : ws.bottom - e.clientY); }, () => { node.classList.remove("dragging"); saveLayout(); });
+  });
+  node.addEventListener("keydown", ev => {
+    const grow = { left: { ArrowRight: 16, ArrowLeft: -16 }, right: { ArrowLeft: 16, ArrowRight: -16 }, bottom: { ArrowUp: 16, ArrowDown: -16 } }[side][ev.key];
+    if (grow) { ev.preventDefault(); resizeDrawer(side, dock[side].size + grow); saveLayout(); }
+  });
+}
+// layoutChanged refits the map to its new size once the browser has laid it out.
+let refit = 0;
+function layoutChanged() {
+  cancelAnimationFrame(refit);
+  refit = requestAnimationFrame(() => { if (D && document.getElementById("map").getBoundingClientRect().width > 0) render(); });
+}
+document.getElementById("layout-reset").addEventListener("click", () => { dock = defaultLayout(); renderLayout(); });
+window.addEventListener("resize", () => { if (dock.floating.length) renderLayout(); });
+renderLayout();
 
 buildLegend();
 if (LIVE) startLive();

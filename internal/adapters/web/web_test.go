@@ -31,7 +31,7 @@ func TestLiveServer(t *testing.T) {
 	git(t, root, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "first")
 
 	workspace := filesystem.NewWorkspace(root)
-	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), workspace, htmlmap.New(), filesystem.NewAgentConfig(root))
+	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), workspace, htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
 	live := app.NewLive(service, filesystem.NewWatcher(root), nil)
 	stop := make(chan struct{})
 	defer close(stop)
@@ -232,7 +232,7 @@ func TestArchitectureView(t *testing.T) {
 	write(t, root, "store/store.go", "package store\n\nimport \"example.com/shop/core\"\n\nfunc Save(order core.Order) error { return nil }\n")
 	git(t, root, "init", "-q")
 
-	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root))
+	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
 	live := app.NewLive(service, filesystem.NewWatcher(root), nil)
 	stop := make(chan struct{})
 	defer close(stop)
@@ -297,5 +297,48 @@ func TestArchitectureView(t *testing.T) {
 
 	if got := architecture(); got != "layered" {
 		t.Fatalf("the map should draw layered, not %q", got)
+	}
+}
+
+func TestPreferences(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/shop\n")
+	write(t, root, "core/order.go", "package core\n\ntype Order struct{ ID string }\n")
+	settings := filepath.Join(t.TempDir(), "settings.json")
+	start := func() (*Server, func()) {
+		service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(settings))
+		live := app.NewLive(service, filesystem.NewWatcher(root), nil)
+		stop := make(chan struct{})
+		live.Start(stop)
+		server, err := Listen(live, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return server, func() { _ = server.Close(); close(stop) }
+	}
+
+	server, stop := start()
+	if got := string(get(t, server.URL()+"/api/preferences", http.StatusOK)); strings.TrimSpace(got) != "{}" {
+		t.Fatalf("nothing saved yet: %s", got)
+	}
+
+	// Each save merges into what is kept.
+	post(t, server.URL()+"/api/preferences", "application/json", `{"theme":"vampire","layout":{"center":{"tabs":["map"]}}}`, http.StatusOK)
+	post(t, server.URL()+"/api/preferences", "application/json", `{"follow":true}`, http.StatusOK)
+	post(t, server.URL()+"/api/preferences", "application/json", `{"layout":[1,2]}`, http.StatusBadRequest)
+	post(t, server.URL()+"/api/preferences", "application/x-www-form-urlencoded", `theme=x`, http.StatusUnsupportedMediaType)
+	stop()
+
+	// Another server, as on another port or in another repository, sees them.
+	server, stop = start()
+	defer stop()
+	var saved app.Preferences
+	if err := json.Unmarshal(get(t, server.URL()+"/api/preferences", http.StatusOK), &saved); err != nil {
+		t.Fatal(err)
+	}
+
+	if saved.Theme != "vampire" || saved.Follow == nil || !*saved.Follow || !strings.Contains(string(saved.Layout), `"map"`) {
+		t.Fatalf("saved: %+v %s", saved, saved.Layout)
 	}
 }

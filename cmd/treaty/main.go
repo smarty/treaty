@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 
@@ -47,6 +48,8 @@ func main() {
 		workspace,
 		htmlmap.New(),
 		filesystem.NewAgentConfig(root),
+		filesystem.NewThemes(treatyHome("themes")),
+		filesystem.NewPreferences(treatyHome("settings.json")),
 	)
 
 	start := launcher{service: service, watcher: filesystem.NewWatcher(root), workspace: workspace}
@@ -150,4 +153,16 @@ func browse(url string) {
 	}
 
 	_ = exec.Command(command, url).Start()
+}
+
+// treatyHome names a path in ~/.treaty, where a person's themes and
+// preferences live across repositories; empty when there is no home
+// directory, which keeps the built-in themes and saves nothing.
+func treatyHome(name string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	return filepath.Join(home, ".treaty", name)
 }

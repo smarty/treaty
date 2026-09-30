@@ -269,7 +269,7 @@ func TestDialect(t *testing.T) {
 func newService(t *testing.T, root string) *app.Service {
 	t.Helper()
 	return app.NewService(root, filesystem.NewConfig(root), NewExtractor(), []app.Dialect{NewDialect()},
-		nil, filesystem.NewWorkspace(t.TempDir()), nil, filesystem.NewAgentConfig(t.TempDir()))
+		nil, filesystem.NewWorkspace(t.TempDir()), nil, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
 }
 
 func TestBuildVariants(t *testing.T) {

@@ -72,6 +72,7 @@ type MapView struct {
 	Links        []graph.Edge    `json:"links"`
 	Findings     []rules.Finding `json:"findings"`
 	Designs      []string        `json:"designs,omitempty"`
+	Themes       []Theme         `json:"themes"`
 
 	// Problems are designs that could not be overlaid, and other trouble the
 	// live map reports without stopping.
@@ -114,6 +115,12 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 	view := MapView{
 		Title: "Treaty", Architecture: architecture.Style, Layers: architecture.LayerNames(), Summary: architecture.Summary(),
 		Base: analysis.baseRef, Findings: analysis.findings, Designs: designs, Links: analysis.head.Edges,
+	}
+
+	themes, err := this.themes.Themes()
+	view.Themes = themes
+	if err != nil {
+		view.Problems = append(view.Problems, err.Error())
 	}
 
 	violations := map[[2]string]string{}

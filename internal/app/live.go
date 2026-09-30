@@ -55,7 +55,9 @@ type Baseline struct {
 	Label string `json:"label"`
 }
 
-// Selection is what the person has selected on the live map.
+// Selection is what the person has selected on the live map. Type is
+// symbol, module, file, group or edge; a file's ID is its module's id and
+// its path, joined by "|".
 type Selection struct {
 	Type string `json:"type,omitempty"`
 	ID   string `json:"id,omitempty"`
@@ -112,6 +114,7 @@ type Live struct {
 	peer    Peer
 
 	building sync.Mutex
+	saving   sync.Mutex
 
 	mutex       sync.Mutex
 	baseline    Baseline
@@ -371,6 +374,9 @@ func (this *Live) Show(target, reason string) error {
 // Parameters:
 //   - stop: closing it ends the polling.
 func (this *Live) Start(stop <-chan struct{}) {
+	// Starting a server refreshes the default themes; a failure only means
+	// the map uses the built-in copies.
+	_ = this.service.themes.Install()
 	this.sync()
 	_ = this.Refresh()
 	go this.poll(stop)
