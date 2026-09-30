@@ -146,6 +146,14 @@ func (this *Service) graphAt(ref string) (*graph.Graph, error) {
 	return this.extractor.Extract(dir)
 }
 
+// fromEntry reports whether a change moved a symbol out of an entry module,
+// which nothing could import, so the move breaks no one.
+func (this *analysis) fromEntry(change rules.Change) bool {
+	moduleID, _ := graph.SplitSymbolID(change.From)
+	module := this.base.Module(moduleID)
+	return module != nil && module.Entry
+}
+
 func (this *analysis) failures() []string {
 	var result []string
 	counts := map[string]int{}
@@ -164,7 +172,7 @@ func (this *analysis) failures() []string {
 	if slices.Contains(this.config.FailOn, rules.FindingBreaking) {
 		count := 0
 		for _, change := range this.changes {
-			if change.Kind == rules.ChangeBreaking || change.Kind == rules.ChangeRemoved || change.Kind == rules.ChangeMoved {
+			if change.Kind == rules.ChangeBreaking || change.Kind == rules.ChangeRemoved || (change.Kind == rules.ChangeMoved && !this.fromEntry(change)) {
 				count++
 			}
 		}

@@ -25,6 +25,7 @@ const (
 	LayerComposition  = "composition"
 	LayerContext      = "context"
 	LayerDomain       = "domain"
+	LayerNone         = "none"
 	LayerShared       = "shared"
 	LayerSlice        = "slice"
 	LayerUnclassified = "unclassified"
@@ -48,19 +49,32 @@ type Field struct {
 	Contract bool   `json:"contract"`
 }
 
-// Graph is every module, symbol and edge of one source tree.
+// Graph is every module, symbol, edge and import of one source tree.
 type Graph struct {
 	Modules []*Module `json:"modules"`
 	Symbols []*Symbol `json:"symbols"`
 	Edges   []Edge    `json:"edges"`
+	Imports []Import  `json:"imports,omitempty"`
 
 	modules map[string]*Module
 	symbols map[string]*Symbol
 }
 
+// Import is one file's import of another module. An import is a dependency
+// even when nothing it provides is referenced, as with a blank import that
+// runs the imported package's initialization.
+type Import struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	File string `json:"file"`
+	Line int    `json:"line"`
+}
+
 // Module is a unit of code placed into one layer, such as a Go package.
 // Name is what the language calls it, and Entry marks a program's entry
-// point, such as a Go main package, which nothing can import. Slice is the
+// point, such as a Go main package, which nothing can import. Private marks
+// a module only this repository can import, such as a Go internal package.
+// Slice is the
 // root path of the vertical slice or bounded context holding the module, and
 // Public marks a context's packages that other contexts may use.
 type Module struct {
@@ -69,6 +83,7 @@ type Module struct {
 	Path     string   `json:"path"`
 	Name     string   `json:"name,omitempty"`
 	Entry    bool     `json:"entry,omitempty"`
+	Private  bool     `json:"private,omitempty"`
 	Layer    string   `json:"layer"`
 	Side     string   `json:"side,omitempty"`
 	Slice    string   `json:"slice,omitempty"`
@@ -76,14 +91,17 @@ type Module struct {
 	Files    []string `json:"files"`
 }
 
-// ModuleEdge aggregates every reference from one module to another.
+// ModuleEdge aggregates every reference and import from one module to
+// another. An edge may have imports and no references.
 type ModuleEdge struct {
-	From       string `json:"from"`
-	To         string `json:"to"`
-	References []Edge `json:"references"`
+	From       string   `json:"from"`
+	To         string   `json:"to"`
+	References []Edge   `json:"references"`
+	Imports    []Import `json:"imports,omitempty"`
 }
 
 // Symbol is a declaration: a function, method, interface, type or value.
+// Doc is its documentation comment as plain text, without comment markers.
 type Symbol struct {
 	ID        string    `json:"id"`
 	Module    string    `json:"module"`
@@ -98,12 +116,15 @@ type Symbol struct {
 	Pointer   bool      `json:"pointer,omitempty"`
 	Fields    []Field   `json:"fields,omitempty"`
 	Hash      string    `json:"hash,omitempty"`
+	Doc       string    `json:"doc,omitempty"`
 	Variants  []Variant `json:"variants,omitempty"`
 }
 
-// Variant is another declaration of the same symbol in a file built under
-// different constraints, such as a Go build tag. The symbol keeps the first
-// declaration; each other one is a variant.
+// Variant is another declaration of the same symbol: one in a file built
+// under different constraints, such as a Go build tag, or a repeat of a name
+// the language allows more than once, such as Go's init. The symbol keeps the
+// first declaration; each other one is a variant. A repeat carries no
+// signature, since it is not an alternative build of the first.
 type Variant struct {
 	File      string  `json:"file"`
 	Line      int     `json:"line"`
@@ -128,6 +149,14 @@ func New() *Graph {
 //   - edge: the reference to record.
 func (this *Graph) AddEdge(edge Edge) {
 	this.Edges = append(this.Edges, edge)
+}
+
+// AddImport records one file's import of another module.
+//
+// Parameters:
+//   - item: the import to record.
+func (this *Graph) AddImport(item Import) {
+	this.Imports = append(this.Imports, item)
 }
 
 // AddModule records a module, returning the existing one when the id is known.
@@ -183,6 +212,7 @@ func (this *Graph) Clone() *Graph {
 	}
 
 	result.Edges = append([]Edge(nil), this.Edges...)
+	result.Imports = append([]Import(nil), this.Imports...)
 	return result
 }
 
@@ -197,24 +227,39 @@ func (this *Graph) Module(id string) *Module {
 	return this.modules[id]
 }
 
-// ModuleEdges aggregates symbol edges into edges between distinct modules.
+// ModuleEdges aggregates symbol edges and imports into edges between
+// distinct modules.
 //
 // Returns:
 //   - result: module edges sorted by source, then target.
 func (this *Graph) ModuleEdges() []ModuleEdge {
 	byPair := map[[2]string]*ModuleEdge{}
+	pair := func(from, to string) *ModuleEdge {
+		key := [2]string{from, to}
+		if byPair[key] == nil {
+			byPair[key] = &ModuleEdge{From: from, To: to}
+		}
+
+		return byPair[key]
+	}
+
 	for _, edge := range this.Edges {
 		from, to := this.symbols[edge.From], this.symbols[edge.To]
 		if from == nil || to == nil || from.Module == to.Module {
 			continue
 		}
 
-		key := [2]string{from.Module, to.Module}
-		if byPair[key] == nil {
-			byPair[key] = &ModuleEdge{From: from.Module, To: to.Module}
+		moduleEdge := pair(from.Module, to.Module)
+		moduleEdge.References = append(moduleEdge.References, edge)
+	}
+
+	for _, item := range this.Imports {
+		if this.modules[item.From] == nil || this.modules[item.To] == nil || item.From == item.To {
+			continue
 		}
 
-		byPair[key].References = append(byPair[key].References, edge)
+		moduleEdge := pair(item.From, item.To)
+		moduleEdge.Imports = append(moduleEdge.Imports, item)
 	}
 
 	result := make([]ModuleEdge, 0, len(byPair))
@@ -233,7 +278,7 @@ func (this *Graph) ModuleEdges() []ModuleEdge {
 }
 
 // Normalize sorts everything into canonical order and drops duplicate edges
-// and edges whose ends are unknown.
+// and imports, and those whose ends are unknown.
 func (this *Graph) Normalize() {
 	sort.Slice(this.Modules, func(i, j int) bool { return this.Modules[i].ID < this.Modules[j].ID })
 	for _, module := range this.Modules {
@@ -267,6 +312,19 @@ func (this *Graph) Normalize() {
 
 	this.Edges = kept
 	sort.Slice(this.Edges, func(i, j int) bool { return edgeLess(this.Edges[i], this.Edges[j]) })
+	imports := this.Imports[:0]
+	seenImports := map[Import]bool{}
+	for _, item := range this.Imports {
+		if seenImports[item] || this.modules[item.From] == nil || this.modules[item.To] == nil || item.From == item.To {
+			continue
+		}
+
+		seenImports[item] = true
+		imports = append(imports, item)
+	}
+
+	this.Imports = imports
+	sort.Slice(this.Imports, func(i, j int) bool { return importLess(this.Imports[i], this.Imports[j]) })
 }
 
 // Symbol looks up a symbol by id.
@@ -316,6 +374,7 @@ func Compare(a, b *Graph) []string {
 	result = append(result, compareSets("module", moduleKeys(a), moduleKeys(b))...)
 	result = append(result, compareSets("symbol", symbolKeys(a), symbolKeys(b))...)
 	result = append(result, compareSets("edge", edgeKeys(a), edgeKeys(b))...)
+	result = append(result, compareSets("import", importKeys(a), importKeys(b))...)
 	return result
 }
 
@@ -394,6 +453,31 @@ func edgeLess(a, b Edge) bool {
 
 	if a.Kind != b.Kind {
 		return a.Kind < b.Kind
+	}
+
+	if a.To != b.To {
+		return a.To < b.To
+	}
+
+	if a.File != b.File {
+		return a.File < b.File
+	}
+
+	return a.Line < b.Line
+}
+
+func importKeys(g *Graph) map[string]bool {
+	result := map[string]bool{}
+	for _, item := range g.Imports {
+		result[fmt.Sprintf("%s -> %s @%s:%d", item.From, item.To, item.File, item.Line)] = true
+	}
+
+	return result
+}
+
+func importLess(a, b Import) bool {
+	if a.From != b.From {
+		return a.From < b.From
 	}
 
 	if a.To != b.To {

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"fmt"
+
 	"github.com/smarty/treaty/internal/rules"
 )
 
@@ -18,10 +20,12 @@ type ModuleReport struct {
 	Metrics rules.Metric  `json:"metrics"`
 }
 
-// Report is the output of treaty check.
+// Report is the output of treaty check. Notes say what the check could not
+// compare, so an empty review queue is not mistaken for a clean diff.
 type Report struct {
 	Schema     string            `json:"schema"`
 	Base       string            `json:"base,omitempty"`
+	Notes      []string          `json:"notes,omitempty"`
 	Modules    []ModuleReport    `json:"modules"`
 	Changes    []rules.Change    `json:"changes,omitempty"`
 	Violations []rules.Violation `json:"violations"`
@@ -44,7 +48,29 @@ func (this *Service) Check(base string) (result Report, err error) {
 		return Report{}, err
 	}
 
-	return analysis.report(), nil
+	result = analysis.report()
+	result.Notes = this.notes(base, analysis)
+	return result, nil
+}
+
+// notes explains a check that compared nothing: one with no base, or whose
+// base is the current commit while the working tree matches it.
+func (this *Service) notes(base string, analysis *analysis) []string {
+	if base == "" {
+		return []string{"no base given, so only the architecture was checked; pass --base <ref> to classify contract changes since that ref"}
+	}
+
+	if len(analysis.changes) > 0 || this.vcs == nil {
+		return nil
+	}
+
+	baseCommit, baseErr := this.vcs.Resolve(base)
+	headCommit, headErr := this.vcs.Resolve("HEAD")
+	if baseErr != nil || headErr != nil || baseCommit != headCommit {
+		return nil
+	}
+
+	return []string{fmt.Sprintf("base %s is the current commit and the working tree matches it, so there was nothing to compare; pass the commit you started from", base)}
 }
 
 func (this *analysis) report() Report {

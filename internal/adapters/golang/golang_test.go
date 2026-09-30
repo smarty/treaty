@@ -92,6 +92,7 @@ func TestParseTricky(t *testing.T) {
 		"Generic":      "func Generic[T any](values []T, keep func(T) bool) []T",
 		"Embedded.fmt": "func fmt() string",
 		"Embedded":     "type Embedded struct",
+		"_":            "var _",
 	} {
 		got := byName[name]
 		if got == nil {
@@ -104,8 +105,8 @@ func TestParseTricky(t *testing.T) {
 		}
 	}
 
-	if len(file.declarations) != 16 {
-		t.Errorf("want 16 declarations, got %d", len(file.declarations))
+	if len(file.declarations) != 17 {
+		t.Errorf("want 17 declarations, got %d", len(file.declarations))
 	}
 
 	pair := byName["Pair"]
@@ -358,5 +359,178 @@ func TestImportOfRootPackage(t *testing.T) {
 
 	if !g.Module("go:cmd").Entry || g.Module("go:.").Entry {
 		t.Fatal("only package main is an entry point")
+	}
+}
+
+func TestHiddenDependencies(t *testing.T) {
+	const api = "package api\n\ntype Handler interface{ Serve() }\n\nfunc NewServer() int { return 1 }\n\nvar Default = 1\n"
+	for name, storage := range map[string]string{
+		"call in a function":   "package storage\n\nimport \"example.com/shop/internal/api\"\n\nfunc F() int { return api.NewServer() }\n",
+		"aliased import":       "package storage\n\nimport a2 \"example.com/shop/internal/api\"\n\nfunc F() int { return a2.NewServer() }\n",
+		"type in a body":       "package storage\n\nimport \"example.com/shop/internal/api\"\n\nfunc F() { var h api.Handler; _ = h }\n",
+		"value":                "package storage\n\nimport \"example.com/shop/internal/api\"\n\nvar x = api.Default\n",
+		"interface assertion":  "package storage\n\nimport \"example.com/shop/internal/api\"\n\ntype T struct{}\n\nfunc (T) Serve() {}\n\nvar _ api.Handler = T{}\n",
+		"blank value":          "package storage\n\nimport \"example.com/shop/internal/api\"\n\nvar _ = api.NewServer\n",
+		"blank import":         "package storage\n\nimport _ \"example.com/shop/internal/api\"\n",
+		"dot import":           "package storage\n\nimport . \"example.com/shop/internal/api\"\n\nfunc F() int { return NewServer() }\n",
+		"init function":        "package storage\n\nimport \"example.com/shop/internal/api\"\n\nfunc init() { _ = api.NewServer() }\n",
+		"second init function": "package storage\n\nimport \"example.com/shop/internal/api\"\n\nfunc init() {}\n\nfunc init() { _ = api.NewServer() }\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			for file, text := range map[string]string{
+				"go.mod":                   "module example.com/shop\n",
+				"treaty.yaml":              "architecture: layered\nlayers:\n  presentation: [\"internal/api/**\"]\n  data: [\"internal/storage/**\"]\nrules:\n  fail_on: [layer_violation]\n",
+				"internal/api/api.go":      api,
+				"internal/storage/file.go": storage,
+			} {
+				path := filepath.Join(root, filepath.FromSlash(file))
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+
+				if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			service := newService(t, root)
+			report, err := service.Check("")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if len(report.Violations) != 1 || report.Violations[0].From != "go:internal/storage" || report.Violations[0].To != "go:internal/api" {
+				t.Fatalf("storage → api must be a violation: %+v", report.Violations)
+			}
+
+			if len(report.Notes) != 1 || !strings.Contains(report.Notes[0], "no base") {
+				t.Fatalf("a check with no base says it compared nothing: %v", report.Notes)
+			}
+
+			if file, line, _ := report.Violations[0].First(); file != "internal/storage/file.go" || line == 0 {
+				t.Fatalf("the violation must point into the file: %s:%d", file, line)
+			}
+
+			dumped, err := service.Dump("")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			parsed, err := service.ParseGraph(dumped)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			extracted, _ := service.Extract()
+			if differences := graph.Compare(extracted, parsed); len(differences) > 0 {
+				t.Fatalf("round trip lost:\n%s\n%s", strings.Join(differences, "\n"), dumped)
+			}
+
+			for _, finding := range report.Findings {
+				if finding.Kind == "variant_mismatch" {
+					t.Fatalf("repeated init or blank declarations are not build variants: %+v", finding)
+				}
+			}
+		})
+	}
+}
+
+func TestNavigation(t *testing.T) {
+	root := t.TempDir()
+	for file, text := range map[string]string{
+		"go.mod":                     "module example.com/shop\n",
+		"treaty.yaml":                "architecture: layered\nlayers:\n  presentation: [\"internal/api/**\"]\n  data: [\"internal/storage/**\"]\n",
+		"internal/storage/books.go":  "package storage\n\n// Book is one book.\ntype Book struct{ Title string }\n\nfunc Load() Book { return Book{} }\n",
+		"internal/storage/orders.go": "package storage\n\nfunc Orders() int { return 0 }\n",
+		"internal/api/api.go":        "package api\n\nimport \"example.com/shop/internal/storage\"\n\nfunc Get() string { return storage.Load().Title }\n",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(file))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	service := newService(t, root)
+	file, err := service.Slice("internal/storage/books.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if file.TaskScope.File != "internal/storage/books.go" || len(file.Symbols) != 2 || file.Symbols[0].Line != 4 {
+		t.Fatalf("a file slice lists the file's declarations with lines: %+v", file)
+	}
+
+	if len(file.Neighbors) != 1 || file.Neighbors[0].Symbol != "go:internal/api:Get" || file.Neighbors[0].Relation != "called_by" || file.Neighbors[0].File != "internal/api/api.go" || file.Neighbors[0].Line != 5 {
+		t.Fatalf("a file slice's neighbors come from other files, with locations: %+v", file.Neighbors)
+	}
+
+	if prefixed, err := service.Slice("go:internal/storage/books.go"); err != nil || prefixed.TaskScope.File != file.TaskScope.File {
+		t.Fatalf("a file may carry its language prefix: %v %+v", err, prefixed.TaskScope)
+	}
+
+	module, err := service.Slice("go:internal/storage")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(module.Files) != 2 || module.Files[0].File != "internal/storage/books.go" || module.Files[0].Symbols != 2 || module.Files[1].Contracts != 1 {
+		t.Fatalf("a module slice lists its files: %+v", module.Files)
+	}
+
+	symbol, err := service.Slice("go:internal/storage:Load")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if symbol.TaskScope.Line != 6 || symbol.TaskScope.EndLine != 6 {
+		t.Fatalf("a symbol slice gives the symbol's lines: %+v", symbol.TaskScope)
+	}
+
+	if found, err := service.Find("load", ""); err != nil || !strings.Contains(found, "internal/storage/books.go:6") {
+		t.Fatalf("find: %v %q", err, found)
+	}
+
+	if impact, err := service.Impact("go:internal/storage:Load"); err != nil || !strings.Contains(impact, "go:internal/api") {
+		t.Fatalf("impact: %v %q", err, impact)
+	}
+
+	if allowed, err := service.Allowed("internal/storage", "internal/api"); err != nil || !strings.HasPrefix(allowed, "not allowed") {
+		t.Fatalf("allowed: %v %q", err, allowed)
+	}
+
+	if overview, err := service.Overview(""); err != nil || !strings.Contains(overview, "baseline none") {
+		t.Fatalf("overview: %v %q", err, overview)
+	}
+}
+
+func TestDocComment(t *testing.T) {
+	file := strings.Split("package x\n\n// Load reads\n// the file.\nfunc Load() {}\n\n//go:noinline\n// Fast is quick.\nfunc Fast() {}\n\n/*\n * Block is\n * a comment.\n */\nfunc Block() {}\n\nvar y = 1 // trailing\nfunc Bare() {}\n\nconst (\n\t// A is first.\n\tA = 1\n)\n", "\n")
+	for line, want := range map[int]string{5: "Load reads\nthe file.", 9: "Fast is quick.", 15: "Block is\na comment.", 18: "", 22: "A is first."} {
+		if got := docComment(file, line); got != want {
+			t.Errorf("line %d: got %q, want %q", line, got, want)
+		}
+	}
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "x.go"), []byte(strings.Join(file, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := NewExtractor().Extract(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if doc := g.Symbol("go:.:Load").Doc; doc != "Load reads\nthe file." {
+		t.Fatalf("the extractor records documentation: %q", doc)
 	}
 }

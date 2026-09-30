@@ -187,3 +187,20 @@ func shapeGraph() *graph.Graph {
 	g.Normalize()
 	return g
 }
+
+func TestProposeNone(t *testing.T) {
+	architecture, text := propose(shapeGraph(), rules.StyleNone)
+	if architecture.Style != rules.StyleNone || architecture.Validate() != nil {
+		t.Fatalf("none proposes no architecture: %+v", architecture)
+	}
+
+	if !strings.Contains(text, "architecture: none\n") || strings.Contains(text, "layers:") {
+		t.Fatalf("draft:\n%s", text)
+	}
+
+	for _, style := range []string{rules.StyleHexagonal, rules.StyleClean, rules.StyleLayered} {
+		if _, text := propose(shapeGraph(), style); !strings.Contains(text, "architecture: "+style+"\n") {
+			t.Errorf("a %s draft names its architecture, since a missing key now means none:\n%s", style, text)
+		}
+	}
+}

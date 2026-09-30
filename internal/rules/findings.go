@@ -92,7 +92,12 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 	blast := BlastRadius(head)
 	result := []Finding{}
 	for _, violation := range violations {
-		ref := violation.References[0]
+		file, line, first := violation.First()
+		blastTarget := violation.To
+		if len(violation.References) > 0 {
+			blastTarget = violation.References[0].To
+		}
+
 		title := "%s → %s breaks a layer rule"
 		if violation.Kind == FindingCycle {
 			title = "%s → %s closes a cycle"
@@ -101,9 +106,9 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 		result = append(result, Finding{
 			Severity: SeverityHigh, Kind: violation.Kind,
 			Title:   fmt.Sprintf(title, violation.From, violation.To),
-			Detail:  fmt.Sprintf("%s; %d reference(s), first %s → %s at %s:%d", violation.Rule, len(violation.References), ref.From, ref.To, ref.File, ref.Line),
+			Detail:  fmt.Sprintf("%s; %d reference(s), %d import(s), first %s at %s:%d", violation.Rule, len(violation.References), len(violation.Imports), first, file, line),
 			Targets: []string{violation.From, violation.To},
-			Blast:   blast[ref.To],
+			Blast:   blast[blastTarget],
 		})
 	}
 
@@ -165,6 +170,12 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 				finding.Severity, finding.Kind = SeverityMedium, FindingImplementers
 				finding.Title = fmt.Sprintf("Interface %s gained methods", change.Symbol)
 				finding.Detail = "Existing implementers no longer satisfy it."
+			}
+
+			if change.Absorbed {
+				finding.Severity = SeverityMedium
+				finding.Title += ", absorbed in this repository"
+				finding.Detail += "; only this repository can use it, and every dependent changed with it"
 			}
 
 			result = append(result, finding)

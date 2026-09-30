@@ -19,6 +19,10 @@ var (
 	// EdgeDirectives appear only in dump output.
 	EdgeDirectives = map[string]bool{"call": true, "embeds": true, "implements": true, "type-use": true}
 
+	// ImportDirective records a file's import of another module, under the
+	// file's header. It appears only in dump output.
+	ImportDirective = "import"
+
 	// VariantDirective marks another declaration of a symbol, built under
 	// different constraints. It appears only in dump output.
 	VariantDirective = "variant"
@@ -81,6 +85,12 @@ func (this *Document) IsDump() bool {
 	for _, block := range this.Blocks {
 		if nodesUseDumpSyntax(block.Nodes) {
 			return true
+		}
+
+		for _, directive := range block.Directives {
+			if directive.Name == ImportDirective {
+				return true
+			}
 		}
 	}
 
@@ -234,7 +244,7 @@ func parseDirective(text string, number int) (Directive, error) {
 	}
 
 	name := fields[0]
-	if !DesignDirectives[name] && !EdgeDirectives[name] && name != VariantDirective {
+	if !DesignDirectives[name] && !EdgeDirectives[name] && name != VariantDirective && name != ImportDirective {
 		return Directive{}, &Error{number, fmt.Sprintf("unknown directive @%s", name)}
 	}
 

@@ -8,16 +8,20 @@ import (
 	"github.com/smarty/treaty/internal/rules"
 )
 
+// maxSourceBytes is the largest file the map carries for the inspector.
+const maxSourceBytes = 1 << 20
+
 // MapEdge is one module-level dependency on the map. Rule is the rule a
 // violation breaks.
 type MapEdge struct {
-	From       string       `json:"from"`
-	To         string       `json:"to"`
-	Count      int          `json:"count"`
-	New        bool         `json:"new"`
-	Violation  bool         `json:"violation"`
-	Rule       string       `json:"rule,omitempty"`
-	References []graph.Edge `json:"references"`
+	From       string         `json:"from"`
+	To         string         `json:"to"`
+	Count      int            `json:"count"`
+	New        bool           `json:"new"`
+	Violation  bool           `json:"violation"`
+	Rule       string         `json:"rule,omitempty"`
+	References []graph.Edge   `json:"references"`
+	Imports    []graph.Import `json:"imports,omitempty"`
 }
 
 // MapModule is one module hexagon on the map. Section is the vertical slice
@@ -52,7 +56,8 @@ type MapSymbol struct {
 	Change    string `json:"change,omitempty"`
 	File      string `json:"file,omitempty"`
 	Line      int    `json:"line,omitempty"`
-	Source    string `json:"source,omitempty"`
+	EndLine   int    `json:"end_line,omitempty"`
+	Doc       string `json:"doc,omitempty"`
 	Design    bool   `json:"design"`
 	Slice     *Slice `json:"slice,omitempty"`
 }
@@ -73,6 +78,11 @@ type MapView struct {
 	Findings     []rules.Finding `json:"findings"`
 	Designs      []string        `json:"designs,omitempty"`
 	Themes       []Theme         `json:"themes"`
+
+	// Sources holds each file's text, keyed by path, so the inspector can
+	// show a whole file or cut a symbol's code from it. A file larger than
+	// maxSourceBytes is left out.
+	Sources map[string]string `json:"sources,omitempty"`
 
 	// Problems are designs that could not be overlaid, and other trouble the
 	// live map reports without stopping.
@@ -137,8 +147,13 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 
 	for _, edge := range analysis.head.ModuleEdges() {
 		key := [2]string{edge.From, edge.To}
+		count := len(edge.References)
+		if count == 0 {
+			count = len(edge.Imports)
+		}
+
 		view.Edges = append(view.Edges, MapEdge{
-			From: edge.From, To: edge.To, Count: len(edge.References), References: edge.References,
+			From: edge.From, To: edge.To, Count: count, References: edge.References, Imports: edge.Imports,
 			Violation: violations[key] != "", Rule: violations[key], New: analysis.base != nil && !baseEdges[key],
 		})
 	}
@@ -164,15 +179,14 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 		changes[change.Symbol] = change
 	}
 
-	sources := map[string][]string{}
+	view.Sources = this.sources(analysis.head)
 	for _, symbol := range analysis.head.Symbols {
 		entry := MapSymbol{
 			ID: symbol.ID, Module: symbol.Module, Name: symbol.Name, Kind: symbol.Kind, Contract: symbol.Contract,
-			Signature: symbol.Signature, File: symbol.File, Line: symbol.Line,
+			Signature: symbol.Signature, File: symbol.File, Line: symbol.Line, EndLine: symbol.EndLine, Doc: symbol.Doc,
 			Change: changes[symbol.ID].Kind, Before: changes[symbol.ID].Before,
 		}
 
-		entry.Source = this.source(sources, symbol)
 		if slice, err := buildSlice(analysis, symbol.ID); err == nil {
 			entry.Slice = &slice
 		}
@@ -213,23 +227,19 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 	return view, nil
 }
 
-func (this *Service) source(cache map[string][]string, symbol *graph.Symbol) string {
-	lines, ok := cache[symbol.File]
-	if !ok {
-		data, err := this.extractor.Source(this.root, symbol.File)
-		if err == nil {
-			lines = strings.Split(string(data), "\n")
+// sources reads the text of every file in the graph, skipping files that
+// cannot be read or are larger than maxSourceBytes.
+func (this *Service) sources(g *graph.Graph) map[string]string {
+	result := map[string]string{}
+	for _, module := range g.Modules {
+		for _, file := range module.Files {
+			if data, err := this.extractor.Source(this.root, file); err == nil && len(data) <= maxSourceBytes {
+				result[file] = string(data)
+			}
 		}
-
-		cache[symbol.File] = lines
 	}
 
-	end := max(symbol.EndLine, symbol.Line)
-	if symbol.Line < 1 || end > len(lines) || end-symbol.Line > 200 {
-		return ""
-	}
-
-	return strings.Join(lines[symbol.Line-1:end], "\n")
+	return result
 }
 
 // label names a module for people: its path, or for the repository root,

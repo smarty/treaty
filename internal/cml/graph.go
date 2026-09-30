@@ -9,7 +9,8 @@ import (
 
 // FromGraph builds the dump form of a graph: one block per source file,
 // declarations in source order, methods and fields nested under their type,
-// and reference edges as directives under their source.
+// reference edges as directives under their source, and the file's imports
+// as @import directives under its header.
 //
 // Notes:
 //   - A method declared in a different file from its type is nested under the
@@ -62,6 +63,13 @@ func FromGraph(g *graph.Graph) *Document {
 		}
 
 		block.Nodes = append(block.Nodes, symbolNode(symbol, symbol.File, children, edges))
+	}
+
+	for _, item := range g.Imports {
+		module := g.Module(item.From)
+		if block := blocks[fileKey{module.Language, item.File}]; block != nil {
+			block.Directives = append(block.Directives, Directive{Name: ImportDirective, Args: []string{item.To, "@" + strconv.Itoa(item.Line)}})
+		}
 	}
 
 	sort.Slice(keys, func(i, j int) bool {

@@ -65,6 +65,23 @@ func (this *Service) ParseGraph(text string) (result *graph.Graph, err error) {
 			module.Files = append(module.Files, block.Path)
 		}
 
+		for _, directive := range block.Directives {
+			if directive.Name != cml.ImportDirective {
+				continue
+			}
+
+			if len(directive.Args) != 2 || !strings.HasPrefix(directive.Args[1], "@") {
+				return nil, fmt.Errorf("cml:%d: expected @import <module> @<line>", directive.Line)
+			}
+
+			_, line, err := location(strings.TrimPrefix(directive.Args[1], "@"), block.Path)
+			if err != nil {
+				return nil, fmt.Errorf("cml:%d: bad line %q", directive.Line, directive.Args[1])
+			}
+
+			result.AddImport(graph.Import{From: module.ID, To: directive.Args[0], File: block.Path, Line: line})
+		}
+
 		for _, node := range block.Nodes {
 			if err := addNode(result, dialect, module, block.Path, node, nil, nil); err != nil {
 				return nil, err

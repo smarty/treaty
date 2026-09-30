@@ -287,6 +287,8 @@ func (this *gridBlock) place(result *Layout, x, y float64) {
 //   - result: module and group positions, rings or regions, and labels.
 func ComputeLayout(view app.MapView) (result Layout) {
 	switch view.Architecture {
+	case rules.StyleNone:
+		result = noneLayout(view)
 	case rules.StyleLayered:
 		result = bandLayout(view)
 	case rules.StyleSlices:
@@ -412,6 +414,12 @@ func bandLayout(view app.MapView) Layout {
 	}
 
 	return stack(boxes, nil)
+}
+
+// noneLayout draws every module in one region, since no architecture
+// places them.
+func noneLayout(view app.MapView) Layout {
+	return stack([]*box{{label: layerLabel(graph.LayerNone), bucket: graph.LayerNone, layer: graph.LayerNone, items: topItems(view.Modules)}}, nil)
 }
 
 // gridLayout draws each slice as a column and, when slices have layers,
@@ -814,7 +822,12 @@ func flow(items []*item, width float64) (height float64) {
 }
 
 // layerLabel turns a layer name such as use_cases into a label.
+// layerLabel names a layer for people.
 func layerLabel(layer string) string {
+	if layer == graph.LayerNone {
+		return "no architecture"
+	}
+
 	return strings.ReplaceAll(layer, "_", " ")
 }
 

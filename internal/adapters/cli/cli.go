@@ -7,19 +7,30 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/smarty/treaty/internal/app"
 )
 
-const usage = `usage: treaty <command> [flags]
+const usage = `usage: treaty [-C <dir>] <command> [flags]
+
+  -C, --dir <dir>                             work in the repository at dir instead of the
+                                              current directory
 
 commands:
   check [--base <ref>] [--format json|text]   run every check; exit 1 on failure
+  overview [--base <ref>]                     print every module by layer and every module
+                                              dependency, in a few kilobytes
+  find <query> [--kind <kind>]                list symbols whose id contains query, with
+                                              file:line and signature
+  slice <symbol, module or file>              print a context slice as JSON
+  impact <symbol or module>                   list everything that depends on the target
+  allowed <from module> <to module>           say whether from may depend on to
   dump [--at <ref>]                           print the graph in CML
-  slice <symbol or module>                    print a context slice as JSON
   design new <name> [--from <target>]...      scaffold a design in .treaty/designs
   design check <name> [--format json|text]    compare a design with the code
   map [--base <ref>] [--design <name>]...     render a static map to .treaty/out/map.html
@@ -53,6 +64,52 @@ type Launcher interface {
 
 // repeated collects a flag given more than once.
 type repeated []string
+
+// Directory reads the -C <dir> or --dir <dir> option that may lead the
+// command line, naming the repository to work in.
+//
+// Parameters:
+//   - args: the command line without the program name.
+//   - workingDir: the current directory, used when no option is given and to
+//     resolve a relative dir.
+//
+// Returns:
+//   - dir: the absolute repository directory.
+//   - rest: the command line after the option.
+//   - err: the option has no value, or dir is not a directory.
+//
+// Errors:
+//   - ErrUsage: -C or --dir is not followed by a directory.
+func Directory(args []string, workingDir string) (dir string, rest []string, err error) {
+	dir, rest = workingDir, args
+	if len(args) > 0 {
+		switch {
+		case args[0] == "-C" || args[0] == "--dir" || args[0] == "-dir":
+			if len(args) < 2 {
+				return "", nil, ErrUsage
+			}
+
+			dir, rest = args[1], args[2:]
+		case strings.HasPrefix(args[0], "--dir="):
+			dir, rest = strings.TrimPrefix(args[0], "--dir="), args[1:]
+		}
+	}
+
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(workingDir, dir)
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if !info.IsDir() {
+		return "", nil, fmt.Errorf("%s is not a directory", dir)
+	}
+
+	return filepath.Clean(dir), rest, nil
+}
 
 // Run executes one treaty command.
 //
@@ -119,6 +176,7 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 	port := flags.Int("port", 7878, "port for the live map; any free port if it is taken")
 	open := flags.Bool("open", false, "open the live map in a browser")
 	force := flags.Bool("force", false, "replace a different treaty entry in .mcp.json")
+	kind := flags.String("kind", "", "symbol kind for find: function, method, interface, type or value")
 	var from, designs repeated
 	flags.Var(&from, "from", "module or symbol to copy into the design")
 	flags.Var(&designs, "design", "design to overlay")
@@ -143,6 +201,30 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 		}
 
 		return nil
+	case "overview":
+		if len(positional) != 0 {
+			return ErrUsage
+		}
+
+		return text(stdout)(service.Overview(*base))
+	case "find":
+		if len(positional) != 1 {
+			return ErrUsage
+		}
+
+		return text(stdout)(service.Find(positional[0], *kind))
+	case "impact":
+		if len(positional) != 1 {
+			return ErrUsage
+		}
+
+		return text(stdout)(service.Impact(positional[0]))
+	case "allowed":
+		if len(positional) != 2 {
+			return ErrUsage
+		}
+
+		return text(stdout)(service.Allowed(positional[0], positional[1]))
 	case "dump":
 		text, err := service.Dump(*at)
 		if err != nil {
@@ -240,6 +322,18 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 	}
 }
 
+// text writes a command's text result, or returns its error.
+func text(stdout io.Writer) func(result string, err error) error {
+	return func(result string, err error) error {
+		if err != nil {
+			return err
+		}
+
+		_, err = io.WriteString(stdout, result)
+		return err
+	}
+}
+
 func checkText(report app.Report) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "Modules (%d)\n", len(report.Modules))
@@ -264,6 +358,10 @@ func checkText(report app.Report) string {
 		}
 
 		builder.WriteString("\n")
+	}
+
+	for _, note := range report.Notes {
+		fmt.Fprintf(&builder, "\nNote: %s\n", note)
 	}
 
 	fmt.Fprintf(&builder, "\nReview queue (%d)\n", len(report.Findings))

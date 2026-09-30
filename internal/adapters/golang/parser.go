@@ -41,6 +41,7 @@ type funcSignature struct {
 type importSpec struct {
 	alias string
 	path  string
+	line  int
 }
 
 // sourceFile is everything the extractor needs from one Go file.
@@ -131,10 +132,6 @@ func (this *parser) function() *declaration {
 	}
 
 	if receiver == nil {
-		if result.name == "init" || result.name == "_" {
-			return nil
-		}
-
 		return result
 	}
 
@@ -186,7 +183,7 @@ func (this *parser) imports() []importSpec {
 			alias = spec[0].text
 		}
 
-		result = append(result, importSpec{alias: alias, path: path})
+		result = append(result, importSpec{alias: alias, path: path, line: spec[len(spec)-1].line})
 		return nil
 	}) {
 		_ = spec
@@ -286,10 +283,15 @@ func (this *parser) valueSpec(keyword string, spec []token) []*declaration {
 	}
 
 	var result []*declaration
+	blank := false
 	for position, name := range names {
-		if name.text == "_" {
+		// Every blank name in one spec shares its references, so one
+		// declaration of _ covers them all.
+		if name.text == "_" && blank {
 			continue
 		}
+
+		blank = blank || name.text == "_"
 
 		signature := keyword + " " + name.text
 		if len(typeTokens) > 0 {

@@ -174,3 +174,66 @@ func rebuild(g *graph.Graph) *graph.Graph {
 	result.Normalize()
 	return result
 }
+
+func TestClassifyReach(t *testing.T) {
+	build := func(signature string, callerHash string, withEntry bool) *graph.Graph {
+		g := graph.New()
+		g.AddModule(&graph.Module{ID: "go:internal/store", Language: "go", Path: "internal/store", Private: true})
+		g.AddModule(&graph.Module{ID: "go:internal/web", Language: "go", Path: "internal/web", Private: true})
+		g.AddModule(&graph.Module{ID: "go:pkg", Language: "go", Path: "pkg"})
+		g.AddSymbol(&graph.Symbol{ID: "go:internal/store:Load", Module: "go:internal/store", Name: "Load", Kind: graph.KindFunction, Contract: true, Signature: signature})
+		g.AddSymbol(&graph.Symbol{ID: "go:internal/web:Get", Module: "go:internal/web", Name: "Get", Kind: graph.KindFunction, Contract: true, Signature: "func Get()", Hash: callerHash})
+		g.AddSymbol(&graph.Symbol{ID: "go:pkg:Open", Module: "go:pkg", Name: "Open", Kind: graph.KindFunction, Contract: true, Signature: signature})
+		g.AddEdge(graph.Edge{From: "go:internal/web:Get", To: "go:internal/store:Load", Kind: graph.EdgeCall})
+		if withEntry {
+			g.AddModule(&graph.Module{ID: "go:.", Language: "go", Path: ".", Entry: true})
+			g.AddSymbol(&graph.Symbol{ID: "go:.:Run", Module: "go:.", Name: "Run", Kind: graph.KindFunction, Contract: true, Signature: signature})
+			g.AddSymbol(&graph.Symbol{ID: "go:.:Gone", Module: "go:.", Name: "Gone", Kind: graph.KindFunction, Contract: true, Signature: "func Gone()"})
+		}
+
+		g.Normalize()
+		return g
+	}
+
+	kinds := func(changes []Change) map[string]Change {
+		result := map[string]Change{}
+		for _, change := range changes {
+			result[change.Symbol] = change
+		}
+
+		return result
+	}
+
+	base := build("func Load() int", "a", true)
+	head := build("func Load() string", "b", true)
+	head.Symbols = slices.DeleteFunc(head.Symbols, func(s *graph.Symbol) bool { return s.ID == "go:.:Gone" })
+	head = rebuild(head)
+	changes := kinds(Classify(base, head, DefaultCompatible))
+	if load := changes["go:internal/store:Load"]; load.Kind != ChangeBreaking || !load.Absorbed {
+		t.Fatalf("a private change whose callers all changed is absorbed but still breaking: %+v", load)
+	}
+
+	if open := changes["go:pkg:Open"]; open.Kind != ChangeBreaking || open.Absorbed {
+		t.Fatalf("a public change is never absorbed: %+v", open)
+	}
+
+	if run := changes["go:.:Run"]; run.Kind != ChangeImplementation {
+		t.Fatalf("nothing imports an entry module, so its breaking change is implementation: %+v", run)
+	}
+
+	if _, listed := changes["go:.:Gone"]; listed {
+		t.Fatal("a removal from an entry module is not listed")
+	}
+
+	unchangedCaller := kinds(Classify(build("func Load() int", "a", false), build("func Load() string", "a", false), DefaultCompatible))
+	if load := unchangedCaller["go:internal/store:Load"]; load.Kind != ChangeBreaking || load.Absorbed {
+		t.Fatalf("a caller that did not change keeps the change unabsorbed: %+v", load)
+	}
+
+	findings := Rank(head, base, Classify(base, head, DefaultCompatible), nil)
+	for _, finding := range findings {
+		if finding.Targets[0] == "go:internal/store:Load" && (finding.Kind != FindingBreaking || finding.Severity != SeverityMedium) {
+			t.Fatalf("an absorbed change is a medium breaking finding: %+v", finding)
+		}
+	}
+}

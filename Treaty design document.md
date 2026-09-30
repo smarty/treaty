@@ -69,7 +69,9 @@ Composition is the composition root: the code that builds concrete adapters and 
 | Added | + | New symbol | Medium |
 | Implementation only | \~ | Body changed, signature identical | Low |
 | Removed | − | Symbol deleted | Treated as breaking if it was exported |
-| Moved | → | An exported symbol removed from one place and added in another, as one change | Treated as breaking |
+| Moved | → | An exported symbol removed from one place and added in another, as one change | Treated as breaking, unless it moved out of an entry module |
+
+Nothing can import an entry module, such as a Go `main` package, so its removals are not listed, its breaking changes are implementation changes, and a move out of it breaks no one. A breaking change or removal in a private module, one only the repository can import such as a Go `internal` package, is **absorbed** when every dependent changed in the same diff. An absorbed change is still breaking and still fails `fail_on: [breaking]`, but it ranks medium rather than high, since every caller it could break is already in the diff.
 | Unchanged | none | No change | Not listed |
 
 
@@ -90,7 +92,8 @@ Every architecture is built from the same few rules, so the engine stays small:
 
 | Architecture | Config | Rules | Map |
 | --- | --- | --- | --- |
-| Hexagonal (default) | `layers:` with `composition`, `domain`, `application` and `adapter` (`driving`, `driven`) | Inward only; no adapter uses another adapter | Rings: domain, application, adapters; driving left, driven right |
+| None (default) | `architecture: none`, or no `treaty.yaml`; nothing else | Every dependency is allowed; contracts and changes are still checked | One region holding every module |
+| Hexagonal | `architecture: hexagonal`; `layers:` with `composition`, `domain`, `application` and `adapter` (`driving`, `driven`). A config with layers and no `architecture:` key is hexagonal, as configs were before the key existed | Inward only; no adapter uses another adapter | Rings: domain, application, adapters; driving left, driven right |
 | Clean | `architecture: clean`; `layers:` from `entities`, `use_cases`, `interface_adapters` and `frameworks`, in any order; `composition:` | Inward only | Four rings, entities in the center |
 | Layered | `architecture: layered`; `layers:` in order, top to bottom, any names; `composition:` | A layer may use itself and every layer below it | Horizontal bands, the top layer highest |
 | Vertical slices | `architecture: slices`; `slices:` globs such as `internal/features/*`, each match one slice; `shared:`; `composition:`; optional `layers:` inside every slice, top to bottom, with globs relative to the slice root | A slice may use itself and shared code, never another slice; inside a slice, layers as for layered | A column per slice; with layers, a grid of slices by layer. Composition spans the top, shared code the bottom |
@@ -270,7 +273,8 @@ The same design block becomes the brief for an agent implementing it.
 - internal declarations;
 - a trailing `@<line>` on each declaration, and `@ptr` on Go methods with pointer receivers;
 - reference edges nested under their source as `@call`, `@type-use`, `@implements` or `@embeds` lines, each with a target id and a location: `@<line>`, or `@<file>:<line>` when the edge was found in another file, such as a build variant;
-- `@variant <file>:<line>` under a symbol for each build variant.
+- `@variant <file>:<line>` under a symbol for each build variant, and for each repeat of a name the language allows more than once, such as Go's `init`;
+- `@import <module> @<line>` under a file header for each import of another module in the repository.
 
 Design files may not use these. Output is canonical: headers are sorted by path, declarations follow source order, and edges are sorted by kind, target and location. It exists for debugging and golden tests. Parsing it back must yield the same graph, which proves that the snippet parsers and the extractors share one model.
 
@@ -293,7 +297,7 @@ A removed exported symbol pairs with an added one, and becomes a single moved ch
 
 A symbol declared more than once in a module, in files built under different constraints such as Go build tags, is one symbol with variants. It keeps the first declaration's location and signature, its reference edges are the union of every variant's, each carrying its own file, and its body hash covers every variant, so a change to one platform's code alone still shows. Variants whose signatures or fields disagree are reported as a finding.
 
-**2. Architecture rules.** A module edge is a violation when it breaks a rule of the declared architecture, and each violation carries the rule it breaks in words. In every architecture, composition may depend on anything and any edge into composition is a violation. For the modular monolith, an edge between two contexts that depend on each other, directly or through other contexts, is also a cycle finding, unless the edge already breaks a rule. Violations and cycles fail the check by default. Unclassified modules produce a warning, not a failure.
+**2. Architecture rules.** A module depends on another when it references one of its symbols or imports it at all, so a blank import, a dot import, a package-level `var _ = …` and code that runs only in `init` all count. A module edge is a violation when it breaks a rule of the declared architecture, and each violation carries the rule it breaks in words. In every architecture, composition may depend on anything and any edge into composition is a violation. For the modular monolith, an edge between two contexts that depend on each other, directly or through other contexts, is also a cycle finding, unless the edge already breaks a rule. Violations and cycles fail the check by default. Unclassified modules produce a warning, not a failure.
 
 **3. Stability metrics.** Robert Martin's package metrics, computed at module level on both graphs, with afferent coupling Ca and efferent coupling Ce counted as distinct modules:
 
@@ -464,17 +468,19 @@ The tool ships as a single binary, `treaty`, driven by a config file at the repo
 
 | Command | Does | Output |
 | --- | --- | --- |
-| `treaty check --base <ref>` | Runs all four checks on the diff from base to HEAD | Report JSON on stdout, non-zero exit on failure |
+| `treaty -C <dir> <command>` | Runs any command on the repository at `dir`, as `git -C` does, so an agent or `.mcp.json` elsewhere can use it | As the command |
+| `treaty check [--base <ref>]` | Runs all four checks on the working tree, and on its diff from base when one is given. Its notes say when it compared nothing: no base, or a base that is the current commit with nothing changed | Report JSON on stdout, non-zero exit on failure |
+| `treaty overview`, `find`, `impact`, `allowed` | The MCP tools of the same names, on the working tree | Text on stdout |
 | `treaty map [--base <ref>] [--design <name>...]` | Builds, scores and renders the diff, with any designs overlaid | Self-contained HTML file in `.treaty/out/` |
 | `treaty design new <name> [--from <target>...]` | Scaffolds a design from the current contracts of the given modules or symbols | `.treaty/designs/<name>.cml`; refuses to overwrite |
 | `treaty design check <name>` | Compares a design in `.treaty/designs/` with the current code | Missing, differing, layer-breaking, unclassified and failing items, non-zero exit on failure |
-| `treaty slice <symbol or module>` | Builds a context slice from the current tree | Slice JSON on stdout |
+| `treaty slice <symbol, file or module>` | Builds a context slice from the current tree. A file slice lists every declaration in the file and the symbols in other files it uses or is used by; a module slice lists its files; every entry has file:line | Slice JSON on stdout |
 | `treaty dump [--at <ref>]` | Prints the graph in CML, for debugging and golden tests | CML on stdout |
 | `treaty serve [--port <n>] [--open]` | Serves the live map until interrupted | The map at `http://127.0.0.1:7878` |
 | `treaty mcp [--port <n>]` | Serves the live graph to an agent over MCP on stdio, and the live map to the person unless another server already does | MCP on stdio; the map URL on stderr |
 | `treaty url` | Prints the live map's address for this directory, or fails when no treaty server is running here. In Claude Code, `! treaty url` shows it in the session | The URL |
 | `treaty here [--force]` | Registers treaty as an MCP server of the repository, so Claude Code sessions started in it run `treaty mcp`. Creates `.mcp.json`, or adds to an existing one keeping every other entry, the key order and the indentation. A different `treaty` entry is left alone unless `--force` is given | `.mcp.json`, and the next steps |
-| `treaty init [--architecture <name>]` | Proposes a config for the named architecture (hexagonal by default) from the shape of the import graph for a person to edit, and creates `.treaty/`. For slices and modular, see Architectures. For hexagonal, clean and layered: programs (such as Go `main` packages) and modules nothing imports are composition; a module that imports nothing in the repository but is used goes innermost, or lowest; every other module sits one layer inside the deepest module importing it. So the proposal has no violations. A library module with no imports either way is left unclassified and listed in the draft. Directory names are hints: they replace the shape's answer only when that adds no violation, and they set an adapter's side, which otherwise comes from whether it implements a core interface (driven) or calls the application (driving) | `treaty.yaml` draft |
+| `treaty init [--architecture <name>]` | Proposes a config for the named architecture (`none` by default, which declares no architecture) from the shape of the import graph for a person to edit, and creates `.treaty/`. For slices and modular, see Architectures. For hexagonal, clean and layered: programs (such as Go `main` packages) and modules nothing imports are composition; a module that imports nothing in the repository but is used goes innermost, or lowest; every other module sits one layer inside the deepest module importing it. So the proposal has no violations. A library module with no imports either way is left unclassified and listed in the draft. Directory names are hints: they replace the shape's answer only when that adds no violation, and they set an adapter's side, which otherwise comes from whether it implements a core interface (driven) or calls the application (driving) | `treaty.yaml` draft |
 
 Config file, `treaty.yaml`, for the hexagonal architecture (see Architectures for the others):
 
@@ -567,7 +573,7 @@ The biggest risk and the biggest open question are the same: code the static gra
 
 - [ ] Should version 1 add runtime traces from the test suite to recover edges hidden by dependency injection, or wait until phase 3?
 - [ ] Is a module a package, or can one module span several packages through config?
-- [ ] Should breaking changes in internal packages count as breaking, given they cannot be imported from outside?
+- [x] Should breaking changes in internal packages count as breaking, given they cannot be imported from outside? Yes: they are marked absorbed when every dependent changed with them, rank medium, and still fail the check.
 - [ ] What is CML's final name?
 - [ ] Should the live server warn the agent unprompted when an edit introduces a violation, or is the `changes` tool enough? Answer after using the tool for a while.
 - [ ] Is polling the tree twice a second fast enough on large repositories, or does the watcher need the operating system's file events?

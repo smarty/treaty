@@ -18,7 +18,14 @@ func TestLoadArchitectures(t *testing.T) {
 		style string
 		want  []string
 	}{
-		{"hexagonal by default", `
+		{"none when nothing is declared", `
+rules:
+  warn_on: [unclassified]
+`, rules.StyleNone, nil},
+		{"none declared", `
+architecture: none
+`, rules.StyleNone, nil},
+		{"hexagonal when layers have no architecture key", `
 layers:
   adapter:
     driven: ["db/**"]
@@ -101,6 +108,8 @@ func TestLoadRejectsBadArchitectures(t *testing.T) {
 		"architecture: slices\ncontexts: [\"internal/*\"]\n",
 		"architecture: clean\nlayers:\n  services: [\"x\"]\n",
 		"layers: [\"x\"]\n",
+		"architecture: none\nlayers:\n  data: [\"x\"]\n",
+		"architecture: none\ncomposition: [\"cmd/**\"]\n",
 	} {
 		root := t.TempDir()
 		if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(text), 0o644); err != nil {
@@ -110,6 +119,17 @@ func TestLoadRejectsBadArchitectures(t *testing.T) {
 		if _, _, err := NewConfig(root).Load(); !errors.Is(err, rules.ErrArchitecture) {
 			t.Errorf("%q: got %v", text, err)
 		}
+	}
+}
+
+func TestLoadWithoutConfigIsNone(t *testing.T) {
+	config, found, err := NewConfig(t.TempDir()).Load()
+	if err != nil || found {
+		t.Fatalf("found %t, err %v", found, err)
+	}
+
+	if config.Architecture.Style != rules.StyleNone || config.Architecture.Resolve("anything").Layer != graph.LayerNone {
+		t.Fatalf("no treaty.yaml declares no architecture: %+v", config.Architecture)
 	}
 }
 

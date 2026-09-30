@@ -218,7 +218,7 @@ func instructions(mapURL string, shared bool) string {
 		"saying whether it is a new map or the one already running, so they can open it in a browser. " +
 		"Treaty keeps a live graph of this repository's contracts, placed by the architecture treaty.yaml declares (hexagonal, clean, layered, vertical slices or modular monolith), and rebuilds it as files change. " +
 		"Use it to decide where to work without reading the whole codebase: call overview first, find to locate symbols, " +
-		"slice before editing a symbol or module, impact before changing a contract, and allowed before adding an import. " +
+		"slice before editing a symbol, file or module, impact before changing a contract, and allowed before adding an import. " +
 		"Write what you intend to build as CML with plan; it shows on the person's map and fills in as the code is written. " +
 		"After edits, call changes to see what moved in the architecture since the baseline, and fix any new rule violation. " +
 		"Call selection to see what the person has selected on the map. Use show sparingly, only when you need the person to look at one specific thing."
@@ -238,8 +238,8 @@ func tools() []tool {
 		},
 		{
 			Name:        "slice",
-			Description: "The minimum context for working on one symbol or module: its contract, its direct neighbors' contracts and the layers it may depend on.",
-			InputSchema: schema(map[string]string{"target": "A symbol id such as go:internal/graph:Graph.Order, or a module id such as go:internal/graph."}, "target"),
+			Description: "The minimum context for working on one symbol, file or module, with file:line for everything it lists so you can read just those lines. A symbol slice gives its contract and direct neighbors; a file slice gives every declaration in the file and the symbols in other files it uses or is used by; a module slice gives its contracts and its files, the narrower targets to slice next.",
+			InputSchema: schema(map[string]string{"target": "A symbol id such as go:internal/graph:Graph.Order, a file such as internal/graph/graph.go, or a module id such as go:internal/graph."}, "target"),
 		},
 		{
 			Name:        "impact",

@@ -1,3 +1,4 @@
+architecture: hexagonal
 layers:
   composition: ["cmd/**"]
   domain:      ["internal/graph/**", "internal/rules/**", "internal/cml/**"]

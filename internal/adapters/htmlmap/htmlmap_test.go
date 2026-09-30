@@ -167,6 +167,9 @@ func TestRegionLayouts(t *testing.T) {
 		view  app.MapView
 		specs []spec
 	}{
+		{"none", app.MapView{Architecture: rules.StyleNone}, []spec{
+			{"cmd/app", graph.LayerNone, ""}, {"web", graph.LayerNone, ""}, {"store", graph.LayerNone, ""},
+		}},
 		{"layered", app.MapView{Architecture: rules.StyleLayered, Layers: []string{"data", "business", "presentation"}}, []spec{
 			{"cmd/app", graph.LayerComposition, ""}, {"web/admin", "presentation", ""}, {"web/public", "presentation", ""},
 			{"service/orders", "business", ""}, {"service/billing", "business", ""}, {"store/sql", "data", ""}, {"lonely", graph.LayerUnclassified, ""},

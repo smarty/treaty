@@ -16,6 +16,7 @@ const (
 	StyleHexagonal = "hexagonal"
 	StyleLayered   = "layered"
 	StyleModular   = "modular"
+	StyleNone      = "none"
 	StyleSlices    = "slices"
 )
 
@@ -29,8 +30,8 @@ var (
 	// innermost first.
 	HexagonalLayers = []string{graph.LayerDomain, graph.LayerApplication, graph.LayerAdapter}
 
-	// Styles lists every supported architecture.
-	Styles = []string{StyleClean, StyleHexagonal, StyleLayered, StyleModular, StyleSlices}
+	// Styles lists every supported architecture, the default first.
+	Styles = []string{StyleNone, StyleClean, StyleHexagonal, StyleLayered, StyleModular, StyleSlices}
 )
 
 // Architecture is the dependency rules of one codebase: a style, and the
@@ -39,6 +40,9 @@ var (
 // modules are reported on their own and never checked.
 //
 // Notes:
+//   - The none style is no architecture at all, and the default: every
+//     module is placed in none, and every dependency is allowed. Contracts
+//     and their changes are still tracked.
 //   - Layers run innermost, or lowest, first. A layer may depend on itself
 //     and on every layer inside or below it, never outward or upward.
 //     Hexagonal adds one rule: an adapter may not depend on another adapter.
@@ -72,15 +76,38 @@ type Placement struct {
 	Public bool
 }
 
-// Violation is a module edge that breaks a rule of the architecture.
+// Violation is a module edge that breaks a rule of the architecture. It has
+// at least one reference or import.
 type Violation struct {
-	Kind       string       `json:"kind"`
-	Rule       string       `json:"rule"`
-	From       string       `json:"from"`
-	FromLayer  string       `json:"from_layer"`
-	To         string       `json:"to"`
-	ToLayer    string       `json:"to_layer"`
-	References []graph.Edge `json:"references"`
+	Kind       string         `json:"kind"`
+	Rule       string         `json:"rule"`
+	From       string         `json:"from"`
+	FromLayer  string         `json:"from_layer"`
+	To         string         `json:"to"`
+	ToLayer    string         `json:"to_layer"`
+	References []graph.Edge   `json:"references"`
+	Imports    []graph.Import `json:"imports,omitempty"`
+}
+
+// First locates the violation's first reference, or its first import when
+// nothing the import provides is referenced.
+//
+// Returns:
+//   - file: the file of the reference or import.
+//   - line: its line.
+//   - detail: what depends on what there, such as a → b or an import of b.
+func (this Violation) First() (file string, line int, detail string) {
+	if len(this.References) > 0 {
+		ref := this.References[0]
+		return ref.File, ref.Line, fmt.Sprintf("%s → %s", ref.From, ref.To)
+	}
+
+	if len(this.Imports) > 0 {
+		item := this.Imports[0]
+		return item.File, item.Line, fmt.Sprintf("an import of %s with no references", item.To)
+	}
+
+	return "", 0, ""
 }
 
 // Assign places every module of the graph, using the first glob that matches
@@ -106,6 +133,10 @@ func (this Architecture) Assign(g *graph.Graph) {
 //   - allowed: true when the dependency follows the rules.
 //   - rule: the rule it breaks, empty when allowed.
 func (this Architecture) Check(from, to Placement) (allowed bool, rule string) {
+	if this.Style == StyleNone {
+		return true, ""
+	}
+
 	if to.Layer == graph.LayerComposition && from.Layer != graph.LayerComposition && from.Layer != graph.LayerUnclassified {
 		return false, fmt.Sprintf("%s may not depend on composition: nothing may depend on the composition root", this.name(from))
 	}
@@ -141,6 +172,8 @@ func (this Architecture) Check(from, to Placement) (allowed bool, rule string) {
 //   - result: one or two sentences.
 func (this Architecture) Guidance(placement Placement) string {
 	switch placement.Layer {
+	case graph.LayerNone:
+		return "No architecture: treaty.yaml declares none, so every dependency is allowed. Choose one with treaty init --architecture <name>."
 	case graph.LayerComposition:
 		if this.Style == StyleHexagonal {
 			return "Composition: wires adapters into the core. The only layer allowed to use adapters; nothing may use it."
@@ -207,6 +240,8 @@ func (this Architecture) MayUse(placement Placement) []string {
 	names := this.LayerNames()
 	sliced := this.Style == StyleSlices || this.Style == StyleModular
 	switch placement.Layer {
+	case graph.LayerNone:
+		return []string{"every module"}
 	case graph.LayerComposition:
 		if sliced {
 			return []string{"every " + this.unit(), graph.LayerShared, graph.LayerComposition}
@@ -249,6 +284,10 @@ func (this Architecture) MayUse(placement Placement) []string {
 // Returns:
 //   - result: the placement; its layer is Unclassified when no glob matches.
 func (this Architecture) Resolve(modulePath string) (result Placement) {
+	if this.Style == StyleNone {
+		return Placement{Layer: graph.LayerNone}
+	}
+
 	if MatchAny(this.Composition, modulePath) {
 		return Placement{Layer: graph.LayerComposition}
 	}
@@ -300,6 +339,8 @@ func (this Architecture) Resolve(modulePath string) (result Placement) {
 //   - result: the rules.
 func (this Architecture) Summary() string {
 	switch this.Style {
+	case StyleNone:
+		return "Rules: none. No architecture is declared, so every dependency is allowed; contracts and their changes are still tracked."
 	case StyleHexagonal:
 		return "Rules: domain may use domain; application and adapters may use domain and application; composition may use everything; nothing may use composition; adapters may not use each other."
 	case StyleSlices:
@@ -334,6 +375,10 @@ func (this Architecture) Validate() error {
 		return fmt.Errorf("%w: unknown architecture %q; use one of %s", ErrArchitecture, this.Style, strings.Join(Styles, ", "))
 	}
 
+	if this.Style == StyleNone && (len(this.Composition) > 0 || len(this.Layers) > 0 || len(this.Shared) > 0 || len(this.Slices) > 0 || len(this.Public) > 0) {
+		return fmt.Errorf("%w: the none architecture has no composition, layers, shared code, slices or contexts; choose another architecture to use them", ErrArchitecture)
+	}
+
 	sliced := this.Style == StyleSlices || this.Style == StyleModular
 	if !sliced && (len(this.Shared) > 0 || len(this.Slices) > 0 || len(this.Public) > 0) {
 		return fmt.Errorf("%w: shared, slices, contexts and public apply only to the slices and modular architectures", ErrArchitecture)
@@ -345,7 +390,7 @@ func (this Architecture) Validate() error {
 
 	seen := map[string]bool{}
 	for _, layer := range this.Layers {
-		if layer.Name == graph.LayerComposition || layer.Name == graph.LayerShared || layer.Name == graph.LayerUnclassified || layer.Name == graph.LayerContext || layer.Name == graph.LayerSlice {
+		if layer.Name == graph.LayerComposition || layer.Name == graph.LayerShared || layer.Name == graph.LayerUnclassified || layer.Name == graph.LayerContext || layer.Name == graph.LayerSlice || layer.Name == graph.LayerNone {
 			return fmt.Errorf("%w: %q is a reserved name and cannot be a layer", ErrArchitecture, layer.Name)
 		}
 
@@ -410,7 +455,7 @@ func (this Architecture) Violations(g *graph.Graph) []Violation {
 				Kind: FindingLayerViolation, Rule: rule,
 				From: edge.From, FromLayer: from.Layer,
 				To: edge.To, ToLayer: to.Layer,
-				References: edge.References,
+				References: edge.References, Imports: edge.Imports,
 			})
 		}
 	}
@@ -559,6 +604,7 @@ func contextCycles(g *graph.Graph) []Violation {
 			To:         each.edge.To,
 			ToLayer:    each.to.Layer,
 			References: each.edge.References,
+			Imports:    each.edge.Imports,
 		})
 	}
 

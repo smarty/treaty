@@ -218,3 +218,41 @@ func layered() Architecture {
 		{Name: "presentation", Globs: []string{"web/**"}},
 	}}
 }
+
+func TestNoneAllowsEverything(t *testing.T) {
+	architecture := Architecture{Style: StyleNone}
+	if err := architecture.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	if Styles[0] != StyleNone {
+		t.Fatalf("none is the default, listed first: %v", Styles)
+	}
+
+	g := graph.New()
+	for _, path := range []string{"cmd/app", "web", "store"} {
+		g.AddModule(&graph.Module{ID: "go:" + path, Language: "go", Path: path})
+		g.AddSymbol(&graph.Symbol{ID: "go:" + path + ":X", Module: "go:" + path, Name: "X", Kind: graph.KindType, Contract: true, Signature: "type X struct"})
+	}
+
+	g.AddEdge(graph.Edge{From: "go:store:X", To: "go:cmd/app:X", Kind: graph.EdgeTypeUse})
+	g.AddEdge(graph.Edge{From: "go:web:X", To: "go:store:X", Kind: graph.EdgeTypeUse})
+	g.Normalize()
+	architecture.Assign(g)
+	for _, module := range g.Modules {
+		if module.Layer != graph.LayerNone {
+			t.Fatalf("every module is placed in none: %+v", module)
+		}
+	}
+
+	if violations := architecture.Violations(g); len(violations) != 0 {
+		t.Fatalf("none allows every dependency: %+v", violations)
+	}
+
+	findings := Rank(g, nil, nil, nil)
+	for _, finding := range findings {
+		if finding.Kind == FindingUnclassified {
+			t.Fatalf("nothing is unclassified under none: %+v", finding)
+		}
+	}
+}

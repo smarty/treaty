@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -27,10 +28,12 @@ type source struct {
 // fileState is one parsed file placed in its module.
 type fileState struct {
 	*sourceFile
-	path    string
-	module  string
-	imports map[string]string
-	aliases map[string]bool
+	path       string
+	module     string
+	imports    map[string]string
+	aliases    map[string]bool
+	dotImports []string
+	lines      []string
 }
 
 // NewExtractor creates a Go extractor.
@@ -68,7 +71,7 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 		}
 
 		dir := path.Dir(relative)
-		state := &fileState{sourceFile: parseFile(src), path: relative, module: graph.ModuleID("go", dir), imports: map[string]string{}, aliases: map[string]bool{}}
+		state := &fileState{sourceFile: parseFile(src), path: relative, module: graph.ModuleID("go", dir), imports: map[string]string{}, aliases: map[string]bool{}, lines: strings.Split(string(src), "\n")}
 		states = append(states, state)
 		if packages[dir] == "" {
 			packages[dir] = state.pkg
@@ -80,13 +83,13 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 	declared := map[*graph.Symbol][]source{}
 	for _, state := range states {
 		dir := path.Dir(state.path)
-		module := result.AddModule(&graph.Module{ID: state.module, Language: "go", Path: dir, Name: packages[dir], Entry: packages[dir] == "main"})
+		module := result.AddModule(&graph.Module{ID: state.module, Language: "go", Path: dir, Name: packages[dir], Entry: packages[dir] == "main", Private: internal(dir)})
 		module.Files = append(module.Files, state.path)
 		if moduleImports[state.module] == nil {
 			moduleImports[state.module] = map[string]bool{}
 		}
 
-		state.resolveImports(modulePath, packages, moduleImports[state.module])
+		state.resolveImports(result, modulePath, packages, moduleImports[state.module])
 		for _, declaration := range state.declarations {
 			candidate := &graph.Symbol{
 				ID:        graph.SymbolID(state.module, declaration.name),
@@ -102,6 +105,7 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 				Pointer:   declaration.pointer,
 				Fields:    declaration.fields,
 				Hash:      hash(declaration.hashText),
+				Doc:       docComment(state.lines, declaration.line),
 			}
 
 			symbol := result.AddSymbol(candidate)
@@ -110,7 +114,14 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 			} else {
 				// The same name declared twice in one package is a build
 				// variant: each file compiles under different constraints.
-				symbol.Variants = append(symbol.Variants, graph.Variant{File: state.path, Line: declaration.line, Signature: declaration.signature, Fields: declaration.fields})
+				// Repeated init functions and blank declarations are not build
+				// variants, so they carry no signature to compare.
+				variant := graph.Variant{File: state.path, Line: declaration.line, Signature: declaration.signature, Fields: declaration.fields}
+				if repeatable(declaration) {
+					variant.Signature, variant.Fields = "", nil
+				}
+
+				symbol.Variants = append(symbol.Variants, variant)
 				symbol.Hash = hash(symbol.Hash + " " + candidate.Hash)
 			}
 
@@ -176,7 +187,7 @@ func (this *fileState) references(g *graph.Graph, symbol *graph.Symbol, declarat
 	}
 
 	for _, embedded := range declaration.embedded {
-		if target := this.typeTarget(embedded); target != "" {
+		if target := this.typeTarget(g, embedded); target != "" {
 			edge(target, embedded[0], graph.EdgeEmbeds)
 		}
 	}
@@ -215,12 +226,15 @@ func (this *fileState) references(g *graph.Graph, symbol *graph.Symbol, declarat
 			index += 2
 		case !inCase && index+1 < len(tokens) && tokens[index+1].is(":"):
 		default:
-			edge(graph.SymbolID(this.module, current.text), current, "")
+			edge(this.local(g, current.text), current, "")
 		}
 	}
 }
 
-func (this *fileState) resolveImports(modulePath string, packages map[string]string, moduleImports map[string]bool) {
+// resolveImports maps each import's name to its module and records every
+// in-repo import in the graph, blank and dot imports included, since each
+// is a dependency whether or not anything it provides is referenced.
+func (this *fileState) resolveImports(g *graph.Graph, modulePath string, packages map[string]string, moduleImports map[string]bool) {
 	for _, spec := range this.sourceFile.imports {
 		alias := spec.alias
 		inRepo := modulePath != "" && (spec.path == modulePath || strings.HasPrefix(spec.path, modulePath+"/"))
@@ -235,20 +249,46 @@ func (this *fileState) resolveImports(modulePath string, packages map[string]str
 			}
 		}
 
-		if alias == "_" || alias == "." {
-			continue
+		target := graph.ModuleID("go", dir)
+		if inRepo {
+			g.AddImport(graph.Import{From: this.module, To: target, File: this.path, Line: spec.line})
 		}
 
-		this.aliases[alias] = true
-		if inRepo {
-			target := graph.ModuleID("go", dir)
-			this.imports[alias] = target
-			moduleImports[target] = true
+		switch {
+		case alias == "_":
+		case alias == ".":
+			if inRepo {
+				this.dotImports = append(this.dotImports, target)
+				moduleImports[target] = true
+			}
+		default:
+			this.aliases[alias] = true
+			if inRepo {
+				this.imports[alias] = target
+				moduleImports[target] = true
+			}
 		}
 	}
 }
 
-func (this *fileState) typeTarget(tokens []token) string {
+// local resolves an unqualified name: to this module's symbol when it
+// declares one, else to the first dot-imported module that does.
+func (this *fileState) local(g *graph.Graph, name string) string {
+	result := graph.SymbolID(this.module, name)
+	if g.Symbol(result) != nil {
+		return result
+	}
+
+	for _, module := range this.dotImports {
+		if candidate := graph.SymbolID(module, name); g.Symbol(candidate) != nil {
+			return candidate
+		}
+	}
+
+	return result
+}
+
+func (this *fileState) typeTarget(g *graph.Graph, tokens []token) string {
 	if len(tokens) > 0 && tokens[0].is("*") {
 		tokens = tokens[1:]
 	}
@@ -259,7 +299,7 @@ func (this *fileState) typeTarget(tokens []token) string {
 			return graph.SymbolID(module, tokens[2].text)
 		}
 	case len(tokens) >= 1:
-		return graph.SymbolID(this.module, tokens[0].text)
+		return this.local(g, tokens[0].text)
 	}
 
 	return ""
@@ -283,6 +323,76 @@ func (this *fileState) uniqueMethod(candidates []*graph.Symbol) string {
 	}
 
 	return found[0]
+}
+
+// internal reports whether Go's internal rule limits a package to importers
+// inside this repository: some element of its path is internal.
+func internal(dir string) bool {
+	return slices.Contains(strings.Split(dir, "/"), "internal")
+}
+
+// repeatable reports whether Go allows the declaration's name more than once
+// in a package: init functions and the blank identifier.
+func repeatable(declaration *declaration) bool {
+	return declaration.parent == "" && (declaration.name == "init" || declaration.name == "_")
+}
+
+// docComment reads the comment that ends on the line just above a
+// declaration, as Go documents declarations, without its comment markers.
+// Directives such as //go:build are not documentation.
+//
+// Parameters:
+//   - lines: the file's lines.
+//   - line: the declaration's first line, counting from 1.
+//
+// Returns:
+//   - result: the documentation text, empty when there is none.
+func docComment(lines []string, line int) string {
+	end := line - 2
+	if end < 0 || end >= len(lines) {
+		return ""
+	}
+
+	var result []string
+	last := strings.TrimSpace(lines[end])
+	switch {
+	case strings.HasPrefix(last, "//"):
+		for index := end; index >= 0; index-- {
+			text := strings.TrimSpace(lines[index])
+			if !strings.HasPrefix(text, "//") {
+				break
+			}
+
+			if directive(text) {
+				continue
+			}
+
+			text = strings.TrimPrefix(text, "//")
+			result = append([]string{strings.TrimPrefix(text, " ")}, result...)
+		}
+	case strings.HasSuffix(last, "*/"):
+		for index := end; index >= 0; index-- {
+			text := strings.TrimSpace(lines[index])
+			start := strings.Index(text, "/*")
+			if start >= 0 {
+				text = text[start+2:]
+			}
+
+			text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(text, "*/"), "*"))
+			result = append([]string{text}, result...)
+			if start >= 0 {
+				break
+			}
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(result, "\n"))
+}
+
+// directive reports whether a line comment is a tool directive, such as
+// //go:build or //line, which Go leaves out of documentation.
+func directive(text string) bool {
+	return strings.HasPrefix(text, "//go:") || strings.HasPrefix(text, "//line ") || strings.HasPrefix(text, "//nolint")
 }
 
 func contract(declaration *declaration) bool {

@@ -123,6 +123,9 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: v
 .inspector dt { color: var(--muted); }
 .inspector dd { margin: 0; word-break: break-word; }
 pre { background: var(--code-bg); padding: 8px; border-radius: 6px; overflow: auto; font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; margin: 0 0 12px; }
+pre.doc { background: none; padding: 0 0 0 8px; border-left: 3px solid var(--code-bg); white-space: pre-wrap; font: inherit; }
+pre.file { max-height: 60vh; }
+li.link { cursor: pointer; text-decoration: underline dotted; }
 .sig-old { color: var(--high); } .sig-new { color: var(--added); }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
 .chip { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; cursor: pointer; background: var(--bg); color: var(--ink); }
@@ -152,7 +155,7 @@ table.metrics td:first-child, table.metrics th:first-child { text-align: left; }
     <label>Baseline <select id="baseline-mode"><option value="head">HEAD</option><option value="pr">Pull request</option><option value="ref">Ref</option></select></label>
     <input id="baseline-arg" type="text" size="16" spellcheck="false" aria-label="Baseline ref or target branch">
     <button id="baseline-apply" type="button">Apply</button>
-    <label title="Preview the code in another architecture; treaty.yaml switches after 5 minutes or when you choose to use it">Architecture <select id="architecture"><option value="hexagonal">Hexagonal</option><option value="clean">Clean</option><option value="layered">Layered</option><option value="slices">Vertical slices</option><option value="modular">Modular monolith</option></select></label>
+    <label title="Preview the code in another architecture; treaty.yaml switches after 5 minutes or when you choose to use it">Architecture <select id="architecture"><option value="none">None</option><option value="hexagonal">Hexagonal</option><option value="clean">Clean</option><option value="layered">Layered</option><option value="slices">Vertical slices</option><option value="modular">Modular monolith</option></select></label>
     <span class="adopt" id="adopt-bar" role="status" hidden>treaty.yaml switches in <span id="adopt-countdown"></span> <button id="adopt" type="button">Use this architecture</button> <button id="adopt-cancel" type="button">Keep treaty.yaml</button></span>
     <span class="status" id="status" role="status"></span>
     <label title="When on, Claude's show requests move the view, but only while you are not using the map"><input type="checkbox" id="follow"> Follow Claude</label>
@@ -361,6 +364,16 @@ function placeName(m) {
 // files, since each file is a cell inside it.
 function fileKey(moduleId, file) { return moduleId + "|" + file; }
 // fileOf splits a file selection's id into its module and path.
+// fileSource is a file's text from the payload, or empty when the payload
+// left it out.
+function fileSource(file) { return (D.sources || {})[file] || ""; }
+// codeOf cuts a symbol's lines from its file, as long as they are few enough
+// to read in the inspector.
+function codeOf(s) {
+  const text = s.file && fileSource(s.file); if (!text || !s.line) return "";
+  const end = Math.max(s.end_line || s.line, s.line); if (end - s.line > 200) return "";
+  return text.split("\n").slice(s.line - 1, end).join("\n");
+}
 function fileOf(key) { const at = key.indexOf("|"); return { module: key.slice(0, at), file: key.slice(at + 1) }; }
 function fileCell(key) { const f = fileOf(key); return ((D.layout.cells || {})[f.module] || []).find(c => c.file === f.file); }
 function moduleSize(moduleId) { return (D.layout.sizes || {})[moduleId] || D.layout.size; }
@@ -451,8 +464,8 @@ function draw() {
   for (const e of edges) {
     const a = anchorOf(e.from), b = anchorOf(e.to); if (!a || !b || a.key === b.key) continue;
     const key = a.key + "\u0000" + b.key;
-    if (!pairs.has(key)) pairs.set(key, { from: a.key, to: b.key, a, b, references: [], count: 0, violation: false, new: false });
-    const pair = pairs.get(key); pair.references.push(...e.references); pair.count += e.count; pair.violation ||= e.violation; pair.new ||= e.new;
+    if (!pairs.has(key)) pairs.set(key, { from: a.key, to: b.key, a, b, references: [], imports: [], count: 0, violation: false, new: false });
+    const pair = pairs.get(key); pair.references.push(...e.references); pair.imports.push(...(e.imports || [])); pair.count += e.count; pair.violation ||= e.violation; pair.new ||= e.new;
   }
   const edgeLayer = el("g", {}, svg);
   const maxCount = Math.max(1, ...[...pairs.values()].map(e => e.count));
@@ -462,7 +475,8 @@ function draw() {
     // dashed with a hollow head. A pair with both bows them to opposite sides.
     const uses = e.references.filter(r => !inherits(r.kind)), inherited = e.references.filter(r => inherits(r.kind));
     const parts = [];
-    if (uses.length) parts.push({ refs: uses, inherit: false, bend: 0.12 });
+    // An edge with only imports, such as a blank import, still draws as a use.
+    if (uses.length || (!inherited.length && e.imports.length)) parts.push({ refs: uses, inherit: false, bend: 0.12 });
     if (inherited.length) parts.push({ refs: inherited, inherit: true, bend: uses.length ? -0.12 : 0.12 });
     parts.forEach((part, index) => {
       const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2, dx = to.x - from.x, dy = to.y - from.y;
@@ -473,7 +487,8 @@ function draw() {
       const width = e.violation ? 2.5 : 1 + 3 * part.refs.length / maxCount;
       const dimmed = rel && !(relatedKey(rel, e.from) && relatedKey(rel, e.to));
       const kinds = part.inherit ? [...new Set(part.refs.map(r => r.kind))].join(", ") : "uses";
-      const label = `${from.label} → ${to.label} · ${kinds} · ${part.refs.length} reference${part.refs.length === 1 ? "" : "s"}${e.violation ? " · violation" + (e.rule ? ": " + e.rule : "") : ""}`;
+      const imported = !part.inherit && !part.refs.length ? ` · ${e.imports.length} import${e.imports.length === 1 ? "" : "s"}, no references` : "";
+      const label = `${from.label} → ${to.label} · ${kinds} · ${part.refs.length} reference${part.refs.length === 1 ? "" : "s"}${imported}${e.violation ? " · violation" + (e.rule ? ": " + e.rule : "") : ""}`;
       const path = el("path", { d: `M${a.x},${a.y} Q${cx},${cy} ${b.x},${b.y}`, fill: "none", stroke, "stroke-width": width, "marker-end": part.inherit ? "url(#inherit)" : "url(#arrow)", "vector-effect": "non-scaling-stroke", "data-label": label, class: dimmed && !e.violation ? "dim" : "", tabindex: 0, role: "button", "aria-label": `${part.inherit ? "Inherits" : "Dependency"} ${from.label} to ${to.label}${e.violation ? ", layer violation" : ""}` }, edgeLayer);
       if (part.inherit) path.setAttribute("stroke-dasharray", "6 4");
       path.dataset.edge = e.from + "|" + e.to;
@@ -665,7 +680,8 @@ function inspect() {
     const uses = links.filter(l => l.from === s.id).map(l => l.to), callers = links.filter(l => l.to === s.id).map(l => l.from);
     if (uses.length) { box.appendChild(h("h2", {}, "Uses")); const c = h("div", { class: "chips" }); [...new Set(uses)].forEach(id => chip(id, c)); box.appendChild(c); }
     if (callers.length) { box.appendChild(h("h2", {}, "Callers")); const c = h("div", { class: "chips" }); [...new Set(callers)].forEach(id => chip(id, c)); box.appendChild(c); }
-    if (s.source) { box.appendChild(h("h2", {}, "Code")); box.appendChild(h("pre", {}, s.source)); }
+    if (s.doc) { box.appendChild(h("h2", {}, "Documentation")); box.appendChild(h("pre", { class: "doc" }, s.doc)); }
+    const code = codeOf(s); if (code) { box.appendChild(h("h2", {}, "Code")); box.appendChild(h("pre", {}, code)); }
     sliceBlock(box, s.slice);
   } else if (sel.type === "file") {
     const f = fileOf(sel.id), cell = fileCell(sel.id), m = modules.get(f.module); if (!cell || !m) return;
@@ -685,6 +701,9 @@ function inspect() {
     list("Uses", uses); list("Used by", usedBy);
     if (contracts.length) { box.appendChild(h("h2", {}, `Contracts (${contracts.length})`)); const c = h("div", { class: "chips" }); contracts.forEach(s => chip(s.id, c)); box.appendChild(c); }
     if (internal.length) { box.appendChild(h("h2", {}, `Internal (${internal.length})`)); const c = h("div", { class: "chips" }); internal.forEach(s => chip(s.id, c)); box.appendChild(c); }
+    const text = fileSource(f.file);
+    box.appendChild(h("h2", {}, text ? `Code (${text.split("\n").length} lines)` : "Code"));
+    box.appendChild(text ? h("pre", { class: "file" }, text) : h("p", {}, "This file is too large, or could not be read, to show here."));
   } else if (sel.type === "module") {
     const m = modules.get(sel.id); if (!m) return;
     box.appendChild(h("h3", {}, m.label || m.path));
@@ -695,7 +714,11 @@ function inspect() {
       const row = h("tr"); row.appendChild(h("td", {}, label)); row.appendChild(h("td", {}, m.before ? String(m.before[key]) : "—")); row.appendChild(h("td", {}, String(m.metrics[key]))); t.appendChild(row);
     }
     box.appendChild(t);
-    if (m.files && m.files.length) { box.appendChild(h("h2", {}, "Files")); const ul = h("ul"); m.files.forEach(f => ul.appendChild(h("li", {}, f))); box.appendChild(ul); }
+    if (m.files && m.files.length) {
+      box.appendChild(h("h2", {}, "Files")); const ul = h("ul");
+      m.files.forEach(f => { const key = fileKey(m.id, f), li = h("li", fileCell(key) ? { class: "link", tabindex: 0, role: "button" } : {}, f); if (fileCell(key)) { li.addEventListener("click", () => select({ type: "file", id: key })); li.addEventListener("keydown", ev => { if (ev_is(ev)) { ev.preventDefault(); select({ type: "file", id: key }); } }); } ul.appendChild(li); });
+      box.appendChild(ul);
+    }
     const contracts = (byModule.get(m.id) || []).filter(s => s.contract);
     if (contracts.length) { box.appendChild(h("h2", {}, `Contracts (${contracts.length})`)); const c = h("div", { class: "chips" }); contracts.forEach(s => chip(s.id, c)); box.appendChild(c); }
     sliceBlock(box, m.slice);
@@ -709,7 +732,11 @@ function inspect() {
     box.appendChild(p);
     box.appendChild(h("h2", {}, `References (${e.references.length})`));
     const ul = h("ul"); for (const r of e.references) { const li = h("li"); li.appendChild(h("code", {}, `${r.from.split(":").pop()} → ${r.to.split(":").pop()}`)); li.appendChild(document.createTextNode(` ${r.kind} at ${r.file}:${r.line}`)); ul.appendChild(li); } box.appendChild(ul);
-    const slice = { schema: "treaty/slice/v1", violation: e.violation ? { rule: e.rule || `${a.layer} may not depend on ${b.layer}`, from: e.from, to: e.to, references: e.references } : null };
+    if (e.imports && e.imports.length) {
+      box.appendChild(h("h2", {}, `Imports (${e.imports.length})`));
+      const il = h("ul"); for (const i of e.imports) { const li = h("li"); li.appendChild(h("code", {}, i.to)); li.appendChild(document.createTextNode(` imported at ${i.file}:${i.line}`)); il.appendChild(li); } box.appendChild(il);
+    }
+    const slice = { schema: "treaty/slice/v1", violation: e.violation ? { rule: e.rule || `${a.layer} may not depend on ${b.layer}`, from: e.from, to: e.to, references: e.references, imports: e.imports } : null };
     if (e.violation) sliceBlock(box, slice);
   } else if (sel.type === "group") {
     const g = groups.get(sel.id); if (!g) return;

@@ -32,7 +32,13 @@ type launcher struct {
 }
 
 func main() {
-	root, err := os.Getwd()
+	workingDir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "treaty: %v\n", err)
+		os.Exit(2)
+	}
+
+	root, args, err := cli.Directory(os.Args[1:], workingDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "treaty: %v\n", err)
 		os.Exit(2)
@@ -53,7 +59,7 @@ func main() {
 	)
 
 	start := launcher{service: service, watcher: filesystem.NewWatcher(root), workspace: workspace}
-	os.Exit(cli.Run(os.Args[1:], service, start, os.Stdin, os.Stdout, os.Stderr))
+	os.Exit(cli.Run(args, service, start, os.Stdin, os.Stdout, os.Stderr))
 }
 
 // MCP serves the live graph over stdio. When a live map is already served

@@ -26,6 +26,8 @@ type glob struct {
 // architecture is the person's decision; the tool only fits the code to it.
 //
 // Notes:
+//   - For none, the default, the config declares no architecture: nothing is
+//     placed and every dependency is allowed.
 //   - For hexagonal, clean and layered, programs, such as Go main packages,
 //     and other modules nothing imports are composition. A module that
 //     imports nothing in the repository but is used goes innermost, or
@@ -41,7 +43,7 @@ type glob struct {
 //     only when it adds no violation, and it decides an adapter's side.
 //
 // Parameters:
-//   - style: the architecture, one of rules.Styles; empty means hexagonal.
+//   - style: the architecture, one of rules.Styles; empty means none.
 //
 // Returns:
 //   - path: where the draft config was written.
@@ -52,7 +54,7 @@ type glob struct {
 //   - rules.ErrArchitecture: style is not one of rules.Styles.
 func (this *Service) Init(style string) (path string, err error) {
 	if style == "" {
-		style = rules.StyleHexagonal
+		style = rules.StyleNone
 	}
 
 	if !slices.Contains(rules.Styles, style) {
@@ -254,6 +256,7 @@ func layerDraft(style string, proposal map[string]string) string {
 	builder.WriteString("# deepest module that imports them. Directory names only break ties.\n")
 	writeUnplaced(&builder, proposal, "with no imports either way to place them by")
 	if style == rules.StyleHexagonal {
+		builder.WriteString("architecture: hexagonal\n")
 		builder.WriteString("layers:\n")
 		for _, group := range []string{graph.LayerComposition, graph.LayerDomain, graph.LayerApplication} {
 			fmt.Fprintf(&builder, "  %s: %s\n", group, yamlList(groups[group]))
@@ -304,6 +307,8 @@ func outsideIn(style string) []string {
 //   - text: the same proposal as a treaty.yaml draft.
 func propose(g *graph.Graph, style string) (architecture rules.Architecture, text string) {
 	switch style {
+	case rules.StyleNone:
+		return rules.Architecture{Style: rules.StyleNone}, noneDraft()
 	case rules.StyleSlices, rules.StyleModular:
 		root, proposal := proposeSections(g, style)
 		return architectureFrom(style, root, proposal), sectionDraft(style, root, proposal)
@@ -617,6 +622,17 @@ func sectionDirs(g *graph.Graph) []string {
 
 	sort.Strings(result)
 	return result
+}
+
+// noneDraft writes the config that declares no architecture.
+func noneDraft() string {
+	var builder strings.Builder
+	builder.WriteString("# Written by treaty init. No architecture is declared, so every dependency is\n")
+	builder.WriteString("# allowed; contracts and their changes are still checked. To declare one, run\n")
+	builder.WriteString("# treaty init --architecture <hexagonal, clean, layered, slices or modular>.\n")
+	builder.WriteString("architecture: none\n")
+	builder.WriteString("rules:\n  fail_on: [breaking]\n")
+	return builder.String()
 }
 
 // sectionDraft writes the proposed config for slices or modular.

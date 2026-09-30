@@ -31,20 +31,7 @@ func (this *Live) Allowed(from, to string) (result string, err error) {
 	if err != nil {
 		return "", err
 	}
-
-	architecture := current.config.Architecture
-	fromID, fromPlace := current.locate(from)
-	toID, toPlace := current.locate(to)
-	verdict, rule := "allowed", ""
-	if fromID != toID {
-		if allowed, broken := architecture.Check(fromPlace, toPlace); !allowed {
-			verdict, rule = "not allowed", "rule: "+broken+"\n"
-		}
-	}
-
-	return fmt.Sprintf("%s: %s (%s) → %s (%s)\n%s%s may depend on: %s\n",
-		verdict, fromID, placeName(fromPlace), toID, placeName(toPlace), rule,
-		placeName(fromPlace), strings.Join(architecture.MayUse(fromPlace), ", ")), nil
+	return current.allowed(from, to), nil
 }
 
 // Changes describes how the architecture differs from the baseline: contract
@@ -117,8 +104,8 @@ func (this *Live) Changes() (result string, err error) {
 		key := violation.From + " → " + violation.To
 		headViolations[key] = true
 		if !baseViolations[key] {
-			ref := violation.References[0]
-			newViolations = append(newViolations, fmt.Sprintf("%s (%s; first at %s:%d)", key, violation.Rule, ref.File, ref.Line))
+			file, line, _ := violation.First()
+			newViolations = append(newViolations, fmt.Sprintf("%s (%s; first at %s:%d)", key, violation.Rule, file, line))
 		}
 	}
 
@@ -194,38 +181,7 @@ func (this *Live) Find(query, kind string) (result string, err error) {
 	if err != nil {
 		return "", err
 	}
-
-	needle := strings.ToLower(query)
-	var matches []*graph.Symbol
-	for _, symbol := range current.head.Symbols {
-		if (kind == "" || symbol.Kind == kind) && strings.Contains(strings.ToLower(symbol.ID), needle) {
-			matches = append(matches, symbol)
-		}
-	}
-
-	sort.SliceStable(matches, func(i, j int) bool {
-		if matches[i].Contract != matches[j].Contract {
-			return matches[i].Contract
-		}
-
-		return matches[i].ID < matches[j].ID
-	})
-
-	var builder strings.Builder
-	for index, symbol := range matches {
-		if index == findLimit {
-			fmt.Fprintf(&builder, "… %d more; narrow the query\n", len(matches)-findLimit)
-			break
-		}
-
-		fmt.Fprintf(&builder, "%s  %s  %s:%d  %s\n", symbol.ID, symbol.Kind, symbol.File, symbol.Line, symbol.Signature)
-	}
-
-	if len(matches) == 0 {
-		builder.WriteString("no symbol matches\n")
-	}
-
-	return builder.String(), nil
+	return current.find(query, kind), nil
 }
 
 // Impact lists everything that depends on a symbol or module, transitively:
@@ -245,87 +201,7 @@ func (this *Live) Impact(target string) (result string, err error) {
 	if err != nil {
 		return "", err
 	}
-
-	g := current.head
-	var start []string
-	switch {
-	case g.Symbol(target) != nil:
-		start = []string{target}
-	case g.Module(target) != nil:
-		for _, symbol := range g.SymbolsIn(target) {
-			start = append(start, symbol.ID)
-		}
-	default:
-		return "", fmt.Errorf("%w: %s", ErrUnknownTarget, target)
-	}
-
-	callers := map[string][]string{}
-	for _, edge := range g.Edges {
-		callers[edge.To] = append(callers[edge.To], edge.From)
-	}
-
-	seen := map[string]bool{}
-	for _, id := range start {
-		seen[id] = true
-	}
-
-	queue := append([]string(nil), start...)
-	byModule := map[string][]*graph.Symbol{}
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
-		for _, caller := range callers[id] {
-			if seen[caller] {
-				continue
-			}
-
-			seen[caller] = true
-			queue = append(queue, caller)
-			symbol := g.Symbol(caller)
-			if g.Module(target) == nil || symbol.Module != target {
-				byModule[symbol.Module] = append(byModule[symbol.Module], symbol)
-			}
-		}
-	}
-
-	modules := make([]string, 0, len(byModule))
-	total, contracts := 0, 0
-	for module, symbols := range byModule {
-		modules = append(modules, module)
-		total += len(symbols)
-		for _, symbol := range symbols {
-			if symbol.Contract {
-				contracts++
-			}
-		}
-	}
-
-	sort.Strings(modules)
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "%s: %d dependent symbol(s), %d of them contracts, in %d module(s)\n", target, total, contracts, len(modules))
-	for _, module := range modules {
-		symbols := byModule[module]
-		sort.Slice(symbols, func(i, j int) bool {
-			if symbols[i].Contract != symbols[j].Contract {
-				return symbols[i].Contract
-			}
-
-			return symbols[i].ID < symbols[j].ID
-		})
-
-		fmt.Fprintf(&builder, "\n%s (%s)\n", module, placeName(placeOf(g, module)))
-		for _, symbol := range symbols {
-			_, name := graph.SplitSymbolID(symbol.ID)
-			marker := " "
-			if symbol.Contract {
-				marker = "*"
-			}
-
-			fmt.Fprintf(&builder, " %s %s  %s:%d\n", marker, name, symbol.File, symbol.Line)
-		}
-	}
-
-	return builder.String(), nil
+	return current.impact(target)
 }
 
 // Overview describes the whole architecture compactly: every module by
@@ -340,57 +216,7 @@ func (this *Live) Overview() (result string, err error) {
 	if err != nil {
 		return "", err
 	}
-
-	g := current.head
-	contracts := map[string]int{}
-	for _, symbol := range g.Symbols {
-		if symbol.Contract {
-			contracts[symbol.Module]++
-		}
-	}
-
-	byLayer := map[string][]*graph.Module{}
-	for _, module := range g.Modules {
-		key := placeName(placement(module))
-		byLayer[key] = append(byLayer[key], module)
-	}
-
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "%d modules, %d symbols, baseline %s\n", len(g.Modules), len(g.Symbols), current.baseRef)
-	builder.WriteString(current.config.Architecture.Summary() + "\n")
-	for _, layer := range overviewOrder(current.config.Architecture, byLayer) {
-		modules := byLayer[layer]
-		if len(modules) == 0 {
-			continue
-		}
-
-		fmt.Fprintf(&builder, "\n%s\n", layer)
-		for _, module := range modules {
-			metric := current.metrics[module.ID]
-			fmt.Fprintf(&builder, "  %s  %d contracts  I=%.2f A=%.2f\n", module.ID, contracts[module.ID], metric.Instability, metric.Abstractness)
-		}
-	}
-
-	builder.WriteString("\ndependencies (references)\n")
-	violating := map[string]bool{}
-	for _, violation := range current.violations {
-		violating[violation.From+" "+violation.To] = true
-	}
-
-	for _, edge := range g.ModuleEdges() {
-		marker := ""
-		if violating[edge.From+" "+edge.To] {
-			marker = "  VIOLATION"
-		}
-
-		fmt.Fprintf(&builder, "  %s → %s (%d)%s\n", edge.From, edge.To, len(edge.References), marker)
-	}
-
-	if len(current.changes) > 0 {
-		fmt.Fprintf(&builder, "\n%d contract change(s) since the baseline; call changes for detail\n", len(current.changes))
-	}
-
-	return builder.String(), nil
+	return current.overview(), nil
 }
 
 // Plan saves unimplemented CML as a design and checks it against the live
@@ -492,6 +318,206 @@ func (this *Live) Slice(target string) (result Slice, err error) {
 	}
 
 	return buildSlice(current, target)
+}
+
+// allowed says whether module from may depend on module to, and why.
+func (this *analysis) allowed(from, to string) (result string) {
+	architecture := this.config.Architecture
+	fromID, fromPlace := this.locate(from)
+	toID, toPlace := this.locate(to)
+	verdict, rule := "allowed", ""
+	if fromID != toID {
+		if allowed, broken := architecture.Check(fromPlace, toPlace); !allowed {
+			verdict, rule = "not allowed", "rule: "+broken+"\n"
+		}
+	}
+
+	return fmt.Sprintf("%s: %s (%s) → %s (%s)\n%s%s may depend on: %s\n",
+		verdict, fromID, placeName(fromPlace), toID, placeName(toPlace), rule,
+		placeName(fromPlace), strings.Join(architecture.MayUse(fromPlace), ", "))
+}
+
+// find lists the symbols whose id contains query, contracts first.
+func (this *analysis) find(query, kind string) (result string) {
+	needle := strings.ToLower(query)
+	var matches []*graph.Symbol
+	for _, symbol := range this.head.Symbols {
+		if (kind == "" || symbol.Kind == kind) && strings.Contains(strings.ToLower(symbol.ID), needle) {
+			matches = append(matches, symbol)
+		}
+	}
+
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].Contract != matches[j].Contract {
+			return matches[i].Contract
+		}
+
+		return matches[i].ID < matches[j].ID
+	})
+
+	var builder strings.Builder
+	for index, symbol := range matches {
+		if index == findLimit {
+			fmt.Fprintf(&builder, "… %d more; narrow the query\n", len(matches)-findLimit)
+			break
+		}
+
+		fmt.Fprintf(&builder, "%s  %s  %s:%d  %s\n", symbol.ID, symbol.Kind, symbol.File, symbol.Line, symbol.Signature)
+	}
+
+	if len(matches) == 0 {
+		builder.WriteString("no symbol matches\n")
+	}
+
+	return builder.String()
+}
+
+// impact lists every transitive dependent of target, grouped by module.
+func (this *analysis) impact(target string) (result string, err error) {
+	g := this.head
+	var start []string
+	switch {
+	case g.Symbol(target) != nil:
+		start = []string{target}
+	case g.Module(target) != nil:
+		for _, symbol := range g.SymbolsIn(target) {
+			start = append(start, symbol.ID)
+		}
+	default:
+		return "", fmt.Errorf("%w: %s", ErrUnknownTarget, target)
+	}
+
+	callers := map[string][]string{}
+	for _, edge := range g.Edges {
+		callers[edge.To] = append(callers[edge.To], edge.From)
+	}
+
+	seen := map[string]bool{}
+	for _, id := range start {
+		seen[id] = true
+	}
+
+	queue := append([]string(nil), start...)
+	byModule := map[string][]*graph.Symbol{}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		for _, caller := range callers[id] {
+			if seen[caller] {
+				continue
+			}
+
+			seen[caller] = true
+			queue = append(queue, caller)
+			symbol := g.Symbol(caller)
+			if g.Module(target) == nil || symbol.Module != target {
+				byModule[symbol.Module] = append(byModule[symbol.Module], symbol)
+			}
+		}
+	}
+
+	modules := make([]string, 0, len(byModule))
+	total, contracts := 0, 0
+	for module, symbols := range byModule {
+		modules = append(modules, module)
+		total += len(symbols)
+		for _, symbol := range symbols {
+			if symbol.Contract {
+				contracts++
+			}
+		}
+	}
+
+	sort.Strings(modules)
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "%s: %d dependent symbol(s), %d of them contracts, in %d module(s)\n", target, total, contracts, len(modules))
+	for _, module := range modules {
+		symbols := byModule[module]
+		sort.Slice(symbols, func(i, j int) bool {
+			if symbols[i].Contract != symbols[j].Contract {
+				return symbols[i].Contract
+			}
+
+			return symbols[i].ID < symbols[j].ID
+		})
+
+		fmt.Fprintf(&builder, "\n%s (%s)\n", module, placeName(placeOf(g, module)))
+		for _, symbol := range symbols {
+			_, name := graph.SplitSymbolID(symbol.ID)
+			marker := " "
+			if symbol.Contract {
+				marker = "*"
+			}
+
+			fmt.Fprintf(&builder, " %s %s  %s:%d\n", marker, name, symbol.File, symbol.Line)
+		}
+	}
+
+	return builder.String(), nil
+}
+
+// overview describes every module by layer and every module dependency.
+func (this *analysis) overview() (result string) {
+	g := this.head
+	contracts := map[string]int{}
+	for _, symbol := range g.Symbols {
+		if symbol.Contract {
+			contracts[symbol.Module]++
+		}
+	}
+
+	byLayer := map[string][]*graph.Module{}
+	for _, module := range g.Modules {
+		key := placeName(placement(module))
+		byLayer[key] = append(byLayer[key], module)
+	}
+
+	var builder strings.Builder
+	baseline := this.baseRef
+	if baseline == "" {
+		baseline = "none"
+	}
+
+	fmt.Fprintf(&builder, "%d modules, %d symbols, baseline %s\n", len(g.Modules), len(g.Symbols), baseline)
+	builder.WriteString(this.config.Architecture.Summary() + "\n")
+	for _, layer := range overviewOrder(this.config.Architecture, byLayer) {
+		modules := byLayer[layer]
+		if len(modules) == 0 {
+			continue
+		}
+
+		fmt.Fprintf(&builder, "\n%s\n", layer)
+		for _, module := range modules {
+			metric := this.metrics[module.ID]
+			fmt.Fprintf(&builder, "  %s  %d contracts  I=%.2f A=%.2f\n", module.ID, contracts[module.ID], metric.Instability, metric.Abstractness)
+		}
+	}
+
+	builder.WriteString("\ndependencies (references)\n")
+	violating := map[string]bool{}
+	for _, violation := range this.violations {
+		violating[violation.From+" "+violation.To] = true
+	}
+
+	for _, edge := range g.ModuleEdges() {
+		marker := ""
+		if violating[edge.From+" "+edge.To] {
+			marker = "  VIOLATION"
+		}
+
+		imports := ""
+		if len(edge.References) == 0 {
+			imports = ", imports only"
+		}
+
+		fmt.Fprintf(&builder, "  %s → %s (%d%s)%s\n", edge.From, edge.To, len(edge.References), imports, marker)
+	}
+
+	if len(this.changes) > 0 {
+		fmt.Fprintf(&builder, "\n%d contract change(s) since the baseline; call changes for detail\n", len(this.changes))
+	}
+
+	return builder.String()
 }
 
 // locate finds a module by id or path, and the placement it has or would

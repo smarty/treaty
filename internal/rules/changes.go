@@ -2,6 +2,7 @@ package rules
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -31,6 +32,11 @@ type Change struct {
 	// FieldsRemoved and FieldsAdded list the field lines that differ.
 	FieldsRemoved []string `json:"fields_removed,omitempty"`
 	FieldsAdded   []string `json:"fields_added,omitempty"`
+
+	// Absorbed marks a breaking change or removal that only this repository
+	// can see: the module is private and every dependent changed with it. It
+	// is still breaking.
+	Absorbed bool `json:"absorbed,omitempty"`
 }
 
 // Compatibility decides whether a changed signature is compatible. Each
@@ -49,6 +55,11 @@ type Compatibility func(before, after *graph.Symbol) bool
 //     the name is kept and the module changed, or the module is kept and
 //     only the name changed in the signature. Members of a moved type are
 //     folded into the type's change.
+//   - Nothing can import an entry module, so its removed symbols are not
+//     listed and its breaking changes are implementation changes. Moves out
+//     of it are still paired.
+//   - A breaking change or removal in a private module is absorbed when
+//     every dependent in head changed too.
 //
 // Parameters:
 //   - base: the graph before the change.
@@ -94,6 +105,7 @@ func Classify(base, head *graph.Graph, compatible Compatibility) []Change {
 	}
 
 	moves := pairMoves(base, head, byID)
+	reach(base, head, byID, moves)
 	var result []Change
 	for id, change := range byID {
 		change.Symbol = id
@@ -258,6 +270,46 @@ func pairMoves(base, head *graph.Graph, changes map[string]*Change) map[string]s
 	}
 
 	return result
+}
+
+// reach applies what can depend on a changed symbol: nothing, for an entry
+// module, and only this repository, for a private one.
+func reach(base, head *graph.Graph, changes map[string]*Change, moves map[string]string) {
+	changed := map[string]bool{}
+	for id := range changes {
+		changed[id] = true
+	}
+
+	for to := range moves {
+		changed[to] = true
+	}
+
+	callers := map[string][]string{}
+	for _, edge := range head.Edges {
+		callers[edge.To] = append(callers[edge.To], edge.From)
+	}
+
+	for id, change := range changes {
+		if change.Kind != ChangeBreaking && change.Kind != ChangeRemoved {
+			continue
+		}
+
+		g := head
+		symbol := head.Symbol(id)
+		if symbol == nil {
+			g, symbol = base, base.Symbol(id)
+		}
+
+		module := g.Module(symbol.Module)
+		switch {
+		case module.Entry && change.Kind == ChangeRemoved:
+			delete(changes, id)
+		case module.Entry:
+			change.Kind = ChangeImplementation
+		case module.Private && !slices.ContainsFunc(callers[id], func(caller string) bool { return !changed[caller] }):
+			change.Absorbed = true
+		}
+	}
 }
 
 func sameShape(before, after *graph.Symbol) bool {

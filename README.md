@@ -71,14 +71,19 @@ In the root of a Go repository:
 
 ```sh
 treaty init --architecture layered   # propose a treaty.yaml from the import graph
-treaty check                         # check the rules and contract changes; exits 1 on failure
+treaty check --base main             # check the rules and contract changes; exits 1 on failure
 treaty serve --open
 ```
 
 `treaty init` fits the code to the architecture you name, using the shape of
 the import graph. Directory names only act as hints. Without
-`--architecture`, it proposes hexagonal. Review and edit the draft before you
-rely on it.
+`--architecture`, it writes `architecture: none`: no architecture, so every
+dependency is allowed while contracts and their changes are still checked.
+A repository with no `treaty.yaml` is treated the same way. Review and edit
+the draft before you rely on it.
+
+`treaty check` without `--base` checks only the architecture, and says so. Give
+it the ref your work started from to classify contract changes too.
 
 A hexagonal `treaty.yaml` looks like this:
 
@@ -102,7 +107,8 @@ on everything, and nothing may depend on composition.
 
 | Architecture | Rules | Map |
 | --- | --- | --- |
-| `hexagonal` (default) | Dependencies point inward: domain ← application ← adapters. No adapter uses another adapter | Rings, with driving adapters on the left and driven on the right |
+| `none` (default) | No architecture: every dependency is allowed. Contracts and their changes are still checked | One region holding every module |
+| `hexagonal` | Dependencies point inward: domain ← application ← adapters. No adapter uses another adapter | Rings, with driving adapters on the left and driven on the right |
 | `clean` | Dependencies point inward: entities ← use cases ← interface adapters ← frameworks | Four rings |
 | `layered` | A layer may use itself and every layer below it. Skipping a layer is allowed; forbidding it is a team decision | Horizontal bands |
 | `slices` | A slice may use itself and shared code, never another slice. Optional layers inside every slice | A column per slice, or a grid of slices by layer |
@@ -204,15 +210,20 @@ map is already running. You and the agent always look at the same graph:
 
 | Command | Does |
 | --- | --- |
-| `treaty check [--base <ref>] [--format json\|text]` | Runs every check on the diff from base to HEAD; exits 1 on failure |
+| `treaty -C <dir> <command>` | Runs any command on the repository at `dir`, as `git -C` does; `--dir <dir>` also works |
+| `treaty check [--base <ref>] [--format json\|text]` | Runs every check on the working tree, and on its diff from base when one is given; exits 1 on failure |
+| `treaty overview [--base <ref>]` | Prints every module by layer and every module dependency, in a few kilobytes |
+| `treaty find <query> [--kind <kind>]` | Lists symbols whose id contains the query, with file:line and signature |
+| `treaty slice <symbol, file or module>` | Prints a context slice as JSON, with file:line for everything it lists |
+| `treaty impact <symbol or module>` | Lists everything that depends on the target, transitively |
+| `treaty allowed <from> <to>` | Says whether one module may depend on another, and the rule |
 | `treaty dump [--at <ref>]` | Prints the graph in CML |
-| `treaty slice <symbol or module>` | Prints a context slice as JSON |
 | `treaty design new <name> [--from <target>]...` | Scaffolds a design in `.treaty/designs/` from current contracts |
 | `treaty design check <name>` | Compares a design with the code |
 | `treaty map [--base <ref>] [--design <name>]...` | Renders a static map to `.treaty/out/map.html` |
 | `treaty serve [--port <n>] [--open]` | Serves the live map until interrupted |
 | `treaty mcp [--port <n>]` | Serves the live graph over MCP on stdio, plus the live map |
-| `treaty init [--architecture <name>]` | Creates `.treaty/` and proposes a `treaty.yaml` for `hexagonal` (default), `clean`, `layered`, `slices` or `modular` |
+| `treaty init [--architecture <name>]` | Creates `.treaty/` and proposes a `treaty.yaml` for `none` (default), `hexagonal`, `clean`, `layered`, `slices` or `modular` |
 | `treaty url` | Prints the live map's address for this directory |
 | `treaty here [--force]` | Registers Treaty in this repository's `.mcp.json` |
 

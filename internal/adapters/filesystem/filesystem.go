@@ -114,8 +114,9 @@ func NewWorkspace(root string) *Workspace {
 //   - err: the file could not be read or parsed.
 func (this *Config) Load() (config app.Config, found bool, err error) {
 	config = app.Config{
-		FailOn: []string{rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingCycle},
-		WarnOn: []string{rules.FindingUnclassified},
+		Architecture: rules.Architecture{Style: rules.StyleNone},
+		FailOn:       []string{rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingCycle},
+		WarnOn:       []string{rules.FindingUnclassified},
 	}
 
 	data, err := os.ReadFile(filepath.Join(this.root, ConfigFile))
@@ -414,13 +415,21 @@ func (this *Workspace) WriteOutput(name string, data []byte) (path string, err e
 
 // architecture builds the rules from the file, innermost layer first.
 //
+// Notes:
+//   - With no architecture key, a file that lists layers or composition is
+//     hexagonal, as configs were before the key existed; one that lists
+//     neither declares no architecture.
+//
 // Returns:
 //   - result: the validated architecture.
 //   - err: the layers do not parse, or the architecture is invalid.
 func (this configFile) architecture() (result rules.Architecture, err error) {
 	result = rules.Architecture{Style: this.Architecture, Composition: this.Composition, Shared: this.Shared, Public: this.Public}
 	if result.Style == "" {
-		result.Style = rules.StyleHexagonal
+		result.Style = rules.StyleNone
+		if len(this.Composition) > 0 || len(this.Layers.Content) > 0 {
+			result.Style = rules.StyleHexagonal
+		}
 	}
 
 	switch {
