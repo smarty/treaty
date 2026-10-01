@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/smarty/treaty/internal/graph"
 	"github.com/smarty/treaty/internal/rules"
@@ -11,7 +12,7 @@ import (
 
 const SliceSchema = "treaty/slice/v1"
 
-var ErrUnknownTarget = errors.New("unknown symbol or module")
+var ErrUnknownTarget = errors.New("unknown symbol, module or file")
 
 // Neighbor is one direct use or caller in a slice, with where it is
 // declared, so it can be read without opening whole files.
@@ -85,14 +86,16 @@ type SliceSymbol struct {
 //
 // Parameters:
 //   - target: a symbol id, a module id, or a file as a path relative to the
-//     repository root, with or without its language prefix.
+//     repository root, with or without its language prefix; or a short name
+//     that matches exactly one, such as Store.CreateBook or store.go.
 //
 // Returns:
 //   - result: the slice.
 //   - err: the tree could not be read, or the target does not exist.
 //
 // Errors:
-//   - ErrUnknownTarget: no symbol, module or file has that id.
+//   - ErrUnknownTarget: nothing matches the target.
+//   - ErrAmbiguousTarget: several symbols, modules or files match it.
 func (this *Service) Slice(target string) (result Slice, err error) {
 	analysis, err := this.analyze("")
 	if err != nil {
@@ -103,6 +106,11 @@ func (this *Service) Slice(target string) (result Slice, err error) {
 }
 
 func buildSlice(analysis *analysis, target string) (Slice, error) {
+	target, err := analysis.resolve(target)
+	if err != nil {
+		return Slice{}, err
+	}
+
 	g := analysis.head
 	result := Slice{Schema: SliceSchema}
 	included := map[string]bool{}
@@ -274,4 +282,89 @@ func changeOf(analysis *analysis, id string) string {
 	}
 
 	return ""
+}
+
+// Text renders the slice compactly, one line per entry, for agents: the
+// same content as the JSON form in a fraction of the characters. Symbols in
+// the target's own module are named without their module, since short names
+// resolve.
+//
+// Returns:
+//   - result: the slice as text.
+func (this Slice) Text() string {
+	var builder strings.Builder
+	scope := this.TaskScope
+	module := scope.Module
+	switch {
+	case scope.Symbol != "":
+		module, _ = graph.SplitSymbolID(scope.Symbol)
+		fmt.Fprintf(&builder, "slice %s  %s  %s:%d-%d  layer %s\n", scope.Symbol, scope.Kind, scope.File, scope.Line, scope.EndLine, scope.Layer)
+	case scope.File != "":
+		fmt.Fprintf(&builder, "slice %s  module %s  layer %s\n", scope.File, scope.Module, scope.Layer)
+	default:
+		fmt.Fprintf(&builder, "slice %s  layer %s\n", scope.Module, scope.Layer)
+	}
+
+	if this.Contract != nil {
+		fmt.Fprintf(&builder, "contract: %s", this.Contract.Signature)
+		if this.Contract.Change != "" {
+			fmt.Fprintf(&builder, "  (change: %s)", this.Contract.Change)
+		}
+
+		builder.WriteString("\n")
+	}
+
+	fmt.Fprintf(&builder, "may depend on: %s\n", strings.Join(this.MayDepend, ", "))
+	short := func(id string) string {
+		if owner, name := graph.SplitSymbolID(id); owner == module {
+			return name
+		}
+
+		return id
+	}
+
+	if len(this.Symbols) > 0 {
+		fmt.Fprintf(&builder, "symbols (%d):\n", len(this.Symbols))
+		for _, symbol := range this.Symbols {
+			fmt.Fprintf(&builder, "  %d-%d  %s  %s  %s\n", symbol.Line, symbol.EndLine, symbol.Kind, short(symbol.Symbol), symbol.Signature)
+		}
+	}
+
+	if len(this.Contracts) > 0 {
+		fmt.Fprintf(&builder, "contracts (%d):\n", len(this.Contracts))
+		for _, symbol := range this.Contracts {
+			fmt.Fprintf(&builder, "  %s:%d  %s  %s  %s\n", symbol.File, symbol.Line, symbol.Kind, short(symbol.Symbol), symbol.Signature)
+		}
+	}
+
+	if len(this.Files) > 0 {
+		fmt.Fprintf(&builder, "files (%d):\n", len(this.Files))
+		for _, file := range this.Files {
+			fmt.Fprintf(&builder, "  %s  %d symbols, %d contracts\n", file.File, file.Symbols, file.Contracts)
+		}
+	}
+
+	if len(this.Neighbors) > 0 {
+		fmt.Fprintf(&builder, "neighbors (%d):\n", len(this.Neighbors))
+		for _, neighbor := range this.Neighbors {
+			fmt.Fprintf(&builder, "  %-9s  %s  %s:%d", neighbor.Relation, short(neighbor.Symbol), neighbor.File, neighbor.Line)
+			if neighbor.Signature != "" {
+				fmt.Fprintf(&builder, "  %s", neighbor.Signature)
+			}
+
+			builder.WriteString("\n")
+		}
+	}
+
+	if len(this.Dependents) > 0 {
+		fmt.Fprintf(&builder, "dependents: %s\n", strings.Join(this.Dependents, ", "))
+	}
+
+	for _, violation := range this.Violations {
+		file, line, first := violation.First()
+		fmt.Fprintf(&builder, "violation: %s → %s: %s; first %s at %s:%d\n", violation.From, violation.To, violation.Rule, first, file, line)
+	}
+
+	fmt.Fprintf(&builder, "excluded: %d modules, %d symbols\n", this.Excluded.Modules, this.Excluded.Symbols)
+	return builder.String()
 }

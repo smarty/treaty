@@ -36,6 +36,17 @@ type fileState struct {
 	lines      []string
 }
 
+// moduleRoot is one Go module in the tree: the path its go.mod declares and
+// the directory holding that go.mod.
+type moduleRoot struct {
+	path string
+	dir  string
+}
+
+// moduleRoots are the tree's Go modules, longest module path first, so the
+// most specific module claims an import.
+type moduleRoots []moduleRoot
+
 // NewExtractor creates a Go extractor.
 //
 // Returns:
@@ -45,8 +56,13 @@ func NewExtractor() *Extractor {
 }
 
 // Extract reads every non-test Go file under root into one graph. A module
-// is a directory. Directories holding their own go.mod are separate Go
-// modules and are left out, as the go command leaves them out.
+// is a directory.
+//
+// Notes:
+//   - A sub-tree holding its own go.mod is read too, as part of the
+//     repository: its imports resolve through its own module path, and
+//     imports between it and the rest of the repository are dependencies
+//     like any other.
 //
 // Parameters:
 //   - root: the directory to read.
@@ -55,12 +71,11 @@ func NewExtractor() *Extractor {
 //   - result: the normalized graph, without layers.
 //   - err: a file could not be read.
 func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
-	files, err := goFiles(root)
+	files, roots, err := goFiles(root)
 	if err != nil {
 		return nil, err
 	}
 
-	modulePath := readGoModule(root)
 	result = graph.New()
 	var states []*fileState
 	packages := map[string]string{}
@@ -83,13 +98,13 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 	declared := map[*graph.Symbol][]source{}
 	for _, state := range states {
 		dir := path.Dir(state.path)
-		module := result.AddModule(&graph.Module{ID: state.module, Language: "go", Path: dir, Name: packages[dir], Entry: packages[dir] == "main", Private: internal(dir)})
+		module := result.AddModule(&graph.Module{ID: state.module, Language: "go", Path: dir, Name: packages[dir], Entry: packages[dir] == "main", Private: internal(dir), Manifest: roots.manifest(dir)})
 		module.Files = append(module.Files, state.path)
 		if moduleImports[state.module] == nil {
 			moduleImports[state.module] = map[string]bool{}
 		}
 
-		state.resolveImports(result, modulePath, packages, moduleImports[state.module])
+		state.resolveImports(result, roots, packages, moduleImports[state.module])
 		for _, declaration := range state.declarations {
 			candidate := &graph.Symbol{
 				ID:        graph.SymbolID(state.module, declaration.name),
@@ -105,8 +120,9 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 				Pointer:   declaration.pointer,
 				Fields:    declaration.fields,
 				Hash:      hash(declaration.hashText),
-				Doc:       docComment(state.lines, declaration.line),
 			}
+
+			candidate.Doc, candidate.DocLine = docComment(state.lines, declaration.line)
 
 			symbol := result.AddSymbol(candidate)
 			if symbol == candidate {
@@ -234,14 +250,10 @@ func (this *fileState) references(g *graph.Graph, symbol *graph.Symbol, declarat
 // resolveImports maps each import's name to its module and records every
 // in-repo import in the graph, blank and dot imports included, since each
 // is a dependency whether or not anything it provides is referenced.
-func (this *fileState) resolveImports(g *graph.Graph, modulePath string, packages map[string]string, moduleImports map[string]bool) {
+func (this *fileState) resolveImports(g *graph.Graph, roots moduleRoots, packages map[string]string, moduleImports map[string]bool) {
 	for _, spec := range this.sourceFile.imports {
 		alias := spec.alias
-		inRepo := modulePath != "" && (spec.path == modulePath || strings.HasPrefix(spec.path, modulePath+"/"))
-		dir := strings.TrimPrefix(spec.path, modulePath+"/")
-		if spec.path == modulePath {
-			dir = "."
-		}
+		dir, inRepo := roots.locate(spec.path)
 		if alias == "" {
 			alias = path.Base(spec.path)
 			if inRepo && packages[dir] != "" {
@@ -325,6 +337,33 @@ func (this *fileState) uniqueMethod(candidates []*graph.Symbol) string {
 	return found[0]
 }
 
+// locate finds the directory of an imported package that lives in this
+// tree, through the module whose path is the longest prefix of the import.
+func (this moduleRoots) locate(importPath string) (dir string, found bool) {
+	for _, root := range this {
+		rest, ok := strings.CutPrefix(importPath, root.path)
+		if !ok || (rest != "" && !strings.HasPrefix(rest, "/")) {
+			continue
+		}
+
+		return path.Join(root.dir, strings.TrimPrefix(rest, "/")), true
+	}
+
+	return "", false
+}
+
+// manifest names the go.mod in a package's directory, or empty when it has
+// none.
+func (this moduleRoots) manifest(dir string) string {
+	for _, root := range this {
+		if root.dir == dir {
+			return path.Join(dir, "go.mod")
+		}
+	}
+
+	return ""
+}
+
 // internal reports whether Go's internal rule limits a package to importers
 // inside this repository: some element of its path is internal.
 func internal(dir string) bool {
@@ -346,11 +385,12 @@ func repeatable(declaration *declaration) bool {
 //   - line: the declaration's first line, counting from 1.
 //
 // Returns:
-//   - result: the documentation text, empty when there is none.
-func docComment(lines []string, line int) string {
+//   - text: the documentation text, empty when there is none.
+//   - start: the line the comment starts on, or 0 when there is none.
+func docComment(lines []string, line int) (text string, start int) {
 	end := line - 2
 	if end < 0 || end >= len(lines) {
-		return ""
+		return "", 0
 	}
 
 	var result []string
@@ -363,6 +403,7 @@ func docComment(lines []string, line int) string {
 				break
 			}
 
+			start = index + 1
 			if directive(text) {
 				continue
 			}
@@ -373,20 +414,26 @@ func docComment(lines []string, line int) string {
 	case strings.HasSuffix(last, "*/"):
 		for index := end; index >= 0; index-- {
 			text := strings.TrimSpace(lines[index])
-			start := strings.Index(text, "/*")
-			if start >= 0 {
-				text = text[start+2:]
+			opening := strings.Index(text, "/*")
+			if opening >= 0 {
+				text = text[opening+2:]
 			}
 
 			text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(text, "*/"), "*"))
 			result = append([]string{text}, result...)
-			if start >= 0 {
+			if opening >= 0 {
+				start = index + 1
 				break
 			}
 		}
 	}
 
-	return strings.TrimSpace(strings.Join(result, "\n"))
+	text = strings.TrimSpace(strings.Join(result, "\n"))
+	if text == "" {
+		return "", 0
+	}
+
+	return text, start
 }
 
 // directive reports whether a line comment is a tool directive, such as
@@ -404,38 +451,39 @@ func contract(declaration *declaration) bool {
 	return exported(name) && exported(declaration.parent)
 }
 
-func goFiles(root string) ([]string, error) {
-	var result []string
-	err := filepath.WalkDir(root, func(current string, entry fs.DirEntry, walkErr error) error {
+// goFiles lists every non-test Go file under root and the Go modules that
+// hold them: the root's go.mod and every go.mod in a sub-tree.
+func goFiles(root string) (files []string, roots moduleRoots, err error) {
+	err = filepath.WalkDir(root, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 
 		name := entry.Name()
+		relative, _ := filepath.Rel(root, current)
+		relative = filepath.ToSlash(relative)
 		if entry.IsDir() {
 			if current != root && (strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || name == "vendor" || name == "testdata" || name == "node_modules") {
 				return filepath.SkipDir
 			}
 
-			// A directory with its own go.mod is a separate module, as the go
-			// command sees it: code that uses this one from outside.
-			if _, err := os.Stat(filepath.Join(current, "go.mod")); current != root && err == nil {
-				return filepath.SkipDir
+			if modulePath := readGoModule(filepath.Join(current, "go.mod")); modulePath != "" {
+				roots = append(roots, moduleRoot{path: modulePath, dir: relative})
 			}
 
 			return nil
 		}
 
 		if strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
-			relative, _ := filepath.Rel(root, current)
-			result = append(result, filepath.ToSlash(relative))
+			files = append(files, relative)
 		}
 
 		return nil
 	})
 
-	sort.Strings(result)
-	return result, err
+	sort.Strings(files)
+	sort.Slice(roots, func(i, j int) bool { return len(roots[i].path) > len(roots[j].path) })
+	return files, roots, err
 }
 
 func hash(text string) string {
@@ -490,8 +538,10 @@ func implementsEdges(g *graph.Graph, moduleImports map[string]map[string]bool) {
 	}
 }
 
-func readGoModule(root string) string {
-	file, err := os.Open(filepath.Join(root, "go.mod"))
+// readGoModule reads the module path a go.mod declares, or empty when the
+// file is missing or declares none.
+func readGoModule(name string) string {
+	file, err := os.Open(name)
 	if err != nil {
 		return ""
 	}
@@ -507,7 +557,7 @@ func readGoModule(root string) string {
 	return ""
 }
 
-// signatureKey parses a CML function line and returns its comparison key,
+// signatureKey parses a AutoPen function line and returns its comparison key,
 // or the line itself when it does not parse.
 func signatureKey(signature string) string {
 	src := []byte(signature)

@@ -63,9 +63,18 @@ type ConfigSource interface {
 	//   - found: false when no config file exists.
 	//   - err: a read or parse failure.
 	Load() (config Config, found bool, err error)
+
+	// Place edits the config so one module resolves to a placement, keeping
+	// the rest of the file as it is.
+	//
+	// Returns:
+	//   - path: where the config was written.
+	//   - err: there is no config, or the edit would not place the module
+	//     there.
+	Place(modulePath string, placement rules.Placement) (path string, err error)
 }
 
-// Declaration is what a dialect learns from one CML declaration line.
+// Declaration is what a dialect learns from one AutoPen declaration line.
 type Declaration struct {
 	Kind     string
 	Name     string
@@ -73,7 +82,7 @@ type Declaration struct {
 	Key      string
 }
 
-// Dialect is one language's knowledge of CML declaration lines.
+// Dialect is one language's knowledge of AutoPen declaration lines.
 type Dialect interface {
 	// Compatible applies the language's breaking-change rules.
 	Compatible(before, after *graph.Symbol) bool
@@ -138,8 +147,19 @@ type SourceExtractor interface {
 type Preferences struct {
 	Theme  string          `json:"theme,omitempty"`
 	Follow *bool           `json:"follow,omitempty"`
+	Legend *bool           `json:"legend,omitempty"`
 	Layout json.RawMessage `json:"layout,omitempty"`
 }
+
+// Position is where a person put a module on the map, in map units.
+type Position struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+// Positions are the places a person put modules on one repository's map:
+// for each architecture the map can draw, each module's position.
+type Positions map[string]map[string]Position
 
 // PreferenceStore keeps a person's preferences.
 type PreferenceStore interface {
@@ -198,8 +218,9 @@ type VersionControl interface {
 // Watcher notices changes to the working tree.
 type Watcher interface {
 	// Fingerprint summarizes every file that can change the graph, the
-	// config or a design; it differs whenever one of them changes.
-	Fingerprint() (string, error)
+	// config or a design; it differs whenever one of them changes. Files
+	// counts the files it covered, which sizes the repository.
+	Fingerprint() (fingerprint string, files int, err error)
 }
 
 // Workspace is the .treaty directory: designs and rendered output.
@@ -224,11 +245,18 @@ type Workspace interface {
 	// Designs lists the design names.
 	Designs() ([]string, error)
 
+	// Positions reads where the person put modules on the map, empty when
+	// nothing has been moved.
+	Positions() (Positions, error)
+
 	// ReadDesign reads a design by name.
 	ReadDesign(name string) (string, error)
 
 	// SaveDesign writes a design, replacing one with the same name.
 	SaveDesign(name, text string) (path string, err error)
+
+	// SavePositions replaces the saved module positions.
+	SavePositions(positions Positions) error
 
 	// WriteConfig replaces the config.
 	WriteConfig(text string) (path string, err error)

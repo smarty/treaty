@@ -26,6 +26,7 @@
     "focus": "#bd93f9",
     "glow": "rgba(189, 147, 249, .9)",
     "added": "#50fa7b",
+    "removed": "#ff5555",
     "changed": "#ffb86c",
     "violation": "#ff79c6",
     "planned": "#8be9fd",

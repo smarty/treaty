@@ -1,11 +1,11 @@
-package cml
+package autopen
 
 import (
 	"errors"
 	"testing"
 )
 
-const design = `cml 1
+const design = `autopen 1
 design "Scoped lifetimes"
 
 // A comment.
@@ -42,7 +42,7 @@ func TestParseDesign(t *testing.T) {
 		t.Fatal("a design is not a dump")
 	}
 
-	if printed := Print(document); printed != `cml 1
+	if printed := Print(document); printed != `autopen 1
 design "Scoped lifetimes"
 
 go:injection/scope/scope.go
@@ -58,7 +58,7 @@ go:injection/scope/scope.go
 }
 
 func TestParseDumpTokens(t *testing.T) {
-	document, err := Parse("cml 1\n\ngo:a/b.go\n  type T struct @3\n    Tag string `json:\"tag\"`\n    func M() @other.go:9 @ptr\n      @call go:a:f @10\n")
+	document, err := Parse("autopen 1\n\ngo:a/b.go\n  type T struct @3\n    Tag string `json:\"tag\"`\n    func M() @other.go:9 @ptr\n      @call go:a:f @10\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,12 +81,12 @@ func TestParseDumpTokens(t *testing.T) {
 func TestParseErrors(t *testing.T) {
 	for name, text := range map[string]string{
 		"no version":        "go:a\n",
-		"tab indent":        "cml 1\ngo:a\n\tfunc F()\n",
-		"odd indent":        "cml 1\ngo:a\n   func F()\n",
-		"too deep":          "cml 1\ngo:a\n      func F()\n",
-		"before header":     "cml 1\n  func F()\n",
-		"unknown directive": "cml 1\ngo:a\n  @maybe x\n",
-		"bad header":        "cml 1\nnot a header\n",
+		"tab indent":        "autopen 1\ngo:a\n\tfunc F()\n",
+		"odd indent":        "autopen 1\ngo:a\n   func F()\n",
+		"too deep":          "autopen 1\ngo:a\n      func F()\n",
+		"before header":     "autopen 1\n  func F()\n",
+		"unknown directive": "autopen 1\ngo:a\n  @maybe x\n",
+		"bad header":        "autopen 1\nnot a header\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			var parseErr *Error

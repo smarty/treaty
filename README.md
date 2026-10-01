@@ -143,7 +143,14 @@ public:      [".", "api/**"]           # what other contexts may use, relative t
 
 For `layered`, the layer names are yours. For `clean`, use
 the layer names `entities`, `use_cases`, `interface_adapters` and
-`frameworks`. The design document has the full rules.
+`frameworks`. For `layered`, `hexagonal` and `clean`, a glob that is exactly
+a module's path, such as `internal/web/admin`, wins over every wildcard, so
+one package can sit in a different layer from its directory's glob. The
+design document has the full rules.
+
+Treaty reads the whole repository, including sub-trees with their own
+`go.mod`. Their imports resolve through their own module paths, and imports
+between them and the rest of the repository count like any other.
 
 ## The live map
 
@@ -168,7 +175,32 @@ The review queue and the inspector are tabs in drawers beside the map. Drag
 a divider to resize a drawer. Drag a tab to move its panel into another
 drawer, split a drawer, join the map as a tab, or float it over the map.
 *Reset layout* restores the default.
-Click a file's cell to select it, just like a module or symbol.
+Click a file's cell to select it, just like a module or symbol: the
+inspector shows the file's code and its agent context slice, and a symbol
+shows its documentation and code. Within a file, symbols run values, types,
+interfaces, methods, then functions, each by name: the contracts clockwise
+from the left end of the file's bracket on the border, and the internals
+across the file's cell. A package that holds a `go.mod` shows it in the first
+cell of its ring, at 12:00; click it to read the file.
+Hide the key at the top of the map with its *Hide* button or `k`, and bring it
+back with *Key* or `k` again. Selecting never moves the map. A selection
+hidden in a collapsed group lights that group, and the inspector's *Go to*
+takes you there.
+
+To move a module, press and hold it without moving for half a second to
+pick it up, then drag it. The band, ring or area under the pointer lights
+up, and the tip says what a drop will do. Escape puts the module back.
+- **In its own band, ring or area:** the module stays where you drop it. The
+  position is saved for this repository and architecture in
+  `.treaty/positions.json`. Its group grows to keep it inside.
+  *Put it back* in the inspector returns it to its computed place.
+- **In another layer** (`layered`, `hexagonal` and `clean`), including a side
+  of the adapter ring or composition: Treaty edits `treaty.yaml` to move the
+  module there, keeping the file's comments. It adds the module's exact path
+  to the new layer's list and removes it from any other. The rules, checks and
+  agents follow at once. Dropping an unclassified module on a layer
+  classifies it. Moves between layers wait while another architecture is
+  previewed.
 
 The Theme menu offers System (following your OS) and 18 themes: Light and
 Dark in the style of VS Code's defaults; High Contrast and Color-blind Safe
@@ -196,28 +228,41 @@ map is already running. You and the agent always look at the same graph:
 | Tool | Answers |
 | --- | --- |
 | `overview` | The whole architecture in a few kilobytes: modules by layer, contract counts, module edges |
-| `find` | Symbols by name or kind, with id, file, line and signature |
-| `slice` | The context for working on one symbol or module |
-| `impact` | Everything that depends on a symbol, transitively, before an edit |
+| `find` | Symbols and struct fields by name or kind, with id, file, line and signature |
+| `slice` | The context for working on one symbol, file or module, one line per entry with file:line |
+| `source` | Just the code needed: a symbol from its documentation to its last line, or a file's lines, numbered. A long file gives its outline unless asked for all of it |
+| `impact` | Everything that depends on a symbol, file or module, transitively, before an edit |
 | `allowed` | Whether one module may depend on another, before an import is added |
 | `changes` | What changed in the architecture since the baseline, including new violations |
-| `plan` | The agent's intended contracts in CML, drawn on the map as unbuilt and filled in as the code is written |
+| `plan` | The agent's intended contracts in AutoPen, drawn on the map as unbuilt and filled in as the code is written |
 | `selection` | What the person has selected on the map, so they can point and say "work here" |
 | `show` | Asks the person to look at one thing. It is an offer on the map, never a forced move, and limited to once every 15 seconds |
-| `check`, `design_check` | The same checks as the CLI |
+| `check`, `design_check` | The same checks as the CLI; `check` gives the summary by default |
+
+Wherever a tool takes a target, it may be an id, a file or a short name that
+matches exactly one thing, such as `Store.CreateBook`, `CreateBook` or
+`store.go`. An ambiguous name lists its candidates.
+
+The agent doesn't have to ask about violations. Every tool result ends with a
+warning about any layer violation it hasn't been told about yet, such as one
+its last edit introduced, and asks it to fix the violation or explain it.
+
+The server watches the working tree twice a second, or every five seconds in
+a large repository (20,000 files or more, or one slow to walk).
 
 ## Commands
 
 | Command | Does |
 | --- | --- |
 | `treaty -C <dir> <command>` | Runs any command on the repository at `dir`, as `git -C` does; `--dir <dir>` also works |
-| `treaty check [--base <ref>] [--format json\|text]` | Runs every check on the working tree, and on its diff from base when one is given; exits 1 on failure |
+| `treaty check [--base <ref>] [--format json\|text\|summary]` | Runs every check on the working tree, and on its diff from base when one is given; exits 1 on failure. `summary` lists only the verdict, notes, violations and breaking changes, and counts the rest |
 | `treaty overview [--base <ref>]` | Prints every module by layer and every module dependency, in a few kilobytes |
-| `treaty find <query> [--kind <kind>]` | Lists symbols whose id contains the query, with file:line and signature |
-| `treaty slice <symbol, file or module>` | Prints a context slice as JSON, with file:line for everything it lists |
+| `treaty find <query> [--kind <kind>]` | Lists symbols and struct fields whose id contains the query, with file:line and signature |
+| `treaty slice <target> [--format text\|json]` | Prints a context slice, one line per entry with file:line; `--format json` for the full form |
+| `treaty source <symbol or file[:start-end]> [--all]` | Prints just that code, with line numbers. A file or range of more than 120 lines that is most of its file prints the file's outline, unless `--all` |
 | `treaty impact <symbol or module>` | Lists everything that depends on the target, transitively |
-| `treaty allowed <from> <to>` | Says whether one module may depend on another, and the rule |
-| `treaty dump [--at <ref>]` | Prints the graph in CML |
+| `treaty allowed <from> <to>` | Says whether one module may depend on another, and the rule. Modules may be ids, paths or short names |
+| `treaty dump [--at <ref>]` | Prints the graph in AutoPen |
 | `treaty design new <name> [--from <target>]...` | Scaffolds a design in `.treaty/designs/` from current contracts |
 | `treaty design check <name>` | Compares a design with the code |
 | `treaty map [--base <ref>] [--design <name>]...` | Renders a static map to `.treaty/out/map.html` |
@@ -227,13 +272,15 @@ map is already running. You and the agent always look at the same graph:
 | `treaty url` | Prints the live map's address for this directory |
 | `treaty here [--force]` | Registers Treaty in this repository's `.mcp.json` |
 
-## CML
+## AutoPen
 
-CML is Treaty's small diagram language and the model of its graph. For code,
-CML exists only in memory. People also write it by hand in design files,
-where they sketch new modules and contracts before the code exists. As the
-code is written, `treaty design check` compares the sketch with the code.
-See [CML syntax proposal.md](CML%20syntax%20proposal.md).
+AutoPen (formerly CML) is Treaty's small diagram language and the model of
+its graph. For code, AutoPen exists only in memory. People also write it by
+hand in design files, `.treaty/designs/<name>.pen`, where they sketch new
+modules and contracts before the code exists. As the code is written,
+`treaty design check` compares the sketch with the code. Designs saved as
+`.cml`, and documents that open with `cml 1`, still load.
+See [AutoPen syntax proposal.md](AutoPen%20syntax%20proposal.md).
 
 ## Status
 

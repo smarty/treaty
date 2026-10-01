@@ -18,7 +18,7 @@ var (
 	valueName = regexp.MustCompile(`^(?:const|var)\s+([A-Za-z_][A-Za-z0-9_]*)`)
 )
 
-// Dialect reads Go declaration lines in CML, with the same parser the
+// Dialect reads Go declaration lines in AutoPen, with the same parser the
 // extractor uses.
 type Dialect struct{}
 

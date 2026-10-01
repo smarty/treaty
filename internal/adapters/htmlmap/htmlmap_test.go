@@ -25,9 +25,15 @@ func TestLayoutHasNoOverlaps(t *testing.T) {
 	for i := range 50 {
 		kind := layers[i%len(layers)]
 		id := fmt.Sprintf("go:m%02d", i)
-		view.Modules = append(view.Modules, app.MapModule{ID: id, Path: id, Layer: kind.layer, Side: kind.side})
+		// Modules hold one to eight files, so their hexagons differ in size.
+		var files []string
+		for f := range 1 + i%8 {
+			files = append(files, fmt.Sprintf("%s/f%d.go", id, f))
+		}
+
+		view.Modules = append(view.Modules, app.MapModule{ID: id, Path: id, Layer: kind.layer, Side: kind.side, Files: files})
 		for j := range 40 {
-			view.Symbols = append(view.Symbols, app.MapSymbol{ID: fmt.Sprintf("%s:S%d", id, j), Module: id, Name: fmt.Sprintf("S%d", j), Kind: graph.KindFunction, Contract: true})
+			view.Symbols = append(view.Symbols, app.MapSymbol{ID: fmt.Sprintf("%s:S%d", id, j), Module: id, Name: fmt.Sprintf("S%d", j), Kind: graph.KindFunction, Contract: true, File: files[j%len(files)]})
 		}
 	}
 
@@ -65,7 +71,7 @@ func TestLayoutHasNoOverlaps(t *testing.T) {
 				continue
 			}
 
-			if distance := math.Hypot(pa.X-pb.X, pa.Y-pb.Y); distance < 2.8*moduleSize {
+			if distance := math.Hypot(pa.X-pb.X, pa.Y-pb.Y); distance < layout.Sizes[a.ID]+layout.Sizes[b.ID] {
 				t.Errorf("%s and %s overlap: %.1f apart", a.ID, b.ID, distance)
 			}
 		}
@@ -324,6 +330,27 @@ func TestFileCells(t *testing.T) {
 				t.Errorf("%s and %s overlap", a, b)
 			}
 		}
+	}
+}
+
+func TestManifestTakesTheFirstCell(t *testing.T) {
+	view := app.MapView{Modules: []app.MapModule{
+		{ID: "go:tools", Path: "tools", Layer: graph.LayerDomain, Files: []string{"tools/z.go", "tools/a.go"}, Manifest: "tools/go.mod"},
+		{ID: "go:lone", Path: "lone", Layer: graph.LayerDomain, Files: []string{"lone/lone.go"}},
+	}}
+
+	layout := ComputeLayout(view)
+	cells := layout.Cells["go:tools"]
+	if len(cells) != 3 || !cells[0].Manifest || cells[0].File != "tools/go.mod" || cells[1].File != "tools/a.go" || cells[1].Manifest || cells[2].File != "tools/z.go" {
+		t.Fatalf("the go.mod comes first, then the files in name order: %+v", cells)
+	}
+
+	if cells[0].X != 0 || cells[0].Y >= 0 {
+		t.Fatalf("the go.mod sits at 12:00: %+v", cells[0])
+	}
+
+	if layout.Sizes["go:tools"] <= layout.Sizes["go:lone"] {
+		t.Fatalf("the go.mod's cell takes room like a file's: %v", layout.Sizes)
 	}
 }
 

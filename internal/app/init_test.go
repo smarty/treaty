@@ -204,3 +204,31 @@ func TestProposeNone(t *testing.T) {
 		}
 	}
 }
+
+func TestAdaptersDirectoryLeavesTheSideToTheCode(t *testing.T) {
+	g := graph.New()
+	for _, path := range []string{"cmd/server", "internal/adapters/httpapi", "internal/adapters/files", "internal/app", "internal/domain"} {
+		g.AddModule(&graph.Module{ID: "go:" + path, Language: "go", Path: path})
+		g.AddSymbol(&graph.Symbol{ID: "go:" + path + ":X", Module: "go:" + path, Name: "X", Kind: graph.KindType, Signature: "type X struct"})
+	}
+
+	g.AddSymbol(&graph.Symbol{ID: "go:internal/app:Store", Module: "go:internal/app", Name: "Store", Kind: graph.KindInterface, Signature: "type Store interface"})
+	uses := func(from, to string) {
+		g.AddEdge(graph.Edge{From: "go:" + from + ":X", To: "go:" + to + ":X", Kind: graph.EdgeTypeUse})
+	}
+
+	// The HTTP adapter calls the application; the file adapter implements
+	// one of its ports. Neither name says which side it is on.
+	uses("cmd/server", "internal/adapters/httpapi")
+	uses("cmd/server", "internal/adapters/files")
+	uses("internal/adapters/httpapi", "internal/app")
+	uses("internal/adapters/files", "internal/app")
+	uses("internal/app", "internal/domain")
+	g.AddEdge(graph.Edge{From: "go:internal/adapters/files:X", To: "go:internal/app:Store", Kind: graph.EdgeImplements})
+	g.Normalize()
+
+	got := proposeLayers(g, rules.StyleHexagonal)
+	if got["internal/adapters/httpapi"] != graph.SideDriving || got["internal/adapters/files"] != graph.SideDriven {
+		t.Fatalf("adapters under adapters/ take their side from the code: %v", got)
+	}
+}

@@ -29,13 +29,15 @@ const (
 // Cell is one file drawn inside its module's hexagon, at an offset from the
 // module's center. Angle is the direction of the cell from the center, where
 // the file's contracts sit on the module's border. Symbols counts every
-// symbol declared in the file, so crowded files stand out.
+// symbol declared in the file, so crowded files stand out. Manifest marks
+// the module's go.mod, which declares nothing and always comes first.
 type Cell struct {
-	File    string  `json:"file"`
-	X       float64 `json:"x"`
-	Y       float64 `json:"y"`
-	Angle   float64 `json:"angle"`
-	Symbols int     `json:"symbols"`
+	File     string  `json:"file"`
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
+	Angle    float64 `json:"angle"`
+	Symbols  int     `json:"symbols"`
+	Manifest bool    `json:"manifest,omitempty"`
 }
 
 // Group is a directory drawn as a hexagon around the modules beneath it.
@@ -83,9 +85,11 @@ type Point struct {
 }
 
 // Region is a labeled rectangle: a band, a slice, a cell of the grid or a
-// context. X and Y are its top-left corner, and Tone picks its shade.
+// context. X and Y are its top-left corner, and Tone picks its shade. Layer
+// names the layer of a band or cell, so a module dropped there can join it.
 type Region struct {
 	Label string  `json:"label"`
+	Layer string  `json:"layer,omitempty"`
 	Tone  int     `json:"tone"`
 	X     float64 `json:"x"`
 	Y     float64 `json:"y"`
@@ -161,7 +165,7 @@ func (this *box) natural() float64 {
 // x, y.
 func (this *box) place(result *Layout, x, y float64) {
 	if this.label != "" {
-		result.Regions = append(result.Regions, Region{Label: this.label, Tone: this.tone, X: round(x), Y: round(y), W: round(this.w), H: round(this.h)})
+		result.Regions = append(result.Regions, Region{Label: this.label, Layer: this.layer, Tone: this.tone, X: round(x), Y: round(y), W: round(this.w), H: round(this.h)})
 	}
 
 	for _, placed := range this.items {
@@ -576,6 +580,18 @@ func arrange(items []*item, radius, start, arc float64, wrap bool) {
 	}
 }
 
+// cellFiles lists the files drawn as cells in a module: its manifest, when
+// it has one, then its files in name order.
+func cellFiles(module app.MapModule) []string {
+	files := slices.Clone(module.Files)
+	sort.Strings(files)
+	if module.Manifest != "" {
+		files = append([]string{module.Manifest}, files...)
+	}
+
+	return files
+}
+
 func crowded(items []*item, wrap bool) bool {
 	for i := range items {
 		j := i + 1
@@ -783,7 +799,7 @@ func topItems(modules []app.MapModule) []*item {
 			current = child
 		}
 
-		current.module, current.files = module.ID, len(module.Files)
+		current.module, current.files = module.ID, len(cellFiles(module))
 	}
 
 	var result []*item
@@ -894,8 +910,8 @@ func stack(above []*box, block *gridBlock, below ...*box) (result Layout) {
 	return result
 }
 
-// placeFiles gives every module its radius and its file cells, in file
-// name order around the ring.
+// placeFiles gives every module its radius and its file cells: its
+// manifest first, at the top, then its files in name order clockwise.
 func placeFiles(result *Layout, view app.MapView) {
 	counts := map[string]int{}
 	for _, symbol := range view.Symbols {
@@ -906,17 +922,12 @@ func placeFiles(result *Layout, view app.MapView) {
 
 	result.Sizes, result.Cells, result.CellSize = map[string]float64{}, map[string][]Cell{}, cellSize
 	for _, module := range view.Modules {
-		result.Sizes[module.ID] = round(moduleRadius(len(module.Files)))
-		if len(module.Files) == 0 {
-			continue
-		}
-
-		files := slices.Clone(module.Files)
-		sort.Strings(files)
+		files := cellFiles(module)
+		result.Sizes[module.ID] = round(moduleRadius(len(files)))
 		for i, slot := range fileSlots(len(files)) {
 			result.Cells[module.ID] = append(result.Cells[module.ID], Cell{
 				File: files[i], X: round(slot[0]), Y: round(slot[1]), Angle: math.Round(slot[2]*1000) / 1000,
-				Symbols: counts[module.ID+"\x00"+files[i]],
+				Symbols: counts[module.ID+"\x00"+files[i]], Manifest: files[i] == module.Manifest,
 			})
 		}
 	}

@@ -13,6 +13,7 @@ type Key struct {
 
 type Container interface {
 	Resolve(ctx context.Context, k Key) (any, error)
+	Close() error
 }
 
 type container struct {
@@ -24,6 +25,10 @@ func New() Container {
 }
 
 func (c *container) Resolve(ctx context.Context, k Key) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	order, err := c.g.Order()
 	if err != nil {
 		return nil, err
@@ -32,9 +37,13 @@ func (c *container) Resolve(ctx context.Context, k Key) (any, error) {
 	return resolveLocked(order, k), nil
 }
 
+func (c *container) Close() error {
+	return nil
+}
+
 func resolveLocked(order []graph.Binding, k Key) any {
 	for _, binding := range order {
-		if binding.Name == k.Name {
+		if binding.Name == k.Name && binding.Lifetime.Scope != "" {
 			return binding
 		}
 	}

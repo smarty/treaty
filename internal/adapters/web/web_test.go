@@ -126,7 +126,7 @@ func TestLiveServer(t *testing.T) {
 		t.Fatalf("plan: %+v %v", report, err)
 	}
 
-	if _, err := os.Stat(filepath.Join(root, ".treaty", "designs", "pricing.cml")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, ".treaty", "designs", "pricing.pen")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -326,6 +326,7 @@ func TestPreferences(t *testing.T) {
 	// Each save merges into what is kept.
 	post(t, server.URL()+"/api/preferences", "application/json", `{"theme":"vampire","layout":{"center":{"tabs":["map"]}}}`, http.StatusOK)
 	post(t, server.URL()+"/api/preferences", "application/json", `{"follow":true}`, http.StatusOK)
+	post(t, server.URL()+"/api/preferences", "application/json", `{"legend":false}`, http.StatusOK)
 	post(t, server.URL()+"/api/preferences", "application/json", `{"layout":[1,2]}`, http.StatusBadRequest)
 	post(t, server.URL()+"/api/preferences", "application/x-www-form-urlencoded", `theme=x`, http.StatusUnsupportedMediaType)
 	stop()
@@ -338,7 +339,83 @@ func TestPreferences(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if saved.Theme != "vampire" || saved.Follow == nil || !*saved.Follow || !strings.Contains(string(saved.Layout), `"map"`) {
+	if saved.Theme != "vampire" || saved.Follow == nil || !*saved.Follow || saved.Legend == nil || *saved.Legend || !strings.Contains(string(saved.Layout), `"map"`) {
 		t.Fatalf("saved: %+v %s", saved, saved.Layout)
+	}
+}
+
+func TestMoveModules(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/shop\n")
+	write(t, root, "treaty.yaml", "# Our rings.\narchitecture: hexagonal\nlayers:\n  domain: [\"core/**\"]\n  adapter:\n    driven: [\"store/**\"]\n")
+	write(t, root, "core/order.go", "package core\n\ntype Order struct{ ID string }\n")
+	write(t, root, "store/store.go", "package store\n\nimport \"example.com/shop/core\"\n\nfunc Save(order core.Order) error { return nil }\n")
+	write(t, root, "web/web.go", "package web\n\nimport \"example.com/shop/core\"\n\nvar Home core.Order\n")
+	git(t, root, "init", "-q")
+
+	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	live := app.NewLive(service, filesystem.NewWatcher(root), nil)
+	stop := make(chan struct{})
+	defer close(stop)
+	live.Start(stop)
+	server, err := Listen(live, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = server.Close() }()
+	layer := func(id string) string {
+		var view struct {
+			Modules []app.MapModule `json:"modules"`
+		}
+
+		_ = json.Unmarshal(get(t, server.URL()+"/api/view", http.StatusOK), &view)
+		for _, module := range view.Modules {
+			if module.ID == id {
+				return module.Layer + "/" + module.Side
+			}
+		}
+
+		return ""
+	}
+
+	// Dropping an unclassified module on a ring declares it there.
+	if got := layer("go:web"); got != "unclassified/" {
+		t.Fatalf("web starts unclassified, not %s", got)
+	}
+
+	post(t, server.URL()+"/api/reclassify", "application/json", `{"module":"go:web","layer":"adapter","side":"driving"}`, http.StatusOK)
+	if got := layer("go:web"); got != "adapter/driving" {
+		t.Fatalf("web should be a driving adapter, not %s", got)
+	}
+
+	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), "# Our rings.") || !strings.Contains(string(data), `driving: ["web"]`) {
+		t.Fatalf("treaty.yaml:\n%s", data)
+	}
+
+	post(t, server.URL()+"/api/reclassify", "application/json", `{"module":"go:web","layer":"adapter"}`, http.StatusBadRequest)
+	post(t, server.URL()+"/api/reclassify", "application/json", `{"module":"go:web","layer":"presentation"}`, http.StatusBadRequest)
+	post(t, server.URL()+"/api/reclassify", "application/json", `{"module":"go:nowhere","layer":"domain"}`, http.StatusBadRequest)
+
+	// While another architecture is previewed, layers stay as they are.
+	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"layered"}`, http.StatusOK)
+	post(t, server.URL()+"/api/reclassify", "application/json", `{"module":"go:web","layer":"domain"}`, http.StatusBadRequest)
+	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"hexagonal"}`, http.StatusOK)
+
+	// Positions are kept per architecture, and forgotten on request.
+	post(t, server.URL()+"/api/positions", "application/json", `{"architecture":"hexagonal","module":"go:web","position":{"x":-120.5,"y":40}}`, http.StatusOK)
+	post(t, server.URL()+"/api/positions", "application/json", `{"architecture":"layered","module":"go:core","position":{"x":10,"y":20}}`, http.StatusOK)
+	post(t, server.URL()+"/api/positions", "application/json", `{"architecture":"onion","module":"go:core","position":{"x":10,"y":20}}`, http.StatusBadRequest)
+	var positions app.Positions
+	_ = json.Unmarshal(get(t, server.URL()+"/api/positions", http.StatusOK), &positions)
+	if positions["hexagonal"]["go:web"] != (app.Position{X: -120.5, Y: 40}) || positions["layered"]["go:core"] != (app.Position{X: 10, Y: 20}) {
+		t.Fatalf("positions: %+v", positions)
+	}
+
+	post(t, server.URL()+"/api/positions", "application/json", `{"architecture":"layered","module":"go:core"}`, http.StatusOK)
+	positions = nil
+	_ = json.Unmarshal(get(t, server.URL()+"/api/positions", http.StatusOK), &positions)
+	if _, ok := positions["layered"]; ok || len(positions["hexagonal"]) != 1 {
+		t.Fatalf("forgetting a position: %+v", positions)
 	}
 }

@@ -256,3 +256,25 @@ func TestNoneAllowsEverything(t *testing.T) {
 		}
 	}
 }
+
+func TestExactPathWinsOverWildcards(t *testing.T) {
+	architecture := Architecture{
+		Style:       StyleHexagonal,
+		Composition: []string{"cmd/**"},
+		Layers: []Layer{
+			{Name: graph.LayerDomain, Globs: []string{"internal/**"}},
+			{Name: graph.LayerAdapter, Side: graph.SideDriving, Globs: []string{"internal/web", "cmd/tool"}},
+		},
+	}
+
+	for path, want := range map[string]Placement{
+		"internal/core": {Layer: graph.LayerDomain},
+		"internal/web":  {Layer: graph.LayerAdapter, Side: graph.SideDriving},
+		"cmd/tool":      {Layer: graph.LayerAdapter, Side: graph.SideDriving},
+		"cmd/server":    {Layer: graph.LayerComposition},
+	} {
+		if got := architecture.Resolve(path); got != want {
+			t.Errorf("Resolve(%s) = %+v, want %+v", path, got, want)
+		}
+	}
+}

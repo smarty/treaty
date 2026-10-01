@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/smarty/treaty/internal/cml"
+	"github.com/smarty/treaty/internal/autopen"
 	"github.com/smarty/treaty/internal/graph"
 	"github.com/smarty/treaty/internal/rules"
 )
@@ -141,10 +141,10 @@ func (this *Service) DesignNew(name string, from []string) (path string, err err
 		scaffold.AddSymbol(&copied)
 	}
 
-	document := cml.FromGraph(scaffold)
+	document := autopen.FromGraph(scaffold)
 	document.Design = name
 	stripLocations(document)
-	return this.workspace.CreateDesign(name, cml.Print(document))
+	return this.workspace.CreateDesign(name, autopen.Print(document))
 }
 
 func (this *Service) checkDesign(analysis *analysis, name string) (*designWalk, error) {
@@ -153,7 +153,7 @@ func (this *Service) checkDesign(analysis *analysis, name string) (*designWalk, 
 		return nil, err
 	}
 
-	document, err := cml.Parse(text)
+	document, err := autopen.Parse(text)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func (this *designWalk) add(kind, target string, line int, format string, args .
 	this.report.Items = append(this.report.Items, DesignItem{Kind: kind, Target: target, Line: line, Detail: fmt.Sprintf(format, args...)})
 }
 
-func (this *designWalk) block(block *cml.Block) error {
+func (this *designWalk) block(block *autopen.Block) error {
 	dialect, err := this.service.dialect(block.Language)
 	if err != nil {
 		return err
@@ -208,7 +208,7 @@ func (this *designWalk) block(block *cml.Block) error {
 	return nil
 }
 
-func (this *designWalk) directive(directive cml.Directive, moduleID, symbolID, layer string) {
+func (this *designWalk) directive(directive autopen.Directive, moduleID, symbolID, layer string) {
 	owner := moduleID
 	if symbolID != "" {
 		owner = symbolID
@@ -260,7 +260,7 @@ func (this *designWalk) directive(directive cml.Directive, moduleID, symbolID, l
 	}
 }
 
-func (this *designWalk) expect(directive cml.Directive, owner, moduleID, symbolID string) {
+func (this *designWalk) expect(directive autopen.Directive, owner, moduleID, symbolID string) {
 	if len(directive.Args) != 3 {
 		this.add(ItemExpectation, owner, directive.Line, "@expect takes <metric> <op> <number>")
 		return
@@ -302,7 +302,7 @@ func (this *designWalk) expect(directive cml.Directive, owner, moduleID, symbolI
 	}
 }
 
-func (this *designWalk) node(dialect Dialect, moduleID, layer string, node *cml.Node, parent *graph.Symbol, parentDecl *Declaration) error {
+func (this *designWalk) node(dialect Dialect, moduleID, layer string, node *autopen.Node, parent *graph.Symbol, parentDecl *Declaration) error {
 	declaration, err := dialect.Declare(node.Text, parentDecl)
 	if err != nil {
 		return fmt.Errorf("design line %d: %w", node.Line, err)
@@ -370,9 +370,9 @@ func hasField(dialect Dialect, symbol *graph.Symbol, parentDecl *Declaration, ke
 	return false
 }
 
-func stripLocations(document *cml.Document) {
-	var strip func(nodes []*cml.Node)
-	strip = func(nodes []*cml.Node) {
+func stripLocations(document *autopen.Document) {
+	var strip func(nodes []*autopen.Node)
+	strip = func(nodes []*autopen.Node) {
 		for _, node := range nodes {
 			node.SourceLine, node.File, node.Pointer, node.Directives = 0, "", false, nil
 			strip(node.Children)

@@ -1,0 +1,10 @@
+high   breaking               Breaking change to go:injection:Container.Resolve
+high   layer_violation        go:internal/graph → go:adapters/reflectx breaks a layer rule
+medium implementers           Interface go:injection:Container gained methods
+medium new_contract           New contract go:adapters/memory:Store
+medium new_contract           New contract go:adapters/memory:Store.Add
+medium new_contract           New contract go:injection:Container.Close
+medium new_module             New module go:adapters/memory
+low    compatible             Compatible change to go:internal/graph:Lifetime
+low    compatible             Compatible change to go:internal/graph:Binding
+low    implementation         4 implementation-only change(s)

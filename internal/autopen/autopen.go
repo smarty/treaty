@@ -1,7 +1,7 @@
-// Package cml reads and writes the text form of CML: headers, indented
-// declarations and @ directives. It knows nothing about any language; the
-// text of each declaration is opaque to it.
-package cml
+// Package autopen reads and writes AutoPen, Treaty's diagram language:
+// headers, indented declarations and @ directives. It knows nothing about any
+// language; the text of each declaration is opaque to it.
+package autopen
 
 import (
 	"fmt"
@@ -10,7 +10,16 @@ import (
 	"strings"
 )
 
-const Version = 1
+const (
+	// Name opens every document, followed by Version: autopen 1.
+	Name = "autopen"
+
+	Version = 1
+
+	// legacyName is the language's earlier name, CML. Documents that open
+	// with it still parse.
+	legacyName = "cml"
+)
 
 var (
 	// DesignDirectives may appear in design files.
@@ -46,7 +55,7 @@ type Directive struct {
 	Line int
 }
 
-// Document is a parsed CML file.
+// Document is a parsed AutoPen file.
 type Document struct {
 	Design string
 	Blocks []*Block
@@ -74,7 +83,7 @@ type Node struct {
 // Returns:
 //   - result: the message with its line number.
 func (this *Error) Error() string {
-	return fmt.Sprintf("cml:%d: %s", this.Line, this.Message)
+	return fmt.Sprintf("autopen:%d: %s", this.Line, this.Message)
 }
 
 // IsDump reports whether the document uses dump-only syntax anywhere.
@@ -97,7 +106,8 @@ func (this *Document) IsDump() bool {
 	return false
 }
 
-// Parse reads a CML document.
+// Parse reads an AutoPen document. One that opens with the earlier name,
+// cml 1, parses too.
 //
 // Parameters:
 //   - text: the document text.
@@ -133,8 +143,8 @@ func Parse(text string) (result *Document, err error) {
 		depth := indent / 2
 		switch {
 		case !sawVersion:
-			if trimmed != fmt.Sprintf("cml %d", Version) {
-				return nil, &Error{number, fmt.Sprintf("expected \"cml %d\" as the first line", Version)}
+			if trimmed != fmt.Sprintf("%s %d", Name, Version) && trimmed != fmt.Sprintf("%s %d", legacyName, Version) {
+				return nil, &Error{number, fmt.Sprintf("expected \"%s %d\" as the first line", Name, Version)}
 			}
 
 			sawVersion = true
@@ -192,7 +202,7 @@ func Parse(text string) (result *Document, err error) {
 	}
 
 	if !sawVersion {
-		return nil, &Error{1, fmt.Sprintf("expected \"cml %d\" as the first line", Version)}
+		return nil, &Error{1, fmt.Sprintf("expected \"%s %d\" as the first line", Name, Version)}
 	}
 
 	return result, nil
@@ -204,10 +214,10 @@ func Parse(text string) (result *Document, err error) {
 //   - document: the document to print.
 //
 // Returns:
-//   - result: the CML text.
+//   - result: the AutoPen text.
 func Print(document *Document) string {
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "cml %d\n", Version)
+	fmt.Fprintf(&builder, "%s %d\n", Name, Version)
 	if document.Design != "" {
 		fmt.Fprintf(&builder, "design %s\n", strconv.Quote(document.Design))
 	}

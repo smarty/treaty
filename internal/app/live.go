@@ -25,7 +25,14 @@ const (
 
 	baselineEvery = 4
 	cachedBases   = 4
-	pollInterval  = 500 * time.Millisecond
+
+	// The tree is checked for changes twice a second, unless it is large:
+	// LargeRepository files or more, or a check that takes slowWalk or
+	// longer. Then it is checked every five seconds.
+	LargeRepository = 20000
+	pollFast        = 500 * time.Millisecond
+	pollSlow        = 5 * time.Second
+	slowWalk        = 250 * time.Millisecond
 )
 
 var (
@@ -134,6 +141,7 @@ type Live struct {
 	preview     string
 	adoptAt     time.Time
 	adoptAfter  time.Duration
+	positions   sync.Mutex
 }
 
 // NewLive creates the live graph for a repository. Nothing is built until
@@ -218,7 +226,7 @@ func (this *Live) Payload() (data []byte, version int) {
 func (this *Live) Refresh() error {
 	this.building.Lock()
 	defer this.building.Unlock()
-	fingerprint, _ := this.watcher.Fingerprint()
+	fingerprint, _, _ := this.watcher.Fingerprint()
 	this.mutex.Lock()
 	baseline, preview := this.baseline, this.preview
 	this.mutex.Unlock()
@@ -328,14 +336,15 @@ func (this *Live) SetSelection(selection Selection) {
 // never keeps shifting under the person.
 //
 // Parameters:
-//   - target: a symbol id or module id.
+//   - target: a symbol id or module id, or a short name that matches one.
 //   - reason: why the person should look, shown beside the offer.
 //
 // Returns:
 //   - err: the target does not exist, or the last request was too recent.
 //
 // Errors:
-//   - ErrUnknownTarget: no symbol or module has that id.
+//   - ErrUnknownTarget: no symbol or module matches the target.
+//   - ErrAmbiguousTarget: several symbols or modules match it.
 //   - ErrTooSoon: another request came less than ShowEvery ago.
 func (this *Live) Show(target, reason string) error {
 	if this.peer != nil {
@@ -347,8 +356,15 @@ func (this *Live) Show(target, reason string) error {
 		return err
 	}
 
-	if current.head.Symbol(target) == nil && current.head.Module(target) == nil && !this.planned(current, target) {
-		return fmt.Errorf("%w: %s", ErrUnknownTarget, target)
+	known := current.head.Symbol(target) != nil || current.head.Module(target) != nil
+	if !known && !this.planned(current, target) {
+		if target, err = current.resolve(target); err != nil {
+			return err
+		}
+
+		if current.head.Symbol(target) == nil && current.head.Module(target) == nil {
+			return fmt.Errorf("%w: %s is a file; show takes a symbol or module", ErrUnknownTarget, target)
+		}
 	}
 
 	this.mutex.Lock()
@@ -500,16 +516,18 @@ func (this *Live) current() (*analysis, error) {
 }
 
 func (this *Live) poll(stop <-chan struct{}) {
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(pollFast)
+	defer timer.Stop()
 	for tick := 1; ; tick++ {
 		select {
 		case <-stop:
 			return
-		case <-ticker.C:
+		case <-timer.C:
 		}
 
-		fingerprint, err := this.watcher.Fingerprint()
+		started := time.Now()
+		fingerprint, files, err := this.watcher.Fingerprint()
+		timer.Reset(PollEvery(files, time.Since(started)))
 		this.mutex.Lock()
 		changed := err == nil && fingerprint != this.fingerprint
 		baseline := this.baseline
@@ -649,6 +667,24 @@ func (this *Live) sync() {
 	if !same {
 		_ = this.SetBaseline(state.Baseline)
 	}
+}
+
+// PollEvery says how long to wait between checks of the tree for changes:
+// pollFast for small and medium repositories, and pollSlow for large ones,
+// whose walk costs more, so watching never becomes the work.
+//
+// Parameters:
+//   - files: how many files the last check covered.
+//   - took: how long the last check took.
+//
+// Returns:
+//   - result: the wait before the next check.
+func PollEvery(files int, took time.Duration) (result time.Duration) {
+	if files >= LargeRepository || took >= slowWalk {
+		return pollSlow
+	}
+
+	return pollFast
 }
 
 func short(commit string) string {

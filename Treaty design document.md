@@ -6,7 +6,7 @@ Sep 28, 2026 · @Timothy Eckstein
 
 ## Summary
 
-Treaty is a tool, written in Go, that reads a codebase into one graph, held in memory in the model of a small diagram language, CML. Everything else is drawn from that graph: a hexagonal map for reviewers, mechanical scores, scoped context slices for coding agents, and design files, scaffolded from existing code, where people sketch new modules and contracts before the code exists. Every score must come from static analysis, never from a model's judgment.
+Treaty is a tool, written in Go, that reads a codebase into one graph, held in memory in the model of a small diagram language, AutoPen (formerly CML). Everything else is drawn from that graph: a hexagonal map for reviewers, mechanical scores, scoped context slices for coding agents, and design files, scaffolded from existing code, where people sketch new modules and contracts before the code exists. Every score must come from static analysis, never from a model's judgment.
 
 The tool is ephemeral. It exists for code review, for thinking through a design and for working alongside a coding agent, not for communicating design between team members. It builds the graph from the tree, scores it and serves what was asked for, keeping everything in memory. A one-shot command discards it on exit, and the live server discards it when it stops. Nothing it writes is ever tracked in git.
 
@@ -26,15 +26,15 @@ Agents now produce diffs faster than humans can review them, and line-based revi
 2. Enforce the rules of the architecture a team declares in a checked-in config, failing the check on any dependency that breaks them. Five architectures are supported: hexagonal, clean, layered, vertical slices and modular monolith.
 3. Render an interactive map that stays legible at 50 modules and 2,000 contract symbols through aggregation and semantic zoom.
 4. Export a context slice per symbol or module that gives an agent the contracts it needs and nothing else.
-5. Let people design new features in CML, then check the design against the code as it is built.
+5. Let people design new features in AutoPen, then check the design against the code as it is built.
 6. Support languages through one extractor interface, each with a small hand-written contract scanner and no language treated as a special case. Version 1 supports Go only.
 
 **Non-goals**
 
 - No AI-generated scores, summaries or risk labels anywhere in the scoring path.
 - No tracked outputs. The graph, scores, maps and design files are never committed, and the tool is not a way to hand designs between people.
-- Not a UML or C4 replacement and no free-form canvas; every diagram is CML, generated from code or written as a design that is checked against code.
-- No runtime tracing in version 1; static analysis only (see open questions).
+- Not a UML or C4 replacement and no free-form canvas; every diagram is AutoPen, generated from code or written as a design that is checked against code.
+- No runtime tracing; static analysis only. Edges hidden by dependency injection are out of scope.
 - Treaty does not choose an architecture. Knowing which one fits the codebase is the team's job; the tool checks the one they declare.
 - No strict layering. In the layered architecture a layer may use every layer below it. Whether a team also forbids skipping a layer is a team decision, not a rule the tool enforces.
 - No test-strength scoring for now. Contract-scoped mutation testing was deferred on Sep 29, 2026 and may return later.
@@ -99,7 +99,7 @@ Every architecture is built from the same few rules, so the engine stays small:
 | Vertical slices | `architecture: slices`; `slices:` globs such as `internal/features/*`, each match one slice; `shared:`; `composition:`; optional `layers:` inside every slice, top to bottom, with globs relative to the slice root | A slice may use itself and shared code, never another slice; inside a slice, layers as for layered | A column per slice; with layers, a grid of slices by layer. Composition spans the top, shared code the bottom |
 | Modular monolith | `architecture: modular`; `contexts:` globs, each match one context; `public:` globs relative to each context root, default `["."]`; `shared:`; `composition:` | A context may use its own packages, other contexts' public packages and shared code; no cycles between contexts | An island per context; public packages have a bold outline |
 
-A slice or context glob may not contain `**`, because each match must be one directory. A module in a slice that matches none of the slice's layers is unclassified. Settings an architecture does not use, such as `shared:` for layered, are an error rather than ignored, so a mistaken config fails loudly.
+For layered, hexagonal and clean, a glob that is exactly a module's path wins over every wildcard, so one package can be placed apart from its directory's glob; otherwise composition is matched first, then the layers in order. A slice or context glob may not contain `**`, because each match must be one directory. A module in a slice that matches none of the slice's layers is unclassified. Settings an architecture does not use, such as `shared:` for layered, are an error rather than ignored, so a mistaken config fails loudly.
 
 Examples:
 
@@ -143,17 +143,17 @@ The tool is itself hexagonal: a pure Go core that never calls a parser or git di
 Treaty doesn't need a full parser, only contracts: package clauses, imports, top-level declarations and their signatures, struct fields and interface method sets. Bodies only need scanning for the identifiers that become reference edges. So each language gets a small hand-written contract scanner instead of a general-purpose grammar:
 
 - **A lexer** that knows the language's tokens, comments and string forms. For Go it also inserts semicolons at line ends, so declaration boundaries fall out of the token stream.
-- **A declaration reader** that walks top-level declarations and renders signatures in CML form. It skips bodies as balanced brackets and never parses an expression or statement.
+- **A declaration reader** that walks top-level declarations and renders signatures in AutoPen form. It skips bodies as balanced brackets and never parses an expression or statement.
 - **A reference scan** over each declaration's tokens that resolves `pkg.Name` through imports, `recv.Name` through the receiver's type, and bare identifiers within the module.
 
-The same scanner reads CML declaration lines, so design signatures and code signatures are compared by one piece of code. The tool is pure Go with no cgo: it cross-compiles, and `go install` needs no C toolchain. On this repository, the Go scanner produced the same modules, symbols, signatures and fields as a tree-sitter-based extractor it replaced, in about a twentieth of the time.
+The same scanner reads AutoPen declaration lines, so design signatures and code signatures are compared by one piece of code. The tool is pure Go with no cgo: it cross-compiles, and `go install` needs no C toolchain. On this repository, the Go scanner produced the same modules, symbols, signatures and fields as a tree-sitter-based extractor it replaced, in about a twentieth of the time.
 
 &#91;embedded content: tool architecture · core, ports and adapters\]
 
 A run moves through these steps in order:
 
 1. The VersionControl adapter materializes the base and head trees.
-2. The SourceExtractor builds a graph for each tree: modules, symbols, signatures and reference edges.
+2. The SourceExtractor builds a graph for each tree: modules, symbols, signatures and reference edges. Sub-trees with their own `go.mod` are part of the tree; each resolves imports through its own module path.
 3. The config assigns each module a layer; modules that match no glob become Unclassified.
 4. The domain classifies each symbol's change kind by comparing base and head signatures.
 5. The domain checks layer rules and computes stability metrics on both graphs.
@@ -177,13 +177,13 @@ Symbol ids must be stable across renames of unrelated code, since agent slices a
 
 Each function also carries a hash of its normalized body. It is not part of any id or reference; it only tells an implementation-only change from an unchanged symbol.
 
-## Diagram language (CML)
+## Diagram language (AutoPen)
 
-CML is the language of the graph. For code it exists only in memory: the extractors build it, the scoring reads it, the renderer draws it, and the run ends without writing it anywhere. It is structure only. Change kinds, metrics and findings are computed on demand and kept in memory beside the graph, never inside it.
+AutoPen is the language of the graph. For code it exists only in memory: the extractors build it, the scoring reads it, the renderer draws it, and the run ends without writing it anywhere. It is structure only. Change kinds, metrics and findings are computed on demand and kept in memory beside the graph, never inside it.
 
-The only CML text on disk is design files. A person writes one to sketch a feature before the code exists, and the tool checks it against the code as it is built. So the text syntax is shaped for writing by hand, not for generated output or git diffs. Rough edges are expected and will be fixed as the language gets used.
+The only AutoPen text on disk is design files. A person writes one to sketch a feature before the code exists, and the tool checks it against the code as it is built. So the text syntax is shaped for writing by hand, not for generated output or git diffs. Rough edges are expected and will be fixed as the language gets used.
 
-**What CML must express.** Modules with path and language; contract symbols with kind and signature; dependencies between modules and symbols; design elements that have no code yet; expectations, such as a maximum instability; and forbidden dependencies. Layers and adapter sides are not written in CML. They always come from `treaty.yaml`.
+**What AutoPen must express.** Modules with path and language; contract symbols with kind and signature; dependencies between modules and symbols; design elements that have no code yet; expectations, such as a maximum instability; and forbidden dependencies. Layers and adapter sides are not written in AutoPen. They always come from `treaty.yaml`.
 
 **Decisions.**
 
@@ -191,19 +191,19 @@ The only CML text on disk is design files. A person writes one to sketch a featu
 | --- | --- | --- |
 | Base syntax | Paths as headers, each language's own declarations beneath, scoped by indentation | Code reads the way it is written, and nesting shows ownership. A small hand-written parser needs no dependencies. |
 | Signature notation | Each language's own syntax, without bodies or receivers | A neutral notation loses information, and breaking-change rules are per language anyway. Receivers are detail below the level of a contract map. |
-| Design and generated content | Only design files exist on disk | Generated CML never leaves memory. A design names existing code by symbol id, resolved against the freshly built graph on every run. |
+| Design and generated content | Only design files exist on disk | Generated AutoPen never leaves memory. A design names existing code by symbol id, resolved against the freshly built graph on every run. |
 | References | Symbol ids only | Every graph is built from the tree it describes, so nothing can go stale. |
 | Expectations | A small fixed set of `@` directives | Every check is already a short, closed list. An expression language would add an evaluator to the core. |
 
 **Shape.**
 
-- The first line is `cml 1`. A design's second line is `design "<title>"`.
+- The first line is `autopen 1`. A design's second line is `design "<title>"`.
 - Scope comes from indentation: exactly two spaces per level, and tabs are an error.
 - A line at column zero is a header: `<lang>:<path>`. A path ending in a source file extension names a file, such as `go:adapters/database/DB.go`. Any other path names a module, such as `go:injection`, for designs where no file has been chosen yet. A file's module is derived from it: for Go, its directory.
 - An indented line is a declaration in the header's language, one per line, without a body. Nesting shows ownership: methods and fields sit under their type. In Go, a nested line starting with `func` is a method and any other nested line is a field.
 - A line starting with `@` is a directive, not code. No supported language starts a declaration with `@`. TypeScript decorators are not part of a signature, so they never appear.
 - `//` at the start of a line is a comment.
-- CML's parser reads only headers, indentation and directives. The text of each declaration goes to that language's snippet parser.
+- AutoPen's parser reads only headers, indentation and directives. The text of each declaration goes to that language's snippet parser.
 
 Whether a symbol is part of the contract comes from the native syntax: in Go, an exported name, and for a method, an exported method on an exported type. Symbol ids are unchanged, `<lang>:<module path>:<qualified name>`, so the method below is `go:adapters/database:MySQL.Create` whichever file it lives in.
 
@@ -217,10 +217,10 @@ Whether a symbol is part of the contract comes from the native syntax: in Go, an
 | `@depends <target>` | header, declaration | Intended dependency; checked against layer rules immediately, before any code exists |
 | `@forbid <target>` | header, declaration | No dependency on the target; globs allowed |
 
-**Examples.** A design, `.treaty/designs/scoped-lifetimes.cml`:
+**Examples.** A design, `.treaty/designs/scoped-lifetimes.pen`:
 
 ```
-cml 1
+autopen 1
 design "Scoped lifetimes"
 
 go:injection
@@ -250,13 +250,13 @@ go:adapters/database/DB.go
     func Create(data DTO) bool
 ```
 
-**Designing in CML.** A design is partial. It lists only what it adds or pins down, and code it doesn't mention is ignored. Whether an element is new isn't written down; the tool works it out against the current graph. A file in a header is a hint: symbols are matched by id, so moving code between files never counts as drift.
+**Designing in AutoPen.** A design is partial. It lists only what it adds or pins down, and code it doesn't mention is ignored. Whether an element is new isn't written down; the tool works it out against the current graph. A file in a header is a hint: symbols are matched by id, so moving code between files never counts as drift.
 
-**Starting a design.** `treaty design new <name> [--from <module or symbol>...]` writes `.treaty/designs/<name>.cml`. It contains the header, then for each `--from` target the file headers and contract declarations from today's code. Internal symbols, locations and edges are left out. With no `--from`, the file has only the header. The command refuses to overwrite an existing design.
+**Starting a design.** `treaty design new <name> [--from <module or symbol>...]` writes `.treaty/designs/<name>.pen`. It contains the header, then for each `--from` target the file headers and contract declarations from today's code. Internal symbols, locations and edges are left out. With no `--from`, the file has only the header. The command refuses to overwrite an existing design.
 
 The person then edits declarations, adds headers and declarations, and adds directives. Scaffolded lines left unedited stay in the design and pin those signatures: `design check` reports if the code drifts from them. Deleting a line drops that pin. The map is display-only for designs; it draws them with `treaty map --design` but never edits them.
 
-**Signature comparison.** Each language's scanner also reads CML declaration lines, using the same code that reads source, so a design signature and a built signature go through one parser. Signatures are compared by structure, ignoring parameter names: `func Dispose(ctx context.Context) error` matches `func Dispose(c context.Context) (err error)`. Receivers are never written. The graph still records whether a Go method has a pointer or value receiver, the contract diff still reports a change as breaking, and the inspector shows it.
+**Signature comparison.** Each language's scanner also reads AutoPen declaration lines, using the same code that reads source, so a design signature and a built signature go through one parser. Signatures are compared by structure, ignoring parameter names: `func Dispose(ctx context.Context) error` matches `func Dispose(c context.Context) (err error)`. Receivers are never written. The graph still records whether a Go method has a pointer or value receiver, the contract diff still reports a change as breaking, and the inspector shows it.
 
 **Checking a design.** The map draws design elements with a distinct outline next to the real code. `treaty design check` compares a design with the current code and reports:
 
@@ -333,7 +333,7 @@ The border stays the module's contract surface at every zoom, and every symbol i
 | Channel | Encodes | Values |
 | --- | --- | --- |
 | Node shape and fill | Symbol kind | Hollow circle function, filled circle method, hollow square interface, filled square concrete type, filled triangle value |
-| Color and glyph | Change kind | Grey unchanged; blue with + added; orange with Δ compatible, ! breaking, → moved or \~ implementation only; teal and dashed for unimplemented. Hollow shapes take the color on their outline, filled shapes in their fill; the glyph sits beside the icon |
+| Color and glyph | Change kind | Grey unchanged; green with + added; amber with Δ compatible, ! breaking, → moved or \~ implementation only; dashed in the planned color for unimplemented. In signature diffs, removed text is red and added text green, as in git; the color-blind safe themes keep blue for added and orange for removed. Hollow shapes take the color on their outline, filled shapes in their fill; the glyph sits beside the icon |
 | Module border | New module; composition; public API | Dashed blue; a double outline for composition; a bold outer outline for a context's public packages |
 | Teal and dashed | Unimplemented: designed or planned, not yet built | Teal (`#0d9488` light, `#2dd4bf` dark) on the symbol or module outline, always with a dashed outline so the state doesn't rely on color. It turns blue with + once built |
 | Module edge | Dependency | Width grows with reference count; blue when new |
@@ -342,9 +342,9 @@ The border stays the module's contract surface at every zoom, and every symbol i
 
 **Aggregation.** By default, edges are drawn between modules only. Selecting a symbol draws its symbol-level edges and labels, and dims everything unrelated. The mockup's hand-placed layout does not scale: at more than about 12 modules per ring, module positions and edge routing must be computed, with edges bundled along the gaps between rings.
 
-**Groups.** Within each ring, a directory with two or more packages or sub-directories becomes a group: a hexagon drawn around them, nested as deep as the directories go. A directory with a single child is skipped, a package with sub-packages is a group whose center is the package itself, and a group that would hold a ring's entire contents is unwrapped onto the ring. Groups are visual only: layer rules, metrics and slices stay per package. The layout is computed bottom-up for the fully expanded tree, so collapsing a group never moves anything. A group collapses on its own when it is small on screen, showing its name and counts, and edges attach to it instead of the packages inside; double-clicking or selecting something inside it expands it.
+**Groups.** Within each ring, a directory with two or more packages or sub-directories becomes a group: a hexagon drawn around them, nested as deep as the directories go. A directory with a single child is skipped, a package with sub-packages is a group whose center is the package itself, and a group that would hold a ring's entire contents is unwrapped onto the ring. Groups are visual only: layer rules, metrics and slices stay per package. The layout is computed bottom-up for the fully expanded tree, so collapsing a group never moves anything. A group collapses on its own when it is small on screen, showing its name and counts, and edges attach to it instead of the packages inside; double-clicking it or using *Go to* on something inside it expands it. Selecting never moves the view or expands a group: a selection hidden in a collapsed group lights that group, and the inspector says where the selection is and offers *Go to*.
 
-**Themes.** Every color on the page is a named token, named for what it means rather than its hue: surfaces such as `bg`, `panel`, `ink` and the ring tones, and signals such as `added`, `changed`, `violation`, `planned`, `selection`, `claude`, `accent` and the three severities. A theme is a JSON file that sets every token, with a `name`, a `base` of light or dark, and a `group`. Treaty ships 18, in three groups:
+**Themes.** Every color on the page is a named token, named for what it means rather than its hue: surfaces such as `bg`, `panel`, `ink` and the ring tones, and signals such as `added`, `removed`, `changed`, `violation`, `planned`, `selection`, `claude`, `accent` and the three severities. A theme is a JSON file that sets every token, with a `name`, a `base` of light or dark, and a `group`. Treaty ships 18, in three groups:
 
 - **Standard:** Light and Dark, after VS Code's default Light Modern and Dark Modern: neutral surfaces, its text grays and focus blue, and its own meanings for signals (git's added green, modified amber, error red, warning yellow).
 - **Accessibility:** High Contrast Light and Dark, and Color-blind Safe Light and Dark. Color blindness is treated as an accessibility need met by its own themes, not a switch on every theme.
@@ -352,13 +352,17 @@ The border stays the module's contract surface at every zoom, and every symbol i
 
 Treaty writes its themes to `~/.treaty/themes/` every time a server starts, each with a warning that it is rewritten and any change to it will be lost at any time without warning; `.defaults.json` in that folder records which files are Treaty's, so any other `.json` file there is a person's own theme, listed under Yours, picked up automatically and never touched. A default that no longer ships is removed. The header's Theme menu offers System, which follows the operating system between Light and Dark, and every theme by group; a theme file that cannot be read is reported in the header and left out. The legend shows colors as swatches of the live tokens, never by name.
 
-A test holds every default theme to the map's meaning: the five signals stay at least 15 apart in CIEDE2000, the severities at least 12, text meets WCAG contrast (4.5, or 7 for high contrast) and selection labels stay readable. The color-blind safe themes also keep added, changed, violation and planned at least 20 apart when simulated for protanopia, deuteranopia and tritanopia (Machado 2009); no set of five hues managed that, so in them selection glows in the ink color instead.
+A test holds every default theme to the map's meaning: the five signals stay at least 15 apart in CIEDE2000, the severities at least 12, text meets WCAG contrast (4.5, or 7 for high contrast) and selection labels stay readable. Removed, which shows only in signature diffs, must read as text and stay at least 15 apart from added. Every theme except the color-blind safe ones uses the conventional green for added and red for removed, so planned and Claude take other hues there. The color-blind safe themes also keep added, changed, violation and planned, and added and removed, at least 20 apart when simulated for protanopia, deuteranopia and tritanopia (Machado 2009); no set of five hues managed that, so in them selection glows in the ink color instead.
 
 **Panels and drawers.** The map, the review queue and the inspector are panels, each a tab in a stack. Stacks sit in drawers on the left, right and bottom of the map, in the center with the map, or in floating windows above it; by default the queue is on the left and the inspector on the right. Dragging the divider between a drawer and the map resizes the drawer, and dragging between two stacks in a drawer shares its room between them. Dragging a tab moves its panel: dropped on a stack's middle it joins that stack; on the near half of a stack in a drawer it splits the drawer there; at the workspace's left, right or bottom edge it docks in that drawer; anywhere else it floats, and a floating window moves by its tab bar and resizes from its corner. The map stays in the center. An empty drawer takes no room. *Reset layout* restores the default.
 
 **Preferences.** A person's theme, panel layout and "Follow Claude" choice are kept in `~/.treaty/settings.json`, so they follow the person across repositories, sessions, browsers and ports. The live page loads them when it opens and saves each change through the server, in batches, merging only the fields that changed; it sends nothing until the saved preferences have loaded, so the layout a page starts with never overwrites the saved one. The first time a person's browser meets a server with nothing saved, the choices already in that browser become the saved ones. The file is replaced atomically, so two servers saving at once never tear it. A static map, opened with no server, keeps its choices in the browser. New panels, such as test coverage later, join the same system, so each person can put them where they like.
 
 **Selecting files.** A file cell is selectable like a symbol or module. Selecting one keeps its cell, bracket and contracts lit, dims what it does not touch, and shows in the inspector its path, its symbol, contract and internal counts, the files and modules it uses and is used by, and chips for its contracts and internals. For agents, a file's selection id is its module's id and its path joined by `|`, with the module's slice.
+
+**Manifests.** A package holding its language's module file, such as `go.mod`, is where a module begins. The file takes the first cell of the package's ring, at 12:00, ahead of the source files, and names itself instead of being shaded, since it declares nothing. Selecting it shows the file in the inspector.
+
+**Moving modules.** Pressing a module and holding still for half a second picks it up; moving first pans, as before. While it is carried, the band, ring or area under the pointer lights up, its edges fade, and the tip says what a drop will do; Escape puts it back. Dropped in its own band, ring or area, the module stays where it was put: the position is saved per repository and architecture in `.treaty/positions.json`, is honored only while it still lies in the module's band, and grows the module's groups to keep it inside. Dropped in another layer of a layered, hexagonal or clean architecture, including a side of the adapter ring or the composition arc, the server edits `treaty.yaml` through its YAML tree, keeping comments: it removes the module's exact path from every list and adds it to the target's, unless the wildcards already place it there. It then rebuilds, so the rules, checks and agents follow at once. Moves between layers are refused while another architecture is previewed, and for slices and modular, whose areas come from directories.
 
 **Review queue.** Findings sorted as described under Mechanical scoring. Each item shows a severity icon, a title and one sentence, and selecting it selects the related symbol, module or edge on the map.
 
@@ -394,7 +398,7 @@ Either way it writes nothing tracked, and its state disappears when it stops. Th
 
 The server re-resolves the baseline every two seconds, so a commit moves a HEAD baseline forward. Each baseline tree is extracted once and cached by commit.
 
-**Watching.** The server fingerprints the path, size and modification time of every file outside hidden, vendor and dependency directories, plus `treaty.yaml` and the designs, twice a second, and rebuilds when the fingerprint changes. A failed build, such as a config that does not parse mid-edit, keeps the last good map and shows the error in the header.
+**Watching.** The server fingerprints the path, size and modification time of every file outside hidden, vendor and dependency directories, plus `treaty.yaml` and the designs, and rebuilds when the fingerprint changes. How often it looks depends on the repository's size: twice a second for small and medium repositories, and once every five seconds for large ones, those with 20,000 files or more or whose walk takes 250 ms or longer, so watching never becomes the work. A failed build, such as a config that does not parse mid-edit, keeps the last good map and shows the error in the header.
 
 **Architecture view.** A dropdown in the header switches the architecture the map draws. Choosing one other than `treaty.yaml`'s previews it: the map shows the code fitted to that architecture, exactly as `treaty init --architecture` would propose it, with that architecture's layout and violations. Checks and every agent tool keep following `treaty.yaml` during a preview. The preview replaces `treaty.yaml` with that proposal when the person presses *Use this architecture*, or once it has been left in place for five minutes; a countdown in the header shows how long is left, and choosing `treaty.yaml`'s architecture again cancels it. The previous `treaty.yaml` is overwritten, not kept: an architecture is chosen rarely, usually at the start of greenfield work, and git holds the old file.
 
@@ -407,48 +411,51 @@ The server re-resolves the baseline every two seconds, so a commit moves a HEAD 
 
 **Layout under change.** Modules may move as others are added or removed; positions are not frozen to a baseline. The view is anchored to the current selection instead. If a selected module sits in the lower left of the screen and a re-layout moves it, the view pans and zooms with it, so it stays where the person left it. With nothing selected, the view keeps its center and zoom.
 
-**MCP tools.** Every tool answers from the in-memory graph, in compact CML where possible, so an agent can orient itself cheaply:
+**MCP tools.** Every tool answers from the in-memory graph, in compact AutoPen where possible, so an agent can orient itself cheaply:
 
 | Tool | Answers |
 | --- | --- |
 | `overview` | The whole architecture in a few kilobytes: modules by layer, contract counts, module edges. The agent's first call, instead of exploring files |
-| `find` | Symbols by name or kind, with id, file, line and signature |
-| `slice` | The context for working on one symbol or module (exists) |
+| `find` | Symbols and struct fields by name or kind, with id, file, line and signature; a field shows its type's location |
+| `slice` | The context for working on one symbol, file or module, as compact text by default (exists) |
+| `source` | The numbered lines of a symbol, from its documentation, or of a file's range, so an agent reads only what a slice points to. A file or range of more than 120 lines that is most of its file gives the file's outline instead, unless the agent asks for all of it |
 | `impact` | What depends on a symbol, transitively: its blast radius, before an edit |
-| `allowed` | Whether one module may depend on another, before an import is added |
+| `allowed` | Whether one module may depend on another, before an import is added. Modules may be named by id, path or short name, or by a symbol or file in them; only a path that matches nothing is treated as a module not built yet |
 | `changes` | What changed in the architecture since the baseline: contract changes, new and removed edges, new violations. The agent checks its own edits with this |
-| `plan` | Writes unimplemented CML: the contracts and dependencies the agent intends to build, in design syntax. It is validated like a design, so it reports layer problems and conflicts with existing code, and it is overlaid on the live map as unimplemented. As the code is written, each item turns into a built one, so the person can watch the plan being filled in. A plan is saved as a design file in `.treaty/designs/`, so it survives a restart, `design check` works on it, and the person can open and edit it |
+| `plan` | Writes unimplemented AutoPen: the contracts and dependencies the agent intends to build, in design syntax. It is validated like a design, so it reports layer problems and conflicts with existing code, and it is overlaid on the live map as unimplemented. As the code is written, each item turns into a built one, so the person can watch the plan being filled in. A plan is saved as a design file in `.treaty/designs/`, so it survives a restart, `design check` works on it, and the person can open and edit it |
 | `selection` | What the person has selected on the map |
 | `show` | Asks the person to look at one symbol or module: it pulses and a notice offers to jump there. At most once every 15 seconds |
-| `check`, `design_check` | As today (exist) |
+| `check`, `design_check` | As today (exist); `check` summarizes by default, with `format: json` for the full report |
 
-**Nudging.** For now the agent learns about violations only by calling `changes`. Whether the server should tell the agent unprompted, for example by attaching a warning to its next tool result, is an open question to answer after using the tool for a while.
+Every tool that takes a target accepts an id, a file, or a short name that matches exactly one symbol, module or file: a qualified name, a method's own name, or the tail of an id or path. An ambiguous name is refused with its candidates, and an unknown one with near matches.
+
+**Nudging.** The server tells the agent about violations without being asked. Every tool result ends with a warning listing each layer violation in the code that this session's agent has not been told about yet, such as one its last edit introduced, with the rule and the first offending reference, and asks it to fix the violation or explain it to the person. `overview`, `changes` and `check` list violations themselves, so they only mark them told. A violation that is fixed and later returns is news again.
 
 ## Agent context slice
 
 A slice is the minimum an agent needs to work on one symbol or module without reading the rest of the codebase: the target's contract, its neighbors' contracts, and the layer rules it must not break. Implementations outside the target module are never included.
 
-Example slice for `go:injection:Container.Resolve`, abbreviated:
+Example slice for `go:injection:Container.Resolve` in the fixture, as `treaty slice --format json` prints it. Against a baseline, `contract` also carries the change, such as `"change": "breaking"`:
 
 ```json
 {
   "schema": "treaty/slice/v1",
   "task_scope": {
     "symbol": "go:injection:Container.Resolve",
-    "file": "injection/resolve.go",
+    "file": "injection/container.go",
+    "line": 15,
+    "end_line": 15,
     "layer": "application",
     "kind": "method"
   },
   "contract": {
-    "signature": "Resolve(ctx context.Context, k Key) (any, error)",
-    "change": "breaking"
+    "signature": "func Resolve(ctx context.Context, k Key) (any, error)"
   },
   "may_depend_on_layers": ["domain", "application"],
   "neighbors": [
-    {"symbol": "go:injection:resolveLocked", "relation": "uses", "signature": "..."},
-    {"symbol": "go:internal/graph:Graph.Order", "relation": "uses", "signature": "func (g *Graph) Order() ([]Binding, error)"}
+    {"symbol": "go:injection:Key", "relation": "uses", "signature": "type Key struct", "file": "injection/container.go", "line": 9}
   ],
-  "excluded": {"modules": 7, "symbols": 21}
+  "excluded": {"modules": 5, "symbols": 19}
 }
 ```
 
@@ -469,13 +476,13 @@ The tool ships as a single binary, `treaty`, driven by a config file at the repo
 | Command | Does | Output |
 | --- | --- | --- |
 | `treaty -C <dir> <command>` | Runs any command on the repository at `dir`, as `git -C` does, so an agent or `.mcp.json` elsewhere can use it | As the command |
-| `treaty check [--base <ref>]` | Runs all four checks on the working tree, and on its diff from base when one is given. Its notes say when it compared nothing: no base, or a base that is the current commit with nothing changed | Report JSON on stdout, non-zero exit on failure |
-| `treaty overview`, `find`, `impact`, `allowed` | The MCP tools of the same names, on the working tree | Text on stdout |
+| `treaty check [--base <ref>] [--format json\|text\|summary]` | Runs all four checks on the working tree, and on its diff from base when one is given. Its notes say when it compared nothing: no base, or a base that is the current commit with nothing changed | Report JSON on stdout, the text queue, or a summary of the verdict, notes, violations and breaking changes with counts of the rest; non-zero exit on failure |
+| `treaty overview`, `find`, `impact`, `allowed`, `source` | The MCP tools of the same names, on the working tree | Text on stdout |
 | `treaty map [--base <ref>] [--design <name>...]` | Builds, scores and renders the diff, with any designs overlaid | Self-contained HTML file in `.treaty/out/` |
-| `treaty design new <name> [--from <target>...]` | Scaffolds a design from the current contracts of the given modules or symbols | `.treaty/designs/<name>.cml`; refuses to overwrite |
+| `treaty design new <name> [--from <target>...]` | Scaffolds a design from the current contracts of the given modules or symbols | `.treaty/designs/<name>.pen`; refuses to overwrite |
 | `treaty design check <name>` | Compares a design in `.treaty/designs/` with the current code | Missing, differing, layer-breaking, unclassified and failing items, non-zero exit on failure |
-| `treaty slice <symbol, file or module>` | Builds a context slice from the current tree. A file slice lists every declaration in the file and the symbols in other files it uses or is used by; a module slice lists its files; every entry has file:line | Slice JSON on stdout |
-| `treaty dump [--at <ref>]` | Prints the graph in CML, for debugging and golden tests | CML on stdout |
+| `treaty slice <target> [--format text\|json]` | Builds a context slice from the current tree. A file slice lists every declaration in the file and the symbols in other files it uses or is used by; a module slice lists its files; every entry has file:line | Text on stdout, one line per entry, or slice JSON |
+| `treaty dump [--at <ref>]` | Prints the graph in AutoPen, for debugging and golden tests | AutoPen on stdout |
 | `treaty serve [--port <n>] [--open]` | Serves the live map until interrupted | The map at `http://127.0.0.1:7878` |
 | `treaty mcp [--port <n>]` | Serves the live graph to an agent over MCP on stdio, and the live map to the person unless another server already does | MCP on stdio; the map URL on stderr |
 | `treaty url` | Prints the live map's address for this directory, or fails when no treaty server is running here. In Claude Code, `! treaty url` shows it in the session | The URL |
@@ -513,7 +520,7 @@ Three phases, ordered so that each one is useful on its own: layer checks and sl
 
 &#91;embedded content: delivery plan · 3 phases, 3 gates\]
 
-No dates are set; a phase starts only after the previous gate passes. Build a fixture repository that reproduces the mockup's `smarty/injection` PR #142 in phase 1 and use it as the regression test for every later phase.
+No dates are set; a phase starts only after the previous gate passes. Build a fixture repository that reproduces the mockup's `smarty/injection` PR #142 in phase 1 and use it as the regression test for every later phase. It lives in `internal/adapters/golang/testdata`: `injection-base` is the tree before the PR and `injection` the tree after it, and the tests commit the first and diff the second against it.
 
 ## Acceptance criteria
 
@@ -530,29 +537,29 @@ Each criterion is checked by an automated test against the fixture repository un
 
 **Phase 1: Graph and layers**
 
-- [ ] `treaty check` on the fixture reports exactly one violation, `graph` to `reflectx`, with the reference `graph.typeName` to `reflectx.TypeName` and its file and line.
-- [ ] `treaty check` passes on the tool's own repository.
-- [ ] `treaty slice go:injection:Container.Resolve` returns the neighbors and exclusion counts shown in the slice example.
-- [ ] A module that matches no layer glob is reported as Unclassified, with a warning and exit code 0.
+- [x] `treaty check` on the fixture reports exactly one violation, `graph` to `reflectx`, with the reference `graph.typeName` to `reflectx.TypeName` and its file and line.
+- [x] `treaty check` passes on the tool's own repository.
+- [x] `treaty slice go:injection:Container.Resolve` returns the neighbors and exclusion counts shown in the slice example.
+- [x] A module that matches no layer glob is reported as Unclassified, with a warning and exit code 0.
 
-* [ ] `treaty dump` on the fixture and on the tool's own repository, parsed back, yields an identical graph.
-* [ ] Two `treaty dump` runs on the fixture produce identical bytes.
+* [x] `treaty dump` on the fixture and on the tool's own repository, parsed back, yields an identical graph.
+* [x] Two `treaty dump` runs on the fixture produce identical bytes.
 
 **Phase 2: Contract diff**
 
-- [ ] The fixture diff classifies `Container` and `Container.Resolve` as breaking, `Lifetime` and `Binding` as compatible, and exactly four symbols as implementation only.
-- [ ] Instability for `graph` is reported as 0.33 before and 0.40 after, matching the mockup.
-- [ ] The review queue order matches a checked-in golden file.
+- [x] The fixture diff classifies `Container` and `Container.Resolve` as breaking, `Lifetime` and `Binding` as compatible, and exactly four symbols as implementation only.
+- [x] Instability for `graph` is reported as 0.33 before and 0.40 after, matching the mockup.
+- [x] The review queue order matches a checked-in golden file.
 
 **Phase 3: Map and agents**
 
-- [ ] The generated HTML matches the mockup's panels, encodings and interactions for the fixture.
-- [ ] A synthetic graph of 50 modules and 2,000 contract symbols renders in under 2 seconds on a 2024 laptop with no overlapping module hexagons.
-- [ ] Every node, module and queue item is reachable and selectable by keyboard.
-- [ ] The MCP server returns the same slice JSON as `treaty slice` for the same symbol.
+- [ ] The generated HTML matches the mockup's panels, encodings and interactions for the fixture. Not yet compared by eye.
+- [x] A synthetic graph of 50 modules and 2,000 contract symbols renders in under 2 seconds on a 2024 laptop with no overlapping module hexagons. The layout and HTML are tested; drawing it takes about half a second even in jsdom, checked by hand.
+- [x] Every node, module and queue item is reachable and selectable by keyboard. Checked by hand in jsdom on the fixture and the synthetic graph: every module, symbol, file cell, group and queue item takes focus and selects on Enter.
+- [x] The MCP server returns the same slice JSON as `treaty slice` for the same symbol.
 
-* [ ] `treaty design new probe --from go:injection` followed by `treaty design check probe` reports no findings, and a second `treaty design new probe` fails without touching the file.
-* [ ] Clicking a symbol in the map shows its code from the source embedded in the HTML file.
+* [x] `treaty design new probe --from go:injection` followed by `treaty design check probe` reports no findings, and a second `treaty design new probe` fails without touching the file.
+* [x] Clicking a symbol in the map shows its code from the source embedded in the HTML file.
 
 ## Risks and open questions
 
@@ -571,9 +578,9 @@ The biggest risk and the biggest open question are the same: code the static gra
 
 **Open questions**
 
-- [ ] Should version 1 add runtime traces from the test suite to recover edges hidden by dependency injection, or wait until phase 3?
+- [x] Should version 1 add runtime traces from the test suite to recover edges hidden by dependency injection? No: edges hidden by dependency injection are out of scope.
 - [ ] Is a module a package, or can one module span several packages through config?
 - [x] Should breaking changes in internal packages count as breaking, given they cannot be imported from outside? Yes: they are marked absorbed when every dependent changed with them, rank medium, and still fail the check.
-- [ ] What is CML's final name?
-- [ ] Should the live server warn the agent unprompted when an edit introduces a violation, or is the `changes` tool enough? Answer after using the tool for a while.
-- [ ] Is polling the tree twice a second fast enough on large repositories, or does the watcher need the operating system's file events?
+- [x] What is the diagram language's final name? AutoPen, formerly CML. Design files end in `.pen`; files saved as `.cml`, and documents that open with `cml 1`, still load.
+- [x] Should the live server warn the agent unprompted when an edit introduces a violation? Yes: see Nudging.
+- [x] Is polling the tree twice a second fast enough on large repositories? The rate adapts to size instead: twice a second for small and medium repositories, every five seconds for large ones (see Watching).

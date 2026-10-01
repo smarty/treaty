@@ -22,15 +22,20 @@ const usage = `usage: treaty [-C <dir>] <command> [flags]
                                               current directory
 
 commands:
-  check [--base <ref>] [--format json|text]   run every check; exit 1 on failure
+  check [--base <ref>] [--format json|text|summary]
+                                              run every check; exit 1 on failure
   overview [--base <ref>]                     print every module by layer and every module
                                               dependency, in a few kilobytes
-  find <query> [--kind <kind>]                list symbols whose id contains query, with
-                                              file:line and signature
-  slice <symbol, module or file>              print a context slice as JSON
-  impact <symbol or module>                   list everything that depends on the target
+  find <query> [--kind <kind>]                list symbols and struct fields whose id contains
+                                              query, with file:line and signature
+  slice <target> [--format text|json]         print a context slice; targets everywhere may be
+                                              ids, files or short names such as Store.Open
+  source <symbol or file[:start-end]> [--all]
+                                              print just that code, with line numbers; a long
+                                              file prints its outline unless --all
+  impact <symbol, module or file>             list everything that depends on the target
   allowed <from module> <to module>           say whether from may depend on to
-  dump [--at <ref>]                           print the graph in CML
+  dump [--at <ref>]                           print the graph in AutoPen
   design new <name> [--from <target>]...      scaffold a design in .treaty/designs
   design check <name> [--format json|text]    compare a design with the code
   map [--base <ref>] [--design <name>]...     render a static map to .treaty/out/map.html
@@ -38,8 +43,8 @@ commands:
   mcp [--port <n>]                            serve the live graph to an agent over MCP on
                                               stdio, and the live map to the person
   init [--architecture <name>]                create .treaty and propose treaty.yaml for an
-                                              architecture: hexagonal (default), clean,
-                                              layered, slices or modular
+                                              architecture: none (default), hexagonal,
+                                              clean, layered, slices or modular
   url                                         print the live map's address for this directory
   here [--force]                              register treaty in this repository's .mcp.json,
                                               so Claude Code sessions here start it
@@ -176,7 +181,8 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 	port := flags.Int("port", 7878, "port for the live map; any free port if it is taken")
 	open := flags.Bool("open", false, "open the live map in a browser")
 	force := flags.Bool("force", false, "replace a different treaty entry in .mcp.json")
-	kind := flags.String("kind", "", "symbol kind for find: function, method, interface, type or value")
+	all := flags.Bool("all", false, "print a whole file or long range from source, not its outline")
+	kind := flags.String("kind", "", "symbol kind for find: function, method, interface, type, value or field")
 	var from, designs repeated
 	flags.Var(&from, "from", "module or symbol to copy into the design")
 	flags.Var(&designs, "design", "design to overlay")
@@ -192,7 +198,12 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 			return err
 		}
 
-		if err := write(stdout, *format, report, func() string { return checkText(report) }); err != nil {
+		render := func() string { return checkText(report) }
+		if *format == "summary" {
+			*format, render = "text", report.Summary
+		}
+
+		if err := write(stdout, *format, report, render); err != nil {
 			return err
 		}
 
@@ -243,7 +254,20 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 			return err
 		}
 
-		return write(stdout, "json", slice, nil)
+		sliceFormat := "text"
+		flags.Visit(func(given *flag.Flag) {
+			if given.Name == "format" {
+				sliceFormat = *format
+			}
+		})
+
+		return write(stdout, sliceFormat, slice, slice.Text)
+	case "source":
+		if len(positional) != 1 {
+			return ErrUsage
+		}
+
+		return text(stdout)(service.Source(positional[0], *all))
 	case "design new":
 		if len(positional) != 1 {
 			return ErrUsage

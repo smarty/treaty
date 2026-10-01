@@ -2,9 +2,11 @@ package filesystem
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/smarty/treaty/internal/graph"
@@ -151,5 +153,127 @@ func TestLoadedHexagonalPlacesAdapters(t *testing.T) {
 
 	if place := config.Architecture.Resolve("cmd/tool"); place.Layer != graph.LayerComposition {
 		t.Errorf("cmd/tool: %+v", place)
+	}
+}
+
+func TestPlaceEditsTreatyYAML(t *testing.T) {
+	const original = `# Our layers.
+architecture: hexagonal
+layers:
+  composition: ["cmd/**"]
+  domain: ["internal/core/**"] # the pure core
+  application: ["internal/app/**"]
+  adapter:
+    driving: ["internal/web/**"]
+rules:
+  fail_on: [breaking]
+`
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	config := NewConfig(root)
+	place := func(path string, placement rules.Placement) string {
+		t.Helper()
+		if _, err := config.Place(path, placement); err != nil {
+			t.Fatalf("Place(%s, %+v): %v", path, placement, err)
+		}
+
+		loaded, _, err := config.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got := loaded.Architecture.Resolve(path); got != placement {
+			t.Fatalf("%s resolves to %+v, want %+v", path, got, placement)
+		}
+
+		data, _ := os.ReadFile(filepath.Join(root, ConfigFile))
+		return string(data)
+	}
+
+	text := place("internal/web/admin", rules.Placement{Layer: graph.LayerAdapter, Side: graph.SideDriven})
+	for _, want := range []string{"# Our layers.", "# the pure core", `driven: ["internal/web/admin"]`, "fail_on: [breaking]"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("the edit must keep comments and add the module to a new side list (%q):\n%s", want, text)
+		}
+	}
+
+	text = place("internal/web/admin", rules.Placement{Layer: graph.LayerAdapter, Side: graph.SideDriving})
+	if strings.Contains(text, `"internal/web/admin"`) {
+		t.Fatalf("moving back under its wildcard must only remove the exact path:\n%s", text)
+	}
+
+	text = place("cmd/tool", rules.Placement{Layer: graph.LayerApplication})
+	if !strings.Contains(text, `application: ["internal/app/**", "cmd/tool"]`) {
+		t.Fatalf("the module joins the target's list in its style:\n%s", text)
+	}
+
+	place("cmd/tool", rules.Placement{Layer: graph.LayerComposition})
+	if _, err := NewConfig(t.TempDir()).Place("x", rules.Placement{Layer: graph.LayerDomain}); !errors.Is(err, ErrNoConfig) {
+		t.Fatalf("placing without treaty.yaml must fail with ErrNoConfig: %v", err)
+	}
+}
+
+func TestPlaceInLayeredComposition(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte("architecture: layered\nlayers:\n  web:\n    - web/**\n  store:\n    - store/**\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	config := NewConfig(root)
+	for _, placement := range []rules.Placement{{Layer: graph.LayerComposition}, {Layer: "store"}, {Layer: "web"}} {
+		if _, err := config.Place("web/main", placement); err != nil {
+			t.Fatal(err)
+		}
+
+		loaded, _, _ := config.Load()
+		if got := loaded.Architecture.Resolve("web/main"); got != placement {
+			t.Fatalf("web/main resolves to %+v, want %+v", got, placement)
+		}
+	}
+
+	data, _ := os.ReadFile(filepath.Join(root, ConfigFile))
+	if text := string(data); !strings.Contains(text, "composition: []\nlayers:") || !strings.Contains(text, "    - store/**\n") {
+		t.Fatalf("composition goes above layers and block lists stay block lists:\n%s", text)
+	}
+}
+
+func TestDesignsBeforeTheRename(t *testing.T) {
+	root := t.TempDir()
+	workspace := NewWorkspace(root)
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	old := filepath.Join(root, Directory, "designs", "old.cml")
+	if err := os.WriteFile(old, []byte("cml 1\ndesign \"old\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := workspace.CreateDesign("fresh", "autopen 1\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	if names, _ := workspace.Designs(); !slices.Equal(names, []string{"fresh", "old"}) {
+		t.Fatalf("designs: %v", names)
+	}
+
+	if text, err := workspace.ReadDesign("old"); err != nil || !strings.HasPrefix(text, "cml 1") {
+		t.Fatalf("an old .cml design still reads: %q %v", text, err)
+	}
+
+	if _, err := workspace.CreateDesign("old", "autopen 1\n"); !errors.Is(err, ErrDesignExists) {
+		t.Fatalf("an old .cml design blocks creating its name: %v", err)
+	}
+
+	path, err := workspace.SaveDesign("old", "autopen 1\n")
+	if err != nil || filepath.Ext(path) != DesignExtension {
+		t.Fatalf("saving writes .pen: %s %v", path, err)
+	}
+
+	if _, err := os.Stat(old); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("saving replaces the old .cml file: %v", err)
 	}
 }

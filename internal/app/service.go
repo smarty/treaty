@@ -170,15 +170,26 @@ func (this *analysis) failures() []string {
 	}
 
 	if slices.Contains(this.config.FailOn, rules.FindingBreaking) {
-		count := 0
+		changed, moved := 0, 0
 		for _, change := range this.changes {
-			if change.Kind == rules.ChangeBreaking || change.Kind == rules.ChangeRemoved || (change.Kind == rules.ChangeMoved && !this.fromEntry(change)) {
-				count++
+			switch {
+			case change.Kind == rules.ChangeBreaking || change.Kind == rules.ChangeRemoved:
+				changed++
+			case change.Kind == rules.ChangeMoved && !this.fromEntry(change):
+				moved++
 			}
 		}
 
-		if count > 0 {
-			result = append(result, fmt.Sprintf("%d breaking change(s)", count))
+		// A moved contract breaks its importers like a removed one, so it
+		// counts, and the count says how many of each so it matches what
+		// the findings list.
+		switch {
+		case moved == 0 && changed > 0:
+			result = append(result, fmt.Sprintf("%d breaking change(s)", changed))
+		case moved > 0 && changed == 0:
+			result = append(result, fmt.Sprintf("%d breaking change(s), all moved contracts", moved))
+		case moved > 0:
+			result = append(result, fmt.Sprintf("%d breaking change(s): %d changed or removed, %d moved", changed+moved, changed, moved))
 		}
 	}
 

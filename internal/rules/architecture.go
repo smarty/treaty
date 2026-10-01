@@ -278,6 +278,11 @@ func (this Architecture) MayUse(placement Placement) []string {
 
 // Resolve places one module path.
 //
+// Notes:
+//   - For the layered, hexagonal and clean styles, a glob that is exactly
+//     the module's path wins over every wildcard; otherwise composition
+//     comes first, then the layers in order.
+//
 // Parameters:
 //   - modulePath: the module path relative to the repository root.
 //
@@ -286,6 +291,20 @@ func (this Architecture) MayUse(placement Placement) []string {
 func (this Architecture) Resolve(modulePath string) (result Placement) {
 	if this.Style == StyleNone {
 		return Placement{Layer: graph.LayerNone}
+	}
+
+	if this.Style != StyleSlices && this.Style != StyleModular {
+		// A module named by its exact path is placed there whatever the
+		// wildcards say, so one module can leave a broad glob.
+		if slices.Contains(this.Composition, modulePath) {
+			return Placement{Layer: graph.LayerComposition}
+		}
+
+		for _, layer := range this.Layers {
+			if slices.Contains(layer.Globs, modulePath) {
+				return Placement{Layer: layer.Name, Side: layer.Side}
+			}
+		}
 	}
 
 	if MatchAny(this.Composition, modulePath) {

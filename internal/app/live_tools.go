@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/smarty/treaty/internal/cml"
+	"github.com/smarty/treaty/internal/autopen"
 	"github.com/smarty/treaty/internal/graph"
 	"github.com/smarty/treaty/internal/rules"
 )
@@ -20,18 +20,23 @@ var ErrEmptyPlan = errors.New("a plan needs at least one file or module block")
 // is written.
 //
 // Parameters:
-//   - from: the depending module, as an id such as go:internal/app or a path.
-//   - to: the module depended on, as an id or a path.
+//   - from: the depending module, as an id such as go:internal/app, a path,
+//     or a short name such as app; a symbol or file stands for its module.
+//     A path that matches nothing is a module not built yet.
+//   - to: the module depended on, given the same ways.
 //
 // Returns:
 //   - result: the verdict and the rule behind it, one line each.
-//   - err: the live graph is not built.
+//   - err: the live graph is not built, or a name is ambiguous.
+//
+// Errors:
+//   - ErrAmbiguousTarget: a short name matches more than one thing.
 func (this *Live) Allowed(from, to string) (result string, err error) {
 	current, err := this.current()
 	if err != nil {
 		return "", err
 	}
-	return current.allowed(from, to), nil
+	return current.allowed(from, to)
 }
 
 // Changes describes how the architecture differs from the baseline: contract
@@ -188,14 +193,16 @@ func (this *Live) Find(query, kind string) (result string, err error) {
 // what an edit to it can break.
 //
 // Parameters:
-//   - target: a symbol id or module id.
+//   - target: a symbol id, module id or file, or a short name that matches
+//     exactly one, such as Store.CreateBook or store.go.
 //
 // Returns:
 //   - result: the dependents grouped by module, contracts first.
 //   - err: the live graph is not built, or the target does not exist.
 //
 // Errors:
-//   - ErrUnknownTarget: no symbol or module has that id.
+//   - ErrUnknownTarget: nothing matches the target.
+//   - ErrAmbiguousTarget: several symbols, modules or files match it.
 func (this *Live) Impact(target string) (result string, err error) {
 	current, err := this.current()
 	if err != nil {
@@ -219,31 +226,31 @@ func (this *Live) Overview() (result string, err error) {
 	return current.overview(), nil
 }
 
-// Plan saves unimplemented CML as a design and checks it against the live
+// Plan saves unimplemented AutoPen as a design and checks it against the live
 // graph, so the plan shows on the map and fills in as code is written.
 //
 // Notes:
 //   - A plan replaces any design with the same name.
-//   - Text without the "cml 1" line gets a header naming the design.
+//   - Text without the "autopen 1" line gets a header naming the design.
 //
 // Parameters:
 //   - name: the design name.
-//   - text: CML in design syntax.
+//   - text: AutoPen in design syntax.
 //
 // Returns:
 //   - result: the design report: what is not built yet, what differs, and
 //     what breaks layer rules.
-//   - err: the text is not valid design CML, or it could not be saved.
+//   - err: the text is not valid design AutoPen, or it could not be saved.
 //
 // Errors:
 //   - ErrDumpSyntax: the text uses dump-only syntax.
 //   - ErrEmptyPlan: the text declares nothing.
 func (this *Live) Plan(name, text string) (result DesignReport, err error) {
-	if !strings.HasPrefix(strings.TrimSpace(text), fmt.Sprintf("cml %d", cml.Version)) {
-		text = fmt.Sprintf("cml %d\ndesign %q\n\n%s", cml.Version, name, text)
+	if trimmed := strings.TrimSpace(text); !strings.HasPrefix(trimmed, fmt.Sprintf("%s %d", autopen.Name, autopen.Version)) && !strings.HasPrefix(trimmed, fmt.Sprintf("cml %d", autopen.Version)) {
+		text = fmt.Sprintf("%s %d\ndesign %q\n\n%s", autopen.Name, autopen.Version, name, text)
 	}
 
-	document, err := cml.Parse(text)
+	document, err := autopen.Parse(text)
 	if err != nil {
 		return DesignReport{}, err
 	}
@@ -306,7 +313,8 @@ func (this *Live) Selected() (selection Selection, slice *Slice, err error) {
 // Slice builds a context slice from the live graph.
 //
 // Parameters:
-//   - target: a symbol id or module id.
+//   - target: a symbol id, module id or file, or a short name that matches
+//     exactly one.
 //
 // Returns:
 //   - result: the slice.
@@ -321,10 +329,18 @@ func (this *Live) Slice(target string) (result Slice, err error) {
 }
 
 // allowed says whether module from may depend on module to, and why.
-func (this *analysis) allowed(from, to string) (result string) {
+func (this *analysis) allowed(from, to string) (result string, err error) {
 	architecture := this.config.Architecture
-	fromID, fromPlace := this.locate(from)
-	toID, toPlace := this.locate(to)
+	fromID, fromPlace, err := this.locate(from)
+	if err != nil {
+		return "", err
+	}
+
+	toID, toPlace, err := this.locate(to)
+	if err != nil {
+		return "", err
+	}
+
 	verdict, rule := "allowed", ""
 	if fromID != toID {
 		if allowed, broken := architecture.Check(fromPlace, toPlace); !allowed {
@@ -334,35 +350,55 @@ func (this *analysis) allowed(from, to string) (result string) {
 
 	return fmt.Sprintf("%s: %s (%s) → %s (%s)\n%s%s may depend on: %s\n",
 		verdict, fromID, placeName(fromPlace), toID, placeName(toPlace), rule,
-		placeName(fromPlace), strings.Join(architecture.MayUse(fromPlace), ", "))
+		placeName(fromPlace), strings.Join(architecture.MayUse(fromPlace), ", ")), nil
 }
 
 // find lists the symbols whose id contains query, contracts first.
 func (this *analysis) find(query, kind string) (result string) {
+	type match struct {
+		id, kind, file, signature string
+		line                      int
+		contract                  bool
+	}
+
 	needle := strings.ToLower(query)
-	var matches []*graph.Symbol
+	var matches []match
 	for _, symbol := range this.head.Symbols {
 		if (kind == "" || symbol.Kind == kind) && strings.Contains(strings.ToLower(symbol.ID), needle) {
-			matches = append(matches, symbol)
+			matches = append(matches, match{symbol.ID, symbol.Kind, symbol.File, symbol.Signature, symbol.Line, symbol.Contract})
+		}
+
+		// A struct's fields are found by name too, such as Query.Limit, at
+		// their type's location.
+		if kind != "" && kind != KindField {
+			continue
+		}
+
+		for _, field := range symbol.Fields {
+			for _, name := range fieldNames(field.Text) {
+				if id := symbol.ID + "." + name; strings.Contains(strings.ToLower(id), needle) {
+					matches = append(matches, match{id, KindField, symbol.File, field.Text, symbol.Line, field.Contract})
+				}
+			}
 		}
 	}
 
 	sort.SliceStable(matches, func(i, j int) bool {
-		if matches[i].Contract != matches[j].Contract {
-			return matches[i].Contract
+		if matches[i].contract != matches[j].contract {
+			return matches[i].contract
 		}
 
-		return matches[i].ID < matches[j].ID
+		return matches[i].id < matches[j].id
 	})
 
 	var builder strings.Builder
-	for index, symbol := range matches {
+	for index, found := range matches {
 		if index == findLimit {
 			fmt.Fprintf(&builder, "… %d more; narrow the query\n", len(matches)-findLimit)
 			break
 		}
 
-		fmt.Fprintf(&builder, "%s  %s  %s:%d  %s\n", symbol.ID, symbol.Kind, symbol.File, symbol.Line, symbol.Signature)
+		fmt.Fprintf(&builder, "%s  %s  %s:%d  %s\n", found.id, found.kind, found.file, found.line, found.signature)
 	}
 
 	if len(matches) == 0 {
@@ -375,6 +411,11 @@ func (this *analysis) find(query, kind string) (result string) {
 // impact lists every transitive dependent of target, grouped by module.
 func (this *analysis) impact(target string) (result string, err error) {
 	g := this.head
+	target, err = this.resolve(target)
+	if err != nil {
+		return "", err
+	}
+
 	var start []string
 	switch {
 	case g.Symbol(target) != nil:
@@ -384,7 +425,11 @@ func (this *analysis) impact(target string) (result string, err error) {
 			start = append(start, symbol.ID)
 		}
 	default:
-		return "", fmt.Errorf("%w: %s", ErrUnknownTarget, target)
+		for _, symbol := range g.Symbols {
+			if symbol.File == target {
+				start = append(start, symbol.ID)
+			}
+		}
 	}
 
 	callers := map[string][]string{}
@@ -410,7 +455,7 @@ func (this *analysis) impact(target string) (result string, err error) {
 			seen[caller] = true
 			queue = append(queue, caller)
 			symbol := g.Symbol(caller)
-			if g.Module(target) == nil || symbol.Module != target {
+			if (g.Module(target) == nil || symbol.Module != target) && symbol.File != target {
 				byModule[symbol.Module] = append(byModule[symbol.Module], symbol)
 			}
 		}
@@ -520,17 +565,72 @@ func (this *analysis) overview() (result string) {
 	return builder.String()
 }
 
+// Source prints the code of a symbol, a file or a range of a file's lines
+// in the live working tree.
+//
+// Parameters:
+//   - target: as for Service.Source.
+//
+// Returns:
+//   - result: the numbered lines under a header naming them.
+//   - err: the live graph is not built, or the target is not a symbol, file
+//     or valid range.
+func (this *Live) Source(target string, all bool) (result string, err error) {
+	current, err := this.current()
+	if err != nil {
+		return "", err
+	}
+
+	return this.service.sourceOf(current, target, all)
+}
+
+// Violations lists the live graph's rule violations, so a session can warn
+// its agent about one the moment it appears.
+//
+// Returns:
+//   - result: the violations, sorted by source and target.
+//   - err: the live graph is not built.
+func (this *Live) Violations() (result []rules.Violation, err error) {
+	current, err := this.current()
+	if err != nil {
+		return nil, err
+	}
+
+	return current.violations, nil
+}
+
 // locate finds a module by id or path, and the placement it has or would
 // have.
-func (this *analysis) locate(module string) (id string, place rules.Placement) {
+func (this *analysis) locate(module string) (id string, place rules.Placement, err error) {
 	if found := this.head.Module(module); found != nil {
-		return found.ID, placement(found)
+		return found.ID, placement(found), nil
 	}
 
 	for _, found := range this.head.Modules {
 		if found.Path == module {
-			return found.ID, placement(found)
+			return found.ID, placement(found), nil
 		}
+	}
+
+	// A short name, or a symbol or file, stands for the module that holds
+	// it. Only a name that matches nothing is a module not built yet.
+	resolved, err := this.resolve(module)
+	switch {
+	case err == nil:
+		if found := this.head.Module(resolved); found != nil {
+			return found.ID, placement(found), nil
+		}
+
+		if symbol := this.head.Symbol(resolved); symbol != nil {
+			found := this.head.Module(symbol.Module)
+			return found.ID, placement(found), nil
+		}
+
+		if found, _ := fileTarget(this.head, resolved); found != nil {
+			return found.ID, placement(found), nil
+		}
+	case errors.Is(err, ErrAmbiguousTarget):
+		return "", rules.Placement{}, err
 	}
 
 	path := module
@@ -538,7 +638,7 @@ func (this *analysis) locate(module string) (id string, place rules.Placement) {
 		path = rest
 	}
 
-	return module + " (not built)", this.config.Architecture.Resolve(path)
+	return module + " (not built)", this.config.Architecture.Resolve(path), nil
 }
 
 func changeDetail(change rules.Change) string {
@@ -630,4 +730,31 @@ func moduleEdgeSet(g *graph.Graph) map[string]bool {
 	}
 
 	return result
+}
+
+// fieldNames reads the names a struct field line declares: one or more
+// before the type, such as Limit or X, Y, or the type's own name for an
+// embedded field.
+func fieldNames(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+
+	words := strings.Fields(text)
+	if len(words) == 1 || strings.HasPrefix(words[1], "`") {
+		embedded := strings.TrimPrefix(words[0], "*")
+		return []string{embedded[strings.LastIndex(embedded, ".")+1:]}
+	}
+
+	var names []string
+	for _, word := range words {
+		name, more := strings.CutSuffix(word, ",")
+		names = append(names, name)
+		if !more {
+			break
+		}
+	}
+
+	return names
 }

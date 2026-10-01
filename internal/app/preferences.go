@@ -68,6 +68,10 @@ func (this *Live) SavePreferences(update Preferences) (result Preferences, err e
 		result.Follow = update.Follow
 	}
 
+	if update.Legend != nil {
+		result.Legend = update.Legend
+	}
+
 	if len(update.Layout) > 0 {
 		result.Layout = update.Layout
 	}

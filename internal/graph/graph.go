@@ -74,7 +74,8 @@ type Import struct {
 // Name is what the language calls it, and Entry marks a program's entry
 // point, such as a Go main package, which nothing can import. Private marks
 // a module only this repository can import, such as a Go internal package.
-// Slice is the
+// Manifest is the language's module file in the module's directory, such as
+// go.mod, when there is one. Slice is the
 // root path of the vertical slice or bounded context holding the module, and
 // Public marks a context's packages that other contexts may use.
 type Module struct {
@@ -84,6 +85,7 @@ type Module struct {
 	Name     string   `json:"name,omitempty"`
 	Entry    bool     `json:"entry,omitempty"`
 	Private  bool     `json:"private,omitempty"`
+	Manifest string   `json:"manifest,omitempty"`
 	Layer    string   `json:"layer"`
 	Side     string   `json:"side,omitempty"`
 	Slice    string   `json:"slice,omitempty"`
@@ -101,7 +103,8 @@ type ModuleEdge struct {
 }
 
 // Symbol is a declaration: a function, method, interface, type or value.
-// Doc is its documentation comment as plain text, without comment markers.
+// Doc is its documentation comment as plain text, without comment markers,
+// and DocLine the line the comment starts on.
 type Symbol struct {
 	ID        string    `json:"id"`
 	Module    string    `json:"module"`
@@ -117,6 +120,7 @@ type Symbol struct {
 	Fields    []Field   `json:"fields,omitempty"`
 	Hash      string    `json:"hash,omitempty"`
 	Doc       string    `json:"doc,omitempty"`
+	DocLine   int       `json:"doc_line,omitempty"`
 	Variants  []Variant `json:"variants,omitempty"`
 }
 

@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/smarty/treaty/internal/rules"
 )
@@ -105,4 +107,79 @@ func (this *analysis) report() Report {
 	}
 
 	return result
+}
+
+// Summary renders the report in a few lines, for agents checking their work:
+// the verdict and notes, one line per violation and per breaking change,
+// since each needs action or an explanation, a count of moved contracts, and
+// counts for every other kind of finding.
+//
+// Returns:
+//   - result: the summary text.
+func (this Report) Summary() string {
+	var builder strings.Builder
+	if len(this.Failures) > 0 {
+		fmt.Fprintf(&builder, "FAIL: %s\n", strings.Join(this.Failures, "; "))
+	} else {
+		builder.WriteString("PASS\n")
+	}
+
+	for _, note := range this.Notes {
+		fmt.Fprintf(&builder, "note: %s\n", note)
+	}
+
+	if len(this.Violations) > 0 {
+		fmt.Fprintf(&builder, "violations (%d):\n", len(this.Violations))
+		for _, violation := range this.Violations {
+			file, line, first := violation.First()
+			fmt.Fprintf(&builder, "  %s → %s: %s; first %s at %s:%d\n", violation.From, violation.To, violation.Rule, first, file, line)
+		}
+	}
+
+	counts := map[string]int{}
+	var breaking []rules.Finding
+	moved := 0
+	for _, finding := range this.Findings {
+		switch finding.Kind {
+		case rules.FindingBreaking, rules.FindingImplementers:
+			breaking = append(breaking, finding)
+		case rules.FindingMoved:
+			moved++
+		case rules.FindingLayerViolation, rules.FindingCycle:
+		case rules.FindingImplementation:
+			counts[finding.Kind] += len(finding.Targets)
+		default:
+			counts[finding.Kind]++
+		}
+	}
+
+	// Moved contracts break their importers too. They are often many, as
+	// in a refactor, so they are counted here rather than listed.
+	if len(breaking)+moved > 0 {
+		fmt.Fprintf(&builder, "breaking (%d):\n", len(breaking)+moved)
+		for _, finding := range breaking {
+			fmt.Fprintf(&builder, "  %s: %s\n", finding.Title, finding.Detail)
+		}
+
+		if moved > 0 {
+			fmt.Fprintf(&builder, "  %d moved contract(s), each breaking its importers outside this diff; check --format text lists them\n", moved)
+		}
+	}
+
+	if len(counts) > 0 {
+		kinds := make([]string, 0, len(counts))
+		for kind := range counts {
+			kinds = append(kinds, kind)
+		}
+
+		sort.Strings(kinds)
+		parts := make([]string, 0, len(kinds))
+		for _, kind := range kinds {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[kind], kind))
+		}
+
+		fmt.Fprintf(&builder, "other findings: %s\n", strings.Join(parts, ", "))
+	}
+
+	return builder.String()
 }

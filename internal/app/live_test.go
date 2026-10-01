@@ -36,3 +36,20 @@ func TestShowIsRateLimited(t *testing.T) {
 		t.Fatalf("pointer: %+v", pointer)
 	}
 }
+
+func TestPollEveryAdaptsToSize(t *testing.T) {
+	for _, c := range []struct {
+		files int
+		took  time.Duration
+		want  time.Duration
+	}{
+		{200, 5 * time.Millisecond, 500 * time.Millisecond},
+		{LargeRepository - 1, 100 * time.Millisecond, 500 * time.Millisecond},
+		{LargeRepository, 100 * time.Millisecond, 5 * time.Second},
+		{3000, 400 * time.Millisecond, 5 * time.Second},
+	} {
+		if got := PollEvery(c.files, c.took); got != c.want {
+			t.Errorf("PollEvery(%d, %s) = %s, want %s", c.files, c.took, got, c.want)
+		}
+	}
+}

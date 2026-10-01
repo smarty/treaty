@@ -73,11 +73,19 @@ func TestDefaultThemesKeepMeaningsApart(t *testing.T) {
 				}
 			}
 
+			// Removed never shows on the map, only in signature diffs beside
+			// added text, so it must read as text and stand apart from added.
+			if ratio := contrastRatio(c["removed"], c["panel"]); ratio < 3 {
+				t.Errorf("removed text: contrast %.1f, want 3", ratio)
+			}
+
+			apart(t, c, []string{"added", "removed"}, "", signalGap)
 			apart(t, c, signals, "", signalGap)
 			apart(t, c, []string{"high", "medium", "low"}, "", severityGap)
 			if strings.HasPrefix(theme.ID, "color-blind") {
 				for deficiency := range deficiencies {
 					apart(t, c, safeSignals, deficiency, safeGap)
+					apart(t, c, []string{"added", "removed"}, deficiency, safeGap)
 				}
 			}
 		})

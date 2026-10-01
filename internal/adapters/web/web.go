@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/smarty/treaty/internal/app"
+	"github.com/smarty/treaty/internal/rules"
 )
 
 const (
@@ -63,7 +64,10 @@ func Listen(live *app.Live, port int) (result *Server, err error) {
 	mux.HandleFunc("POST /api/baseline", result.baseline)
 	mux.HandleFunc("POST /api/selection", result.selection)
 	mux.HandleFunc("POST /api/show", result.show)
+	mux.HandleFunc("GET /api/positions", result.positions)
+	mux.HandleFunc("POST /api/positions", result.setPosition)
 	mux.HandleFunc("GET /api/preferences", result.preferences)
+	mux.HandleFunc("POST /api/reclassify", result.reclassify)
 	mux.HandleFunc("POST /api/preferences", result.savePreferences)
 	mux.HandleFunc("POST /api/view", result.setView)
 	mux.HandleFunc("POST /api/view/adopt", result.adopt)
@@ -260,6 +264,17 @@ func (this *Server) page(writer http.ResponseWriter, _ *http.Request) {
 	_, _ = writer.Write(this.live.Page())
 }
 
+// positions serves where the person put modules on the map.
+func (this *Server) positions(writer http.ResponseWriter, _ *http.Request) {
+	positions, err := this.live.Positions()
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	respond(writer, positions)
+}
+
 // preferences serves the person's saved choices on the map.
 func (this *Server) preferences(writer http.ResponseWriter, _ *http.Request) {
 	preferences, err := this.live.Preferences()
@@ -292,6 +307,28 @@ func (this *Server) savePreferences(writer http.ResponseWriter, request *http.Re
 	respond(writer, preferences)
 }
 
+// reclassify moves a module to another layer in treaty.yaml.
+func (this *Server) reclassify(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Module string `json:"module"`
+		Layer  string `json:"layer"`
+		Side   string `json:"side"`
+	}
+
+	if !decode(writer, request, &body) {
+		return
+	}
+
+	switch _, err := this.live.Reclassify(body.Module, rules.Placement{Layer: body.Layer, Side: body.Side}); {
+	case errors.Is(err, app.ErrPreviewing), errors.Is(err, app.ErrPlacement), errors.Is(err, rules.ErrArchitecture):
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+	case err != nil:
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	default:
+		this.state(writer, request)
+	}
+}
+
 func (this *Server) selection(writer http.ResponseWriter, request *http.Request) {
 	var selection app.Selection
 	if !decode(writer, request, &selection) {
@@ -300,6 +337,33 @@ func (this *Server) selection(writer http.ResponseWriter, request *http.Request)
 
 	this.live.SetSelection(selection)
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+// setPosition saves where the person put a module, or forgets it when the
+// body has no position.
+func (this *Server) setPosition(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Architecture string        `json:"architecture"`
+		Module       string        `json:"module"`
+		Position     *app.Position `json:"position"`
+	}
+
+	if !decode(writer, request, &body) {
+		return
+	}
+
+	positions, err := this.live.SetPosition(body.Architecture, body.Module, body.Position)
+	if errors.Is(err, rules.ErrArchitecture) {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	respond(writer, positions)
 }
 
 // setView draws another architecture, or treaty.yaml's again.

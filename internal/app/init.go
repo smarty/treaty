@@ -188,13 +188,25 @@ func compressGlobs(proposal map[string]string) []glob {
 }
 
 // guessLayer maps a module path to the layer its directory names suggest
-// for an architecture, or empty when none does. For hexagonal, adapters are
-// named by side: driving or driven.
+// for an architecture, or empty when none does. For hexagonal, an adapter
+// is named by its side, driving or driven, when its name says which; a name
+// such as adapters says only adapter, and the side comes from the code.
 func guessLayer(style, modulePath string) string {
 	segments := strings.Split(strings.ToLower(modulePath), "/")
 	has := func(names ...string) bool {
 		for _, segment := range segments {
 			if slices.Contains(names, segment) {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	prefixed := func(prefixes ...string) bool {
+		last := segments[len(segments)-1]
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(last, prefix) {
 				return true
 			}
 		}
@@ -228,13 +240,17 @@ func guessLayer(style, modulePath string) string {
 			return "business"
 		}
 	default:
+		// A name that says which side an adapter is on decides it; one that
+		// says only "adapter" leaves the side to what the code does.
 		switch {
 		case has("domain", "model", "entity", "entities", "core"):
 			return graph.LayerDomain
-		case has("cli", "http", "api", "web", "grpc", "mcp", "server", "handlers"):
+		case has("cli", "http", "api", "web", "grpc", "mcp", "server", "handlers") || prefixed("http", "grpc", "rest"):
 			return graph.SideDriving
-		case has("adapter", "adapters", "infra", "infrastructure", "storage", "db", "database", "repository"):
+		case has("storage", "db", "database", "repository", "persistence"):
 			return graph.SideDriven
+		case has("adapter", "adapters", "infra", "infrastructure"):
+			return graph.LayerAdapter
 		case has("app", "application", "ports", "usecase", "usecases", "service", "services"):
 			return graph.LayerApplication
 		}

@@ -336,7 +336,9 @@ func TestImportOfRootPackage(t *testing.T) {
 		"cmd/tool.go":         "package main\n\nimport \"example.com/lib\"\n\nfunc main() { lib.New() }\n",
 		"cmd/other.go":        "package main\n",
 		"examples/go.mod":     "module example.com/lib/examples\n",
-		"examples/example.go": "package main\n\nimport \"example.com/lib\"\n\nfunc main() { lib.New() }\n",
+		"examples/example.go": "package main\n\nimport (\n\t\"example.com/lib\"\n\t\"example.com/tools/gen\"\n)\n\nfunc main() { lib.New(); gen.Run() }\n",
+		"tools/go.mod":        "module example.com/tools\n",
+		"tools/gen/gen.go":    "package gen\n\nfunc Run() {}\n",
 	} {
 		path := filepath.Join(root, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -353,12 +355,21 @@ func TestImportOfRootPackage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if edges := g.ModuleEdges(); len(edges) != 1 || edges[0].From != "go:cmd" || edges[0].To != "go:." {
-		t.Fatalf("an import of the root package must count, and a nested module must not: %+v", edges)
+	var edges []string
+	for _, edge := range g.ModuleEdges() {
+		edges = append(edges, edge.From+" -> "+edge.To)
+	}
+
+	if want := "go:cmd -> go:., go:examples -> go:., go:examples -> go:tools/gen"; strings.Join(edges, ", ") != want {
+		t.Fatalf("imports of the root package and across nested modules must count: got %v, want %s", edges, want)
 	}
 
 	if !g.Module("go:cmd").Entry || g.Module("go:.").Entry {
 		t.Fatal("only package main is an entry point")
+	}
+
+	if g.Module("go:.").Manifest != "go.mod" || g.Module("go:examples").Manifest != "examples/go.mod" || g.Module("go:cmd").Manifest != "" || g.Module("go:tools/gen").Manifest != "" {
+		t.Fatalf("only a package beside a go.mod has a manifest: %q %q %q", g.Module("go:.").Manifest, g.Module("go:examples").Manifest, g.Module("go:cmd").Manifest)
 	}
 }
 
@@ -510,9 +521,12 @@ func TestNavigation(t *testing.T) {
 
 func TestDocComment(t *testing.T) {
 	file := strings.Split("package x\n\n// Load reads\n// the file.\nfunc Load() {}\n\n//go:noinline\n// Fast is quick.\nfunc Fast() {}\n\n/*\n * Block is\n * a comment.\n */\nfunc Block() {}\n\nvar y = 1 // trailing\nfunc Bare() {}\n\nconst (\n\t// A is first.\n\tA = 1\n)\n", "\n")
-	for line, want := range map[int]string{5: "Load reads\nthe file.", 9: "Fast is quick.", 15: "Block is\na comment.", 18: "", 22: "A is first."} {
-		if got := docComment(file, line); got != want {
-			t.Errorf("line %d: got %q, want %q", line, got, want)
+	for line, want := range map[int]struct {
+		text  string
+		start int
+	}{5: {"Load reads\nthe file.", 3}, 9: {"Fast is quick.", 7}, 15: {"Block is\na comment.", 11}, 18: {"", 0}, 22: {"A is first.", 21}} {
+		if text, start := docComment(file, line); text != want.text || start != want.start {
+			t.Errorf("line %d: got %q from %d, want %q from %d", line, text, start, want.text, want.start)
 		}
 	}
 
@@ -532,5 +546,99 @@ func TestDocComment(t *testing.T) {
 
 	if doc := g.Symbol("go:.:Load").Doc; doc != "Load reads\nthe file." {
 		t.Fatalf("the extractor records documentation: %q", doc)
+	}
+}
+
+func TestShortNamesSourceAndSummaries(t *testing.T) {
+	root := t.TempDir()
+	for file, text := range map[string]string{
+		"go.mod":                    "module example.com/shop\n",
+		"treaty.yaml":               "architecture: layered\nlayers:\n  presentation: [\"internal/api/**\"]\n  data: [\"internal/storage/**\"]\n",
+		"internal/storage/books.go": "package storage\n\n// Store keeps books.\ntype Store struct{}\n\n// Load reads a book.\nfunc (s *Store) Load() int {\n\treturn 1\n}\n",
+		"internal/storage/other.go": "package storage\n\nfunc Other() {}\n",
+		"internal/api/api.go":       "package api\n\nimport \"example.com/shop/internal/storage\"\n\nfunc Get(s *storage.Store) int { return s.Load() }\n\nfunc Other() {}\n",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(file))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	service := newService(t, root)
+	for target, want := range map[string]string{
+		"Store.Load":       "go:internal/storage:Store.Load",
+		"Load":             "go:internal/storage:Store.Load",
+		"storage:Store":    "go:internal/storage:Store",
+		"books.go":         "internal/storage/books.go",
+		"internal/storage": "go:internal/storage",
+	} {
+		slice, err := service.Slice(target)
+		if err != nil {
+			t.Fatalf("%s: %v", target, err)
+		}
+
+		got := slice.TaskScope.Symbol
+		if got == "" {
+			got = slice.TaskScope.File
+		}
+
+		if got == "" {
+			got = slice.TaskScope.Module
+		}
+
+		if got != want {
+			t.Errorf("%s resolved to %s, want %s", target, got, want)
+		}
+	}
+
+	if _, err := service.Slice("Other"); !errors.Is(err, app.ErrAmbiguousTarget) || !strings.Contains(err.Error(), "go:internal/api:Other") {
+		t.Fatalf("an ambiguous name lists its candidates: %v", err)
+	}
+
+	if _, err := service.Impact("Lod"); !errors.Is(err, app.ErrUnknownTarget) {
+		t.Fatalf("an unknown name is unknown: %v", err)
+	}
+
+	if impact, err := service.Impact("Load"); err != nil || !strings.Contains(impact, "go:internal/api") {
+		t.Fatalf("impact takes short names: %v %q", err, impact)
+	}
+
+	source, err := service.Source("Load", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.HasPrefix(source, "internal/storage/books.go:6-9") || !strings.Contains(source, "     6\t// Load reads a book.") || !strings.Contains(source, "     9\t}") {
+		t.Fatalf("a symbol's source runs from its documentation to its last line, numbered:\n%s", source)
+	}
+
+	if lines, err := service.Source("books.go:3-4", false); err != nil || strings.Count(lines, "\n") != 3 {
+		t.Fatalf("a file range prints just those lines: %v\n%s", err, lines)
+	}
+
+	if _, err := service.Source("books.go:3-40", false); !errors.Is(err, app.ErrUnknownTarget) {
+		t.Fatalf("a range past the end of the file is refused: %v", err)
+	}
+
+	if _, err := service.Source("internal/storage", false); !errors.Is(err, app.ErrUnknownTarget) {
+		t.Fatalf("a module has no single source: %v", err)
+	}
+
+	slice, _ := service.Slice("books.go")
+	if text := slice.Text(); !strings.Contains(text, "symbols (2):") || !strings.Contains(text, "7-9  method  Store.Load") || !strings.Contains(text, "called_by  go:internal/api:Get  internal/api/api.go:5") {
+		t.Fatalf("a text slice has one line per entry:\n%s", text)
+	}
+
+	report, err := service.Check("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if summary := report.Summary(); !strings.HasPrefix(summary, "PASS\n") || !strings.Contains(summary, "note: no base given") {
+		t.Fatalf("summary:\n%s", summary)
 	}
 }

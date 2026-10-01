@@ -1,7 +1,7 @@
 architecture: hexagonal
 layers:
   composition: ["cmd/**"]
-  domain:      ["internal/graph/**", "internal/rules/**", "internal/cml/**"]
+  domain:      ["internal/graph/**", "internal/rules/**", "internal/autopen/**"]
   application: ["internal/app/**"]
   adapter:
     driving:   ["internal/adapters/cli/**", "internal/adapters/mcp/**", "internal/adapters/web/**"]

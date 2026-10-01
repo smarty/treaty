@@ -316,7 +316,7 @@ func (this *parser) valueSpec(keyword string, spec []token) []*declaration {
 	return result
 }
 
-// text renders a signature the way CML writes it: no receiver, no body.
+// text renders a signature the way AutoPen writes it: no receiver, no body.
 func (this funcSignature) text(src []byte) string {
 	result := "func " + this.name + spanText(src, this.typeParams) + spanText(src, this.params)
 	if len(this.result) > 0 {

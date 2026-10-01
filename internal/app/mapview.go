@@ -38,6 +38,7 @@ type MapModule struct {
 	New      bool          `json:"new"`
 	Design   bool          `json:"design"`
 	Files    []string      `json:"files"`
+	Manifest string        `json:"manifest,omitempty"`
 	Metrics  rules.Metric  `json:"metrics"`
 	Before   *rules.Metric `json:"before,omitempty"`
 	Guidance string        `json:"guidance"`
@@ -83,6 +84,10 @@ type MapView struct {
 	// show a whole file or cut a symbol's code from it. A file larger than
 	// maxSourceBytes is left out.
 	Sources map[string]string `json:"sources,omitempty"`
+
+	// FileSlices holds each file's context slice, keyed by path, the same
+	// slice an agent gets for the file.
+	FileSlices map[string]Slice `json:"file_slices,omitempty"`
 
 	// Problems are designs that could not be overlaid, and other trouble the
 	// live map reports without stopping.
@@ -152,6 +157,10 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 			count = len(edge.Imports)
 		}
 
+		if edge.References == nil {
+			edge.References = []graph.Edge{}
+		}
+
 		view.Edges = append(view.Edges, MapEdge{
 			From: edge.From, To: edge.To, Count: count, References: edge.References, Imports: edge.Imports,
 			Violation: violations[key] != "", Rule: violations[key], New: analysis.base != nil && !baseEdges[key],
@@ -162,7 +171,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 		entry := MapModule{
 			ID: module.ID, Path: module.Path, Label: label(module), Language: module.Language, Layer: module.Layer, Side: module.Side,
 			Section: module.Slice, Public: module.Public,
-			Files: module.Files, Metrics: analysis.metrics[module.ID], Guidance: architecture.Guidance(placement(module)),
+			Files: module.Files, Manifest: module.Manifest, Metrics: analysis.metrics[module.ID], Guidance: architecture.Guidance(placement(module)),
 			New: analysis.base != nil && analysis.base.Module(module.ID) == nil,
 		}
 
@@ -172,6 +181,15 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 
 		entry.Slice, _ = buildSlice(analysis, module.ID)
 		view.Modules = append(view.Modules, entry)
+		for _, file := range module.Files {
+			if slice, err := buildSlice(analysis, file); err == nil {
+				if view.FileSlices == nil {
+					view.FileSlices = map[string]Slice{}
+				}
+
+				view.FileSlices[file] = slice
+			}
+		}
 	}
 
 	changes := map[string]rules.Change{}
@@ -227,12 +245,18 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 	return view, nil
 }
 
-// sources reads the text of every file in the graph, skipping files that
-// cannot be read or are larger than maxSourceBytes.
+// sources reads the text of every file in the graph and every module's
+// manifest, skipping files that cannot be read or are larger than
+// maxSourceBytes.
 func (this *Service) sources(g *graph.Graph) map[string]string {
 	result := map[string]string{}
 	for _, module := range g.Modules {
-		for _, file := range module.Files {
+		files := module.Files
+		if module.Manifest != "" {
+			files = append([]string{module.Manifest}, files...)
+		}
+
+		for _, file := range files {
 			if data, err := this.extractor.Source(this.root, file); err == nil && len(data) <= maxSourceBytes {
 				result[file] = string(data)
 			}

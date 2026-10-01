@@ -25,6 +25,11 @@ const (
 	ConfigFile = "treaty.yaml"
 	Directory  = ".treaty"
 
+	// DesignExtension ends an AutoPen design's file name. Designs saved
+	// before the language was renamed end in legacyExtension and still load.
+	DesignExtension = ".pen"
+	legacyExtension = ".cml"
+
 	serverFile = "server.json"
 )
 
@@ -154,8 +159,9 @@ func (this *Config) Load() (config app.Config, found bool, err error) {
 //
 // Returns:
 //   - result: the fingerprint.
+//   - files: how many files it covers.
 //   - err: the tree could not be walked.
-func (this *Watcher) Fingerprint() (result string, err error) {
+func (this *Watcher) Fingerprint() (result string, files int, err error) {
 	hasher := fnv.New64a()
 	workspace := filepath.Join(this.root, Directory)
 	designs := filepath.Join(workspace, "designs")
@@ -184,10 +190,11 @@ func (this *Watcher) Fingerprint() (result string, err error) {
 		}
 
 		fmt.Fprintf(hasher, "%s\x00%d\x00%d\n", current, info.Size(), info.ModTime().UnixNano())
+		files++
 		return nil
 	})
 
-	return fmt.Sprintf("%016x", hasher.Sum64()), err
+	return fmt.Sprintf("%016x", hasher.Sum64()), files, err
 }
 
 // Announce writes .treaty/server.json with the live map's URL.
@@ -242,7 +249,8 @@ func (this *Workspace) Announced() (url string, err error) {
 // Designs lists the names of the designs in .treaty/designs.
 //
 // Returns:
-//   - result: design names, sorted, without the .cml extension.
+//   - result: design names, sorted, without their .pen or older .cml
+//     extension.
 //   - err: the directory could not be read.
 func (this *Workspace) Designs() (result []string, err error) {
 	entries, err := os.ReadDir(filepath.Join(this.root, Directory, "designs"))
@@ -251,7 +259,12 @@ func (this *Workspace) Designs() (result []string, err error) {
 	}
 
 	for _, entry := range entries {
-		if name, ok := strings.CutSuffix(entry.Name(), ".cml"); ok && !entry.IsDir() && designName.MatchString(name) {
+		name, ok := strings.CutSuffix(entry.Name(), DesignExtension)
+		if !ok {
+			name, ok = strings.CutSuffix(entry.Name(), legacyExtension)
+		}
+
+		if ok && !entry.IsDir() && designName.MatchString(name) && !slices.Contains(result, name) {
 			result = append(result, name)
 		}
 	}
@@ -260,11 +273,12 @@ func (this *Workspace) Designs() (result []string, err error) {
 	return result, err
 }
 
-// SaveDesign writes .treaty/designs/<name>.cml, replacing an existing one.
+// SaveDesign writes .treaty/designs/<name>.pen, replacing an existing one,
+// including one saved as .cml.
 //
 // Parameters:
 //   - name: the design name.
-//   - text: the CML text.
+//   - text: the AutoPen text.
 //
 // Returns:
 //   - path: where the design was written.
@@ -282,14 +296,23 @@ func (this *Workspace) SaveDesign(name, text string) (path string, err error) {
 		return "", err
 	}
 
-	return path, os.WriteFile(path, []byte(text), 0o644)
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		return "", err
+	}
+
+	if err := os.Remove(legacy(path)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+
+	return path, nil
 }
 
-// CreateDesign writes .treaty/designs/<name>.cml, refusing to overwrite.
+// CreateDesign writes .treaty/designs/<name>.pen, refusing to overwrite a
+// design of that name, whether .pen or .cml.
 //
 // Parameters:
 //   - name: the design name.
-//   - text: the CML text.
+//   - text: the AutoPen text.
 //
 // Returns:
 //   - path: where the design was written.
@@ -306,6 +329,10 @@ func (this *Workspace) CreateDesign(name, text string) (path string, err error) 
 
 	if err := this.Init(); err != nil {
 		return "", err
+	}
+
+	if _, err := os.Stat(legacy(path)); err == nil {
+		return "", fmt.Errorf("%w: %s", ErrDesignExists, legacy(path))
 	}
 
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
@@ -339,13 +366,14 @@ func (this *Workspace) Init() error {
 	return os.WriteFile(filepath.Join(this.root, Directory, ".gitignore"), []byte("*\n"), 0o644)
 }
 
-// ReadDesign reads .treaty/designs/<name>.cml.
+// ReadDesign reads .treaty/designs/<name>.pen, or <name>.cml when the
+// design was saved before the language was renamed.
 //
 // Parameters:
 //   - name: the design name.
 //
 // Returns:
-//   - result: the CML text.
+//   - result: the AutoPen text.
 //   - err: the name is invalid or the design does not exist.
 //
 // Errors:
@@ -357,6 +385,10 @@ func (this *Workspace) ReadDesign(name string) (result string, err error) {
 	}
 
 	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		data, err = os.ReadFile(legacy(path))
+	}
+
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("%w: %s", ErrNoDesign, name)
 	}
@@ -506,5 +538,11 @@ func (this *Workspace) designPath(name string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrDesignName, name)
 	}
 
-	return filepath.Join(this.root, Directory, "designs", name+".cml"), nil
+	return filepath.Join(this.root, Directory, "designs", name+DesignExtension), nil
+}
+
+// legacy is where a design was saved before the language was renamed: the
+// same name with the .cml extension.
+func legacy(path string) string {
+	return strings.TrimSuffix(path, DesignExtension) + legacyExtension
 }
