@@ -170,9 +170,9 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 	declared := map[*graph.Symbol][]source{}
 	for _, state := range states {
 		dir := path.Dir(state.path)
-		module := &graph.Module{ID: state.module, Language: languages[dir], Path: dir}
+		module := &graph.Module{ID: state.module, Language: languages[dir], Path: dir, Private: found.private(dir)}
 		if each := found.manifests[dir]; each != nil {
-			module.Name, module.Private, module.Manifest = each.name, each.private, path.Join(dir, "package.json")
+			module.Name, module.Manifest = each.name, path.Join(dir, "package.json")
 		}
 
 		module = result.AddModule(module)
@@ -539,6 +539,23 @@ func fields(declaration *declaration) []graph.Field {
 func hash(text string) string {
 	sum := sha256.Sum256([]byte(collapse(text)))
 	return hex.EncodeToString(sum[:6])
+}
+
+// private reports whether a directory belongs to a private package: the
+// nearest package.json at or above it says "private": true, so nothing
+// outside this repository can install and import it.
+func (this tree) private(dir string) bool {
+	for {
+		if each := this.manifests[dir]; each != nil {
+			return each.private
+		}
+
+		if dir == "." || dir == "" {
+			return false
+		}
+
+		dir = path.Dir(dir)
+	}
 }
 
 // skippedDir reports whether a directory holds dependencies, build output,

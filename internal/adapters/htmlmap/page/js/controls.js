@@ -13,6 +13,10 @@ function buildLegend() {
     const svg = el("svg", { width: 14, height: 14, viewBox: "-7 -7 14 14" }); drawShape(svg, kind, 0, 0, 5, "", false);
     const span = h("span"); span.appendChild(svg); span.appendChild(document.createTextNode(" " + label + "  ")); legend.appendChild(span);
   }
+  if (LIVE) {
+    const ring = el("svg", { width: 16, height: 16, viewBox: "-8 -8 16 16" }); drawShape(ring, "function", 0, 0, 4, "", false); coverageRing(ring, 0, 0, 6.5, { hit: 3, miss: 1 }, 1.3);
+    const span = h("span"); span.appendChild(ring); span.appendChild(document.createTextNode(" ring = lines covered by tests run, clockwise from 12 o'clock; none until tests run")); legend.appendChild(span);
+  }
   legend.appendChild(h("br"));
   // Colors show as swatches of the live tokens, never by name, so the legend
   // stays true in every theme and in the color-blind safe variants.

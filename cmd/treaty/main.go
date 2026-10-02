@@ -29,6 +29,7 @@ const version = "0.2.0"
 // launcher starts the live map and the MCP server.
 type launcher struct {
 	service   *app.Service
+	tests     *app.Tests
 	watcher   *filesystem.Watcher
 	workspace *filesystem.Workspace
 }
@@ -47,10 +48,11 @@ func main() {
 	}
 
 	workspace := filesystem.NewWorkspace(root)
+	extractors := app.Extractors{golang.NewExtractor(), javascript.NewExtractor(), python.NewExtractor()}
 	service := app.NewService(
 		root,
 		filesystem.NewConfig(root),
-		app.Extractors{golang.NewExtractor(), javascript.NewExtractor(), python.NewExtractor()},
+		extractors,
 		[]app.Dialect{golang.NewDialect(), javascript.NewDialect(javascript.LanguageJavaScript), javascript.NewDialect(javascript.LanguageTypeScript), python.NewDialect()},
 		gitvcs.New(root),
 		workspace,
@@ -60,7 +62,8 @@ func main() {
 		filesystem.NewPreferences(treatyHome("settings.json")),
 	)
 
-	start := launcher{service: service, watcher: filesystem.NewWatcher(root), workspace: workspace}
+	tests := app.NewTests(root, extractors, []app.TestSuite{golang.NewTestSuite()})
+	start := launcher{service: service, tests: tests, watcher: filesystem.NewWatcher(root), workspace: workspace}
 	os.Exit(cli.Run(args, service, start, os.Stdin, os.Stdout, os.Stderr))
 }
 
@@ -80,6 +83,7 @@ func (this launcher) MCP(port int, in io.Reader, out, stderr io.Writer) error {
 	}
 
 	live := app.NewLive(this.service, this.watcher, nil)
+	live.UseTests(this.tests)
 	live.Start(stop)
 	server, withdraw, err := this.listen(live, port)
 	if err != nil {
@@ -117,6 +121,7 @@ func (this launcher) Serve(port int, open bool, stderr io.Writer) error {
 	stop := make(chan struct{})
 	defer close(stop)
 	live := app.NewLive(this.service, this.watcher, nil)
+	live.UseTests(this.tests)
 	live.Start(stop)
 	server, withdraw, err := this.listen(live, port)
 	if err != nil {

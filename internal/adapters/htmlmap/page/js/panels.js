@@ -12,7 +12,7 @@
 // drawer, onto the workspace's edge docks it in that drawer, and anywhere
 // else floats it. The map moves like any other panel, and the center may be
 // left empty. The layout, with the map view shown, is remembered per browser.
-const PANELS = { map: { title: "Map", float: { w: 640, h: 480 } }, queue: { title: "Review queue" }, inspector: { title: "Inspector" }, code: { title: "Code" } };
+const PANELS = { map: { title: "Map", float: { w: 640, h: 480 } }, queue: { title: "Review queue" }, inspector: { title: "Inspector" }, code: { title: "Code" }, tests: { title: "Tests" } };
 const MAP_TABS = { references: "References", files: "Files", symbols: "Symbols" };
 const LAYOUT_KEY = "treaty.layout.v1";
 const DRAWER_MIN = 160, CENTER_MIN = 240, EDGE_ZONE = 28, DRAG_START = 5, SPLIT_ZONE = 0.3, STACK_MIN = 60;
@@ -20,7 +20,7 @@ const SIDES = ["left", "right", "bottom"];
 function defaultLayout() {
   return {
     left: { size: 300, stacks: [{ tabs: ["queue"], active: "queue", weight: 1 }] },
-    right: { size: 360, stacks: [{ tabs: ["inspector", "code"], active: "inspector", weight: 1 }] },
+    right: { size: 360, stacks: [{ tabs: ["inspector", "code", "tests"], active: "inspector", weight: 1 }] },
     bottom: { size: 240, stacks: [] },
     center: { tabs: ["map"], active: "map" },
     floating: [],

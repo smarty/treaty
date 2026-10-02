@@ -419,3 +419,62 @@ func TestMoveModules(t *testing.T) {
 		t.Fatalf("forgetting a position: %+v", positions)
 	}
 }
+
+func TestRunTests(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/calc\n\ngo 1.22\n")
+	write(t, root, "treaty.yaml", "architecture: none\n")
+	write(t, root, "calc/calc.go", "package calc\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n")
+	write(t, root, "calc/calc_test.go", "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"add\")\n\t}\n}\n")
+	extractor := golang.NewExtractor()
+	service := app.NewService(root, filesystem.NewConfig(root), extractor, []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	live := app.NewLive(service, filesystem.NewWatcher(root), nil)
+	live.UseTests(app.NewTests(root, extractor, []app.TestSuite{golang.NewTestSuite()}))
+	if err := live.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+
+	server, err := Listen(live, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = server.Close() }()
+	report := func(data []byte) (result app.TestReport) {
+		if err := json.Unmarshal(data, &result); err != nil {
+			t.Fatalf("report: %s %v", data, err)
+		}
+
+		return result
+	}
+
+	if found := report(get(t, server.URL()+"/api/tests", http.StatusOK)); len(found.Tests) != 1 || found.Tests[0].ID != "go:calc#TestAdd" {
+		t.Fatalf("tests: %+v", found)
+	}
+
+	post(t, server.URL()+"/api/tests/run", "application/json", `{"ids":["go:calc#TestMissing"]}`, http.StatusBadRequest)
+	post(t, server.URL()+"/api/tests/run", "application/json", `{"ids":["go:calc#TestAdd"]}`, http.StatusOK)
+
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		done := report(get(t, server.URL()+"/api/tests", http.StatusOK))
+		if !done.Running {
+			if done.Results["go:calc#TestAdd"].Status != app.TestPassed || len(done.Coverage["calc/calc.go"].Covered) == 0 || done.Error != "" {
+				t.Fatalf("done: %+v", done)
+			}
+
+			break
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("the run did not finish")
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	post(t, server.URL()+"/api/tests/stop", "application/json", `{}`, http.StatusNoContent)
+	if state := live.State(); state.Tests == 0 {
+		t.Fatalf("the state counts test changes: %+v", state)
+	}
+}

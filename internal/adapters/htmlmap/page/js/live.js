@@ -76,7 +76,7 @@ function applyUpdate(data) {
   updateMeta(); buildQueue(); render();
   const after = positionOf(state.selected);
   if (before && after && state.view) { state.view = { ...state.view, x: state.view.x + after.x - before.x, y: state.view.y + after.y - before.y }; applyView(); }
-  inspect(); highlightQueue();
+  inspect(); highlightQueue(); refreshTests();
   const problems = D.problems.join(" · ");
   if (problems) setStatus(problems, true);
   if (first) selectFromHash();
@@ -120,6 +120,7 @@ function showState(st) {
     syncBaselineInput();
   }
   showView(st.view);
+  if ((st.tests || 0) !== testState.shown) refreshTests();
 }
 // showView reflects which architecture the map draws: treaty.yaml's, or a
 // preview counting down to replacing it.

@@ -20,6 +20,9 @@ import (
 const (
 	heartbeat = 20 * time.Second
 	maxBody   = 64 * 1024
+
+	// maxTestsBody admits a request to run every test of a large repository.
+	maxTestsBody = 4 * 1024 * 1024
 )
 
 var ErrPeer = errors.New("the peer did not answer")
@@ -71,6 +74,9 @@ func Listen(live *app.Live, port int) (result *Server, err error) {
 	mux.HandleFunc("POST /api/preferences", result.savePreferences)
 	mux.HandleFunc("POST /api/view", result.setView)
 	mux.HandleFunc("POST /api/view/adopt", result.adopt)
+	mux.HandleFunc("GET /api/tests", result.tests)
+	mux.HandleFunc("POST /api/tests/run", result.runTests)
+	mux.HandleFunc("POST /api/tests/stop", result.stopTests)
 	result.server = &http.Server{Handler: result.guard(mux), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = result.server.Serve(listener) }()
 	return result, nil
@@ -286,6 +292,33 @@ func (this *Server) preferences(writer http.ResponseWriter, _ *http.Request) {
 	respond(writer, preferences)
 }
 
+// runTests starts running the tests named, answering with the report that
+// shows them queued.
+func (this *Server) runTests(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+
+	if !decodeUpTo(writer, request, &body, maxTestsBody) {
+		return
+	}
+
+	switch err := this.live.RunTests(body.IDs); {
+	case errors.Is(err, app.ErrTestsRunning):
+		http.Error(writer, err.Error(), http.StatusConflict)
+	case errors.Is(err, app.ErrUnknownTest):
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, app.ErrNoTests):
+		http.Error(writer, err.Error(), http.StatusNotFound)
+	case errors.Is(err, app.ErrNotReady):
+		http.Error(writer, err.Error(), http.StatusServiceUnavailable)
+	case err != nil:
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	default:
+		this.tests(writer, request)
+	}
+}
+
 // savePreferences merges the fields sent into the saved choices.
 func (this *Server) savePreferences(writer http.ResponseWriter, request *http.Request) {
 	var update app.Preferences
@@ -412,6 +445,30 @@ func (this *Server) state(writer http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(writer).Encode(this.live.State())
 }
 
+// stopTests cancels the test run in progress.
+func (this *Server) stopTests(writer http.ResponseWriter, request *http.Request) {
+	var ignored struct{}
+	if !decode(writer, request, &ignored) {
+		return
+	}
+
+	this.live.StopTests()
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+// tests serves the tests, their latest outcomes and their coverage.
+func (this *Server) tests(writer http.ResponseWriter, _ *http.Request) {
+	report, err := this.live.Tests()
+	switch {
+	case errors.Is(err, app.ErrNoTests):
+		http.Error(writer, err.Error(), http.StatusNotFound)
+	case err != nil:
+		http.Error(writer, err.Error(), http.StatusServiceUnavailable)
+	default:
+		respond(writer, report)
+	}
+}
+
 func (this *Server) view(writer http.ResponseWriter, _ *http.Request) {
 	data, version := this.live.Payload()
 	if data == nil {
@@ -429,12 +486,17 @@ func (this *Server) view(writer http.ResponseWriter, _ *http.Request) {
 // web page cannot post here without a CORS preflight, which is never
 // granted.
 func decode(writer http.ResponseWriter, request *http.Request, target any) bool {
+	return decodeUpTo(writer, request, target, maxBody)
+}
+
+// decodeUpTo reads a JSON body of at most limit bytes, as decode does.
+func decodeUpTo(writer http.ResponseWriter, request *http.Request, target any, limit int64) bool {
 	if media, _, _ := mime.ParseMediaType(request.Header.Get("Content-Type")); media != "application/json" {
 		http.Error(writer, "expected application/json", http.StatusUnsupportedMediaType)
 		return false
 	}
 
-	if err := json.NewDecoder(io.LimitReader(request.Body, maxBody)).Decode(target); err != nil {
+	if err := json.NewDecoder(io.LimitReader(request.Body, limit)).Decode(target); err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return false
 	}

@@ -90,6 +90,7 @@ func NewExtractor() *Extractor {
 //   - Tests (test_*.py, *_test.py, conftest.py, tests directories), stubs
 //     (.pyi), virtual environments, and build and dist directories are
 //     skipped.
+//   - A package is an entry point only when every file in it is a script.
 //
 // Parameters:
 //   - root: the directory to read.
@@ -161,6 +162,21 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 		return strings.TrimSuffix(path.Base(state.path), ".py") + "/" + name
 	}
 
+	// A package is an entry point when every file in it is a script, run
+	// rather than imported: __main__.py, or one guarded by
+	// if __name__ == "__main__". A library with one such guard is still
+	// imported.
+	scripts := map[string]bool{}
+	for _, state := range states {
+		dir := path.Dir(state.path)
+		script := state.main || path.Base(state.path) == "__main__.py"
+		if seen, ok := scripts[dir]; ok {
+			scripts[dir] = seen && script
+		} else {
+			scripts[dir] = script
+		}
+	}
+
 	var order []*graph.Symbol
 	declared := map[*graph.Symbol][]source{}
 	for _, state := range states {
@@ -171,7 +187,7 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 		}
 
 		module.Files = append(module.Files, state.path)
-		module.Entry = module.Entry || state.main || path.Base(state.path) == "__main__.py"
+		module.Entry = scripts[dir]
 		for _, declaration := range state.declarations {
 			name, parent := qualify(state, declaration.name), ""
 			if declaration.owner != nil {

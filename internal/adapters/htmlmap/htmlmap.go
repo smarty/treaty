@@ -23,6 +23,7 @@ var scripts = []string{
 	"live.js",
 	"files.js",
 	"symbols.js",
+	"tests.js",
 	"panels.js",
 }
 

@@ -36,6 +36,7 @@ function ingest(data) {
     if (!members.has(owner.id)) members.set(owner.id, []);
     members.get(owner.id).push(s);
   }
+  buildDirs();
   placeMoved();
   layoutFiles();
   // The caller draws next, so the theme only sets the tokens here.

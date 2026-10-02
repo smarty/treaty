@@ -80,6 +80,10 @@ type LiveState struct {
 	Selection Selection `json:"selection"`
 	Pointer   *Pointer  `json:"pointer,omitempty"`
 	Error     string    `json:"error,omitempty"`
+
+	// Tests increases whenever test outcomes or coverage change, so the
+	// browser knows to fetch them again.
+	Tests int `json:"tests,omitempty"`
 }
 
 // View is the architecture the live map draws. Another architecture than
@@ -119,6 +123,7 @@ type Live struct {
 	service *Service
 	watcher Watcher
 	peer    Peer
+	tests   *Tests
 
 	building sync.Mutex
 	saving   sync.Mutex
@@ -255,6 +260,34 @@ func (this *Live) Refresh() error {
 	this.notifyLocked()
 	this.mutex.Unlock()
 	return err
+}
+
+// RunTests starts running tests against the latest build; their outcomes
+// arrive in later test reports.
+//
+// Parameters:
+//   - ids: the tests to run, as test reports name them.
+//
+// Returns:
+//   - err: there is no build or no test bench, tests are running, or an id
+//     names no test.
+//
+// Errors:
+//   - ErrNotReady: the live graph has not been built.
+//   - ErrNoTests: no test bench is in use.
+//   - ErrTestsRunning: an earlier run has not finished.
+//   - ErrUnknownTest: an id names no test.
+func (this *Live) RunTests(ids []string) error {
+	if this.tests == nil {
+		return ErrNoTests
+	}
+
+	current, err := this.current()
+	if err != nil {
+		return err
+	}
+
+	return this.tests.Run(current.head, ids)
 }
 
 // SetAdoptAfter changes how long the map previews another architecture
@@ -408,6 +441,13 @@ func (this *Live) State() LiveState {
 	return this.stateLocked()
 }
 
+// StopTests cancels the test run in progress, if there is one.
+func (this *Live) StopTests() {
+	if this.tests != nil {
+		this.tests.Stop()
+	}
+}
+
 // Subscribe delivers the state after every rebuild. Only the latest state
 // is kept for a slow subscriber.
 //
@@ -424,6 +464,43 @@ func (this *Live) Subscribe() (updates <-chan LiveState, cancel func()) {
 		delete(this.subscribers, channel)
 		this.mutex.Unlock()
 	}
+}
+
+// Tests reports the tests of the latest build, their latest outcomes and
+// the coverage that still matches the files.
+//
+// Returns:
+//   - result: the report.
+//   - err: there is no build or no test bench.
+//
+// Errors:
+//   - ErrNotReady: the live graph has not been built.
+//   - ErrNoTests: no test bench is in use.
+func (this *Live) Tests() (result TestReport, err error) {
+	if this.tests == nil {
+		return TestReport{}, ErrNoTests
+	}
+
+	current, err := this.current()
+	if err != nil {
+		return TestReport{}, err
+	}
+
+	return this.tests.Report(current.head), nil
+}
+
+// UseTests lets the live map find and run tests, and tells subscribers
+// whenever outcomes or coverage change. Call it before Start.
+//
+// Parameters:
+//   - tests: the test bench.
+func (this *Live) UseTests(tests *Tests) {
+	this.tests = tests
+	tests.OnChange(func() {
+		this.mutex.Lock()
+		defer this.mutex.Unlock()
+		this.notifyLocked()
+	})
 }
 
 // baseRevision is a cached baseline: its graph and the text of its files,
@@ -656,7 +733,12 @@ func (this *Live) stateLocked() LiveState {
 		view.Architecture = this.preview
 	}
 
-	return LiveState{Version: this.version, Baseline: this.baseline, View: view, Selection: this.selection, Pointer: this.pointer, Error: this.failure}
+	result := LiveState{Version: this.version, Baseline: this.baseline, View: view, Selection: this.selection, Pointer: this.pointer, Error: this.failure}
+	if this.tests != nil {
+		result.Tests = this.tests.Version()
+	}
+
+	return result
 }
 
 // sync follows the peer's baseline and selection, when there is a peer.

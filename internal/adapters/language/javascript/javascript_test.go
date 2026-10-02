@@ -268,6 +268,12 @@ func TestFixtureGraph(t *testing.T) {
 		}
 	}
 
+	// The repository's package.json is private, so everything beneath it is,
+	// except a workspace package with a package.json of its own.
+	if !g.Module("js:src/ui").Private || !g.Module("ts:src/domain").Private || g.Module("ts:packages/format/src").Private {
+		t.Error("privacy must follow the nearest package.json")
+	}
+
 	if root := g.Module("ts:packages/format/src"); root.Manifest != "" {
 		t.Errorf("a package.json one directory up is not this module's manifest: %q", root.Manifest)
 	}

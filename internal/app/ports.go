@@ -3,6 +3,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/smarty/treaty/internal/graph"
@@ -168,6 +169,42 @@ type PreferenceStore interface {
 
 	// Save replaces the preferences.
 	Save(preferences Preferences) error
+}
+
+// TestSuite finds and runs one language's tests.
+type TestSuite interface {
+	// Discover finds every test under root and the symbols each one uses.
+	//
+	// Parameters:
+	//   - root: the repository root.
+	//   - g: the graph of root, which test references resolve against.
+	//
+	// Returns:
+	//   - result: the tests, without ids.
+	//   - err: a test file could not be read.
+	Discover(root string, g *graph.Graph) (result []TestCase, err error)
+
+	// Language is the id prefix of the modules whose tests this suite runs,
+	// such as go.
+	Language() string
+
+	// Run runs tests and reports each outcome as it arrives.
+	//
+	// Notes:
+	//   - An outcome with no name is about a whole module, such as one that
+	//     does not build.
+	//
+	// Parameters:
+	//   - ctx: cancels the run.
+	//   - root: the repository root.
+	//   - requests: the tests to run, by module.
+	//   - report: receives every outcome; it is never called concurrently.
+	//
+	// Returns:
+	//   - coverage: the lines the run covered and missed, by file path
+	//     relative to root.
+	//   - err: the tests could not be started.
+	Run(ctx context.Context, root string, requests []TestRequest, report func(TestOutcome)) (coverage map[string]LineCoverage, err error)
 }
 
 // Theme is a named set of the map's color tokens, such as bg, ink, added

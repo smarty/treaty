@@ -173,8 +173,8 @@ func TestFixtureGraph(t *testing.T) {
 		t.Errorf("modules: got %q, want %q", modules, want)
 	}
 
-	if module := g.Module("py:src/library/cli"); !module.Entry {
-		t.Error("a package with __main__.py is an entry point")
+	if module := g.Module("py:src/library/cli"); module.Entry {
+		t.Error("a package with __main__.py and a module that is not a script can still be imported")
 	}
 
 	if module := g.Module("py:src/library/adapters/_internal"); !module.Private {
@@ -314,6 +314,34 @@ func TestVendoredPackages(t *testing.T) {
 	// A package found in one place resolves; one found in two does not.
 	if want := []string{"py:plugin:run -> py:plugin/vendored:Client"}; !slices.Equal(edges, want) {
 		t.Errorf("edges: got %q, want %q", edges, want)
+	}
+}
+
+func TestEntryPackages(t *testing.T) {
+	root := t.TempDir()
+	for name, text := range map[string]string{
+		"scripts/run.py":      "def main(): pass\n\nif __name__ == \"__main__\":\n    main()\n",
+		"scripts/__main__.py": "print(1)\n",
+		"lib/core.py":         "def demo(): pass\n\nif __name__ == \"__main__\":\n    demo()\n",
+		"lib/more.py":         "def more(): pass\n",
+	} {
+		file := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	g, err := NewExtractor().Extract(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !g.Module("py:scripts").Entry || g.Module("py:lib").Entry {
+		t.Error("only a package made of scripts is an entry point; one demo guard leaves a library importable")
 	}
 }
 

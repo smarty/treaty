@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -30,11 +31,17 @@ type MapEdge struct {
 // MapModule is one module hexagon on the map. Section is the vertical slice
 // or bounded context holding it, and Public marks a context's public API.
 // Removed marks a module only the base has; RemovedFiles are files the base
-// had in a module that is still there.
+// had in a module that is still there. Name is what its language calls it,
+// such as a Go package name. Entry and Private mark a module code outside
+// the repository cannot import: a program's entry point, or one only this
+// repository may import.
 type MapModule struct {
 	ID       string   `json:"id"`
 	Path     string   `json:"path"`
 	Label    string   `json:"label"`
+	Name     string   `json:"name,omitempty"`
+	Entry    bool     `json:"entry,omitempty"`
+	Private  bool     `json:"private,omitempty"`
 	Language string   `json:"language"`
 	Layer    string   `json:"layer"`
 	Side     string   `json:"side,omitempty"`
@@ -81,6 +88,7 @@ type MapSymbol struct {
 // names, innermost or lowest first.
 type MapView struct {
 	Title        string       `json:"title"`
+	Root         string       `json:"root"`
 	Architecture string       `json:"architecture"`
 	Layers       []string     `json:"layers"`
 	Summary      string       `json:"summary"`
@@ -151,7 +159,7 @@ func (this *Service) Map(base string, designs []string) (path string, err error)
 func (this *Service) buildView(analysis *analysis, designs []string, tolerant bool) (MapView, error) {
 	architecture := analysis.config.Architecture
 	view := MapView{
-		Title: "Treaty", Architecture: architecture.Style, Layers: architecture.LayerNames(), Summary: architecture.Summary(),
+		Title: "Treaty", Root: filepath.Base(filepath.Clean(this.root)), Architecture: architecture.Style, Layers: architecture.LayerNames(), Summary: architecture.Summary(),
 		Base: analysis.baseRef, Findings: analysis.findings, Designs: designs, Links: analysis.head.Edges,
 	}
 
@@ -192,8 +200,8 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 
 	for _, module := range analysis.head.Modules {
 		entry := MapModule{
-			ID: module.ID, Path: module.Path, Label: label(module), Language: module.Language, Layer: module.Layer, Side: module.Side,
-			Section: module.Slice, Public: module.Public,
+			ID: module.ID, Path: module.Path, Label: label(module), Name: module.Name, Entry: module.Entry, Private: module.Private,
+			Language: module.Language, Layer: module.Layer, Side: module.Side, Section: module.Slice, Public: module.Public,
 			Files: module.Files, Manifest: module.Manifest, Metrics: analysis.metrics[module.ID], Guidance: architecture.Guidance(placement(module)),
 			New: analysis.base != nil && analysis.base.Module(module.ID) == nil,
 		}
@@ -398,8 +406,9 @@ func removed(analysis *analysis, view *MapView, changes map[string]rules.Change)
 		}
 
 		view.Modules = append(view.Modules, MapModule{
-			ID: module.ID, Path: module.Path, Label: label(module), Language: module.Language, Layer: module.Layer, Side: module.Side,
-			Section: module.Slice, Public: module.Public, Files: module.Files, Manifest: module.Manifest, Removed: true,
+			ID: module.ID, Path: module.Path, Label: label(module), Name: module.Name, Entry: module.Entry, Private: module.Private,
+			Language: module.Language, Layer: module.Layer, Side: module.Side, Section: module.Slice, Public: module.Public,
+			Files: module.Files, Manifest: module.Manifest, Removed: true,
 			Metrics: analysis.baseMetrics[module.ID], Guidance: architecture.Guidance(placement(module)),
 		})
 	}

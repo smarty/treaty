@@ -246,9 +246,12 @@ function toggleGroup(id) { const g = groups.get(id); state.groupOpen[id] = isCol
 function ev_is(ev) { return ev.key === "Enter" || ev.key === " "; }
 function placeSymbol(g, s, x, y, r, rel, file) {
   state.symbolPos.set(s.id, [x, y]);
-  const label = `${s.name} · ${s.kind}${s.contract ? "" : " · internal"}${s.change ? " · " + s.change : ""}${s.design ? " · planned, not built" : ""}`;
+  const cov = symbolCoverage(s);
+  const label = `${s.name} · ${s.kind}${s.contract ? "" : " · internal"}${s.change ? " · " + s.change : ""}${s.design ? " · planned, not built" : ""}${cov ? " · " + coverageWords(cov) : ""}`;
   const sg = anchored(g, x, y, { "data-symbol": s.id, tabindex: 0, role: "button", "aria-label": `${s.kind} ${s.id}${s.change ? ", " + s.change : ""}`, "data-label": label, class: rel && !rel.has(s.id) ? "dim" : "" });
-  const shape = drawShape(sg, s.kind, 0, 0, (state.selected && state.selected.id === s.id) ? r * 1.6 : r, s.change, s.design);
+  const size = (state.selected && state.selected.id === s.id) ? r * 1.6 : r;
+  const shape = drawShape(sg, s.kind, 0, 0, size, s.change, s.design);
+  coverageRing(sg, 0, 0, size * 1.6, cov, size * 0.32);
   sg.style.cursor = "pointer";
   if (file) sg.setAttribute("data-file", file);
   const pick = ev => { ev.stopPropagation(); select({ type: "symbol", id: s.id }); };

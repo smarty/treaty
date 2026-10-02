@@ -71,7 +71,7 @@ func NewExtractor() *Extractor {
 //   - result: the normalized graph, without layers.
 //   - err: a file could not be read.
 func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
-	files, roots, err := goFiles(root)
+	files, roots, err := goFiles(root, false)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +186,7 @@ func (this *Extractor) Source(root, file string) (result []byte, err error) {
 //   - x.Method(...) with an unknown x resolves only when exactly one method of
 //     that name exists in this module or the modules it imports.
 func (this *fileState) references(g *graph.Graph, symbol *graph.Symbol, declaration *declaration, methods map[string][]*graph.Symbol) {
-	edge := func(target string, at token, kind string) {
+	this.resolve(g, symbol.Parent, declaration, methods, func(target string, at token, kind string) {
 		other := g.Symbol(target)
 		if other == nil || other.ID == symbol.ID || (symbol.Parent != "" && other.Name == symbol.Parent) {
 			return
@@ -200,8 +200,16 @@ func (this *fileState) references(g *graph.Graph, symbol *graph.Symbol, declarat
 		}
 
 		g.AddEdge(graph.Edge{From: symbol.ID, To: target, Kind: kind, File: this.path, Line: at.line})
-	}
+	})
+}
 
+// resolve finds every identifier in a declaration that may name another
+// symbol in the graph and hands its id to edge, with the reference's kind
+// when the syntax decides it. The id may name nothing; edge checks.
+//
+// Notes:
+//   - parent is the type a method belongs to, so recv.Name resolves.
+func (this *fileState) resolve(g *graph.Graph, parent string, declaration *declaration, methods map[string][]*graph.Symbol, edge func(target string, at token, kind string)) {
 	for _, embedded := range declaration.embedded {
 		if target := this.typeTarget(g, embedded); target != "" {
 			edge(target, embedded[0], graph.EdgeEmbeds)
@@ -237,8 +245,8 @@ func (this *fileState) references(g *graph.Graph, symbol *graph.Symbol, declarat
 			index += 2
 		case selects && this.aliases[current.text]:
 			index += 2
-		case selects && declaration.receiver != "" && current.text == declaration.receiver && g.Symbol(graph.SymbolID(this.module, symbol.Parent+"."+tokens[index+2].text)) != nil:
-			edge(graph.SymbolID(this.module, symbol.Parent+"."+tokens[index+2].text), current, "")
+		case selects && declaration.receiver != "" && current.text == declaration.receiver && g.Symbol(graph.SymbolID(this.module, parent+"."+tokens[index+2].text)) != nil:
+			edge(graph.SymbolID(this.module, parent+"."+tokens[index+2].text), current, "")
 			index += 2
 		case !inCase && index+1 < len(tokens) && tokens[index+1].is(":"):
 		default:
@@ -451,9 +459,10 @@ func contract(declaration *declaration) bool {
 	return exported(name) && exported(declaration.parent)
 }
 
-// goFiles lists every non-test Go file under root and the Go modules that
-// hold them: the root's go.mod and every go.mod in a sub-tree.
-func goFiles(root string) (files []string, roots moduleRoots, err error) {
+// goFiles lists every non-test Go file under root, or with tests every test
+// file, and the Go modules that hold them: the root's go.mod and every go.mod
+// in a sub-tree.
+func goFiles(root string, tests bool) (files []string, roots moduleRoots, err error) {
 	err = filepath.WalkDir(root, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -474,7 +483,7 @@ func goFiles(root string) (files []string, roots moduleRoots, err error) {
 			return nil
 		}
 
-		if strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
+		if strings.HasSuffix(name, ".go") && strings.HasSuffix(name, "_test.go") == tests {
 			files = append(files, relative)
 		}
 

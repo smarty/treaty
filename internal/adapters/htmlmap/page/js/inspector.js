@@ -132,7 +132,7 @@ function showCode() {
   note("Select a symbol or file to see its code. Modules, groups and dependencies have no code of their own.");
 }
 function inspect() {
-  showCode();
+  showCode(); showTests();
   const box = document.getElementById("inspector"); box.innerHTML = ""; const sel = state.selected; if (!sel) return;
   whereBlock(box);
   if (sel.type === "symbol") {
