@@ -375,3 +375,25 @@ func TestHoneycombRings(t *testing.T) {
 		}
 	}
 }
+
+func TestPageInlinesEveryScript(t *testing.T) {
+	entries, err := assets.ReadDir("page/js")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var files []string
+	for _, entry := range entries {
+		files = append(files, entry.Name())
+	}
+
+	listed := slices.Clone(scripts)
+	slices.Sort(listed)
+	if !slices.Equal(files, listed) {
+		t.Errorf("page/js holds %q but the page joins %q", files, scripts)
+	}
+
+	if strings.Contains(page, "/*STYLE*/") || strings.Contains(page, "/*SCRIPT*/") || !strings.Contains(page, "/*DATA*/null") {
+		t.Error("the page must inline its style and scripts and keep the data marker")
+	}
+}

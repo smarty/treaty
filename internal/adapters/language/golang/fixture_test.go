@@ -372,6 +372,18 @@ func TestMapShowsCodeChangesAndRemovals(t *testing.T) {
 		t.Error("a's dropped dependency on b must show as a removed edge")
 	}
 
+	if got := diffText(view.FileDiffs["b/b.go"]); got != " package b\n \n func Help() int {\n-\treturn 1\n+\tvalue := 1\n+\treturn value\n }" {
+		t.Errorf("b.go's file diff: %q", got)
+	}
+
+	if got := diffText(view.FileDiffs["b/extra.go"]); got != "-package b\n-\n-func Extra() {}" {
+		t.Errorf("a removed file is all removed: %q", got)
+	}
+
+	if _, ok := view.FileDiffs["go.mod"]; ok {
+		t.Error("an unchanged file has no diff")
+	}
+
 	if len(view.RemovedLinks) != 1 || view.RemovedLinks[0].From != "go:a:Run" || view.RemovedLinks[0].To != "go:b:Help" {
 		t.Errorf("removed references: %+v", view.RemovedLinks)
 	}

@@ -107,6 +107,11 @@ type MapView struct {
 	// slice an agent gets for the file.
 	FileSlices map[string]Slice `json:"file_slices,omitempty"`
 
+	// FileDiffs holds, for each file that differs from the base, keyed by
+	// path, its whole text as a line diff with the base. A new file is all
+	// added and a removed one all removed.
+	FileDiffs map[string][]DiffLine `json:"file_diffs,omitempty"`
+
 	// Problems are designs that could not be overlaid, and other trouble the
 	// live map reports without stopping.
 	Problems []string `json:"problems,omitempty"`
@@ -243,6 +248,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 
 	if analysis.base != nil {
 		removed(analysis, &view, changes)
+		view.FileDiffs = fileDiffs(analysis, view.Sources)
 	}
 
 	for _, name := range designs {
@@ -328,6 +334,49 @@ func codeDiff(analysis *analysis, change rules.Change, symbol *graph.Symbol, sou
 	}
 
 	return lineDiff(old, now)
+}
+
+// fileDiffs compares every file in the base or the working tree with its
+// other version. A file whose text one side could not read, such as one
+// over maxSourceBytes, is left out rather than shown as added or removed.
+func fileDiffs(analysis *analysis, sources map[string]string) map[string][]DiffLine {
+	files := func(g *graph.Graph) map[string]bool {
+		result := map[string]bool{}
+		for _, module := range g.Modules {
+			for _, file := range module.Files {
+				result[file] = true
+			}
+
+			if module.Manifest != "" {
+				result[module.Manifest] = true
+			}
+		}
+
+		return result
+	}
+
+	inBase, inHead := files(analysis.base), files(analysis.head)
+	all := map[string]bool{}
+	for file := range inBase {
+		all[file] = true
+	}
+
+	for file := range inHead {
+		all[file] = true
+	}
+
+	result := map[string][]DiffLine{}
+	for file := range all {
+		before, readBefore := analysis.baseSources[file]
+		after, readAfter := sources[file]
+		if inBase[file] && !readBefore || inHead[file] && !readAfter || before == after {
+			continue
+		}
+
+		result[file] = lineDiff(before, after)
+	}
+
+	return result
 }
 
 // removed adds what the base had and the working tree does not, so the map

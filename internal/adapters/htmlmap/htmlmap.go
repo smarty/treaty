@@ -3,15 +3,35 @@
 package htmlmap
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"strings"
 
 	"github.com/smarty/treaty/internal/app"
 )
 
-//go:embed page.html
-var page string
+// scripts are the page's script files in the order they run. They are
+// joined into one script, so they share one scope, and a file may use what
+// an earlier one declares when it runs.
+var scripts = []string{
+	"core.js",
+	"references.js",
+	"inspector.js",
+	"controls.js",
+	"moving.js",
+	"pointer.js",
+	"live.js",
+	"files.js",
+	"symbols.js",
+	"panels.js",
+}
+
+//go:embed page
+var assets embed.FS
+
+// page is the whole page, its style and scripts inlined, so a rendered map
+// is one self-contained file.
+var page = assemble()
 
 // Renderer draws a MapView as HTML.
 type Renderer struct{}
@@ -64,4 +84,29 @@ func (this *Renderer) Render(view app.MapView) (result []byte, err error) {
 	}
 
 	return []byte(strings.Replace(page, "/*DATA*/null", string(data), 1)), nil
+}
+
+// assemble builds the page from page/page.html, inlining page/style.css and
+// the scripts.
+//
+// Returns:
+//   - result: the page.
+func assemble() (result string) {
+	read := func(name string) string {
+		data, err := assets.ReadFile("page/" + name)
+		if err != nil {
+			panic(err)
+		}
+
+		return string(data)
+	}
+
+	var script strings.Builder
+	for _, name := range scripts {
+		script.WriteString(read("js/" + name))
+		script.WriteString("\n")
+	}
+
+	result = strings.Replace(read("page.html"), "/*STYLE*/", read("style.css"), 1)
+	return strings.Replace(result, "/*SCRIPT*/", script.String(), 1)
 }

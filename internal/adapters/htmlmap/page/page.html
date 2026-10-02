@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Treaty</title>
+<style>
+/*STYLE*/
+</style>
+</head>
+<body>
+<header>
+  <h1>Treaty</h1>
+  <span class="meta" id="meta"></span>
+  <span class="live" id="live" hidden>
+    <span class="dot" id="live-dot" aria-hidden="true"></span>
+    <label>Baseline <select id="baseline-mode"><option value="head">HEAD</option><option value="pr">Pull request</option><option value="ref">Ref</option></select></label>
+    <input id="baseline-arg" type="text" size="16" spellcheck="false" aria-label="Baseline ref or target branch">
+    <button id="baseline-apply" type="button">Apply</button>
+    <label title="Preview the code in another architecture; treaty.yaml switches after 5 minutes or when you choose to use it">Architecture <select id="architecture"><option value="none">None</option><option value="hexagonal">Hexagonal</option><option value="clean">Clean</option><option value="layered">Layered</option><option value="slices">Vertical slices</option><option value="modular">Modular monolith</option></select></label>
+    <span class="adopt" id="adopt-bar" role="status" hidden>treaty.yaml switches in <span id="adopt-countdown"></span> <button id="adopt" type="button">Use this architecture</button> <button id="adopt-cancel" type="button">Keep treaty.yaml</button></span>
+    <span class="status" id="status" role="status"></span>
+    <label title="When on, Claude's show requests move the view, but only while you are not using the map"><input type="checkbox" id="follow"> Follow Claude</label>
+  </span>
+  <span class="spacer"></span>
+  <label><input type="checkbox" id="internals"> Show internals</label>
+  <button id="layout-reset" type="button" title="Put every panel back in its drawer">Reset layout</button>
+  <label>Theme <select id="theme"><option value="system">System</option></select></label>
+</header>
+<main id="workspace">
+  <div class="dock" id="dock-left" data-dock="left"></div>
+  <div class="splitter col" data-splitter="left" role="separator" aria-orientation="vertical" aria-label="Resize the left drawer" tabindex="0"></div>
+  <div class="center-col">
+    <div id="dock-center" data-dock="center"></div>
+    <div class="splitter row" data-splitter="bottom" role="separator" aria-orientation="horizontal" aria-label="Resize the bottom drawer" tabindex="0"></div>
+    <div class="dock bottom" id="dock-bottom" data-dock="bottom"></div>
+  </div>
+  <div class="splitter col" data-splitter="right" role="separator" aria-orientation="vertical" aria-label="Resize the right drawer" tabindex="0"></div>
+  <div class="dock" id="dock-right" data-dock="right"></div>
+  <div class="drop-hint" id="drop-hint" hidden></div>
+</main>
+<!-- Every panel lives here until the layout places it in a stack. -->
+<div id="panels">
+  <section class="panel" data-panel="queue" aria-label="Review queue"><div id="queue"></div></section>
+  <section class="panel map-panel" data-panel="map" aria-label="Map">
+  <div class="map-tabs" role="tablist" aria-label="Map views">
+    <button type="button" class="map-tab" role="tab" data-map-tab="references" title="Modules and the references between them">References</button>
+    <button type="button" class="map-tab" role="tab" data-map-tab="files" title="Directories and files as they sit on disk">Files</button>
+    <button type="button" class="map-tab" role="tab" data-map-tab="symbols" title="Every namespace and the symbols it offers">Symbols</button>
+  </div>
+  <div class="map-wrap">
+    <svg id="map" role="application" aria-label="Hexagon map of modules and contracts"></svg>
+    <div class="legend" id="legend"></div>
+    <button type="button" class="legend-show" id="legend-show" hidden title="Show the key (k)">Key</button>
+    <div class="tip" id="tip" role="tooltip"></div>
+    <div class="zoom" role="group" aria-label="Zoom">
+      <button type="button" id="zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
+      <button type="button" id="zoom-out" aria-label="Zoom out" title="Zoom out (−)">−</button>
+      <button type="button" id="zoom-fit" aria-label="Fit to view" title="Fit (0)">⤢</button>
+    </div>
+  </div>
+  <div class="symbol-tree" id="symbol-tree" hidden>
+    <div class="tree-key" id="symbol-key"></div>
+    <div class="tree-columns" id="symbol-columns" role="tree" aria-label="Namespaces and their symbols"></div>
+  </div>
+  <div class="offer" id="offer" role="status" aria-live="polite" hidden>
+    <div><span class="who" id="offer-who"></span> <span id="offer-what"></span></div>
+    <div class="why" id="offer-why"></div>
+    <div class="actions"><button type="button" id="offer-go">Go</button><button type="button" id="offer-dismiss">Dismiss</button></div>
+  </div>
+  </section>
+  <section class="panel inspector" data-panel="inspector" aria-label="Inspector"><div id="inspector"><p class="empty">Select a module, file, symbol, edge or queue item.</p></div></section>
+  <section class="panel code-panel" data-panel="code" aria-label="Code"><div id="code"><p class="empty">Select a symbol or file to see its code.</p></div></section>
+</div>
+<script>
+/*SCRIPT*/
+</script>
+</body>
+</html>

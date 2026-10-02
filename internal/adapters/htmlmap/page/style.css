@@ -1,0 +1,182 @@
+:root {
+  /* Every color is a token. Themes set these from JSON when the map data
+     loads; the values here only paint the page before that, following the
+     system's light or dark preference. */
+  --bg: #f8f8f8; --panel: #ffffff; --ink: #3b3b3b; --muted: #616161; --line: #e5e5e5; --ring-domain: #f3f3f3; --ring-app: #f7f7f7; --ring-adapter: #fbfbfb; --ring-outer: #fdfdfd; --ring-stroke: #d4d4d4; --module: #ffffff; --module-stroke: #9a9a9a; --hex-stroke: #c9c9c9; --group: rgba(59, 59, 59, .06); --group-collapsed: rgba(59, 59, 59, .16); --edge: #8c9bb0; --arrow: #525252; --code-bg: #f3f3f3; --accent: #005fb8; --focus: #005fb8; --glow: rgba(0, 95, 184, .9); --added: #388a34; --removed: #cd3131; --changed: #895503; --violation: #e51400; --planned: #af00db; --selection: #005fb8; --claude: #267f99; --high: #e51400; --medium: #bf8803; --low: #6f6f6f;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #181818; --panel: #1f1f1f; --ink: #cccccc; --muted: #9d9d9d; --line: #2b2b2b; --ring-domain: #262626; --ring-app: #232323; --ring-adapter: #202020; --ring-outer: #1c1c1c; --ring-stroke: #3c3c3c; --module: #252526; --module-stroke: #727272; --hex-stroke: #454545; --group: rgba(204, 204, 204, .05); --group-collapsed: rgba(204, 204, 204, .14); --edge: #5a6b85; --arrow: #b6b6b6; --code-bg: #2a2a2a; --accent: #3794ff; --focus: #0078d4; --glow: rgba(0, 120, 212, .9); --added: #81b88b; --removed: #f14c4c; --changed: #e2c08d; --violation: #f14c4c; --planned: #c586c0; --selection: #3794ff; --claude: #4ec9b0; --high: #f14c4c; --medium: #cca700; --low: #8b8b8b; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; height: 100vh; }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; }
+header .meta { color: var(--muted); font-size: 12px; }
+header .spacer { flex: 1; }
+header .live { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+header .live[hidden] { display: none; }
+header select, header input { font: inherit; font-size: 12px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+header input[hidden] { display: none; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--low); }
+.dot.on { background: var(--claude); } .dot.error { background: var(--high); }
+.status { color: var(--muted); } .status.error { color: var(--high); }
+.adopt { color: var(--claude); display: inline-flex; gap: 6px; align-items: center; } .adopt[hidden] { display: none; }
+.offer { position: absolute; left: 10px; bottom: 10px; max-width: min(420px, calc(100% - 70px)); background: var(--panel); border: 1px solid var(--claude); border-left-width: 4px; border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.25); display: grid; gap: 6px; }
+.offer[hidden] { display: none; }
+.offer .who { color: var(--claude); font-weight: 600; }
+.offer .why { color: var(--muted); }
+.offer .actions { display: flex; gap: 6px; }
+/* Selection glows yellow and Claude's show requests glow teal. Both pulse
+   unless the person prefers reduced motion. */
+/* Glow lengths are in the element's own units, which zoom with the map;
+   sizeGlows sets --u to one screen pixel in those units, so every glow keeps
+   the same size on screen at any zoom, peaking at 10px. */
+.selected-glow { filter: drop-shadow(0 0 calc(3px * var(--u, 1)) var(--selection)) drop-shadow(0 0 calc(8px * var(--u, 1)) var(--selection)); }
+.pointed-glow { filter: drop-shadow(0 0 calc(3px * var(--u, 1)) var(--claude)) drop-shadow(0 0 calc(8px * var(--u, 1)) var(--claude)); }
+/* A file and its contracts light up together while one of them is pointed at
+   or selected. */
+.file-arc { stroke-opacity: .45; }
+.file-cell.file-hot, .file-cell.file-picked { stroke: var(--selection); stroke-width: 1.8; }
+.file-arc.file-hot, .file-arc.file-picked { stroke: var(--selection); stroke-opacity: 1; }
+[data-symbol].file-hot, [data-symbol].file-picked { filter: drop-shadow(0 0 2px var(--selection)); }
+.selected-label { fill: var(--selection) !important; font-weight: 700; }
+@media (prefers-reduced-motion: no-preference) {
+  .selected-glow { animation: selected-pulse 1.6s ease-in-out infinite; }
+  .pointed-glow { animation: pointed-pulse 1.1s ease-in-out infinite; }
+  @keyframes selected-pulse { 0%, 100% { filter: drop-shadow(0 0 calc(1px * var(--u, 1)) var(--selection)); } 50% { filter: drop-shadow(0 0 calc(4px * var(--u, 1)) var(--selection)) drop-shadow(0 0 calc(10px * var(--u, 1)) var(--selection)); } }
+  @keyframes pointed-pulse { 0%, 100% { filter: drop-shadow(0 0 calc(1px * var(--u, 1)) var(--claude)); } 50% { filter: drop-shadow(0 0 calc(4px * var(--u, 1)) var(--claude)) drop-shadow(0 0 calc(10px * var(--u, 1)) var(--claude)); } }
+}
+header label, header button { font-size: 12px; color: var(--ink); }
+button { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; color: var(--ink); }
+button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* The workspace: drawers left, right and bottom around the center, each a
+   column (or, at the bottom, a row) of tab stacks; floating windows hover
+   above. Empty drawers take no room. */
+main#workspace { position: relative; display: grid; grid-template-columns: var(--left, 300px) auto minmax(0, 1fr) auto var(--right, 360px); flex: 1; min-height: 0; }
+.dock { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.dock[hidden], .splitter[hidden] { display: none; }
+/* Each piece keeps its column, so a hidden drawer leaves the others in place. */
+#dock-left { grid-column: 1; } [data-splitter="left"] { grid-column: 2; } .center-col { grid-column: 3; } [data-splitter="right"] { grid-column: 4; } #dock-right { grid-column: 5; }
+#dock-left, #dock-right, .center-col, [data-splitter="left"], [data-splitter="right"] { grid-row: 1; }
+.dock.bottom { flex-direction: row; height: var(--bottom, 240px); flex: none; }
+.center-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#dock-center { flex: 1; min-height: 0; display: flex; }
+.splitter { background: var(--line); flex: none; touch-action: none; }
+.splitter.col { width: 5px; cursor: col-resize; background: linear-gradient(var(--line), var(--line)) center / 1px 100% no-repeat; }
+.splitter.row { height: 5px; cursor: row-resize; background: linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat; }
+.splitter:hover, .splitter.dragging, .splitter:focus-visible { background: var(--focus); outline: none; }
+.stack { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; background: var(--panel); }
+.tabbar { display: flex; gap: 2px; padding: 4px 6px 0; border-bottom: 1px solid var(--line); background: var(--bg); flex: none; overflow-x: auto; }
+.tab { font-size: 12px; padding: 4px 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: transparent; color: var(--muted); cursor: grab; white-space: nowrap; -webkit-user-select: none; user-select: none; touch-action: none; }
+.tab.active { background: var(--panel); border-color: var(--line); color: var(--ink); }
+.stack-body { flex: 1; min-height: 0; overflow: auto; position: relative; }
+.stack-body.fill { overflow: hidden; }
+.panel { padding: 12px; }
+.map-panel { padding: 0; height: 100%; display: flex; flex-direction: column; position: relative; }
+.map-panel .map-wrap { flex: 1; min-height: 0; }
+.map-wrap[hidden], .symbol-tree[hidden] { display: none; }
+/* The map's own views. They belong to the map panel and go wherever it goes,
+   so they stay put and can't be dragged like the workspace's tabs. */
+.map-tabs { display: flex; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
+.map-tab { font-size: 12px; padding: 2px 12px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--muted); }
+.map-tab[aria-selected="true"] { background: var(--bg); border-color: var(--line); color: var(--ink); font-weight: 600; }
+.stack-empty { color: var(--muted); font-size: 12px; padding: 16px; }
+/* The symbols view: a column per level, the chosen item alone in its column
+   and its children in the next. */
+.symbol-tree { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--panel); }
+.tree-key { flex: none; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.tree-key span { display: inline-flex; align-items: center; gap: 4px; }
+.tree-columns { flex: 1; min-height: 0; display: flex; overflow: auto; }
+.tree-col { flex: none; width: 270px; border-right: 1px solid var(--line); overflow-y: auto; padding: 6px; }
+.tree-col h2 { margin: 2px 6px 6px; font-size: 11px; }
+.tree-row { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 3px 6px; font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); cursor: pointer; }
+.tree-row:hover { background: var(--bg); }
+.tree-row.expanded { background: var(--bg); border-color: var(--line); }
+.tree-row.selected { border-color: var(--selection); }
+.tree-row.pointed { box-shadow: 0 0 0 2px var(--claude); }
+.tree-row svg { flex: none; overflow: visible; }
+.tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-row.internal .tree-name { color: var(--muted); }
+.tree-count { color: var(--muted); font-size: 11px; }
+.tree-arrow { color: var(--muted); width: 10px; text-align: center; font-size: 14px; line-height: 1; }
+.tree-row.expanded .tree-arrow { color: var(--accent); font-weight: 700; }
+.float { position: absolute; z-index: 6; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,.35); overflow: hidden; }
+.float .tabbar { cursor: move; }
+.float-resize { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--line) 50%); }
+.drop-hint { position: absolute; z-index: 7; pointer-events: none; background: color-mix(in srgb, var(--focus) 16%, transparent); border: 2px solid var(--focus); border-radius: 6px; }
+.drop-hint[hidden] { display: none; }
+.tab-ghost { position: fixed; z-index: 20; pointer-events: none; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: var(--panel); color: var(--ink); border: 1px solid var(--focus); box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 10px; }
+.queue-item { display: grid; grid-template-columns: 22px 1fr; gap: 6px; padding: 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+.queue-item:hover { background: var(--bg); }
+.queue-item.active { border-color: var(--focus); background: var(--bg); }
+.queue-item .title { font-weight: 600; word-break: break-word; }
+.queue-item .detail { color: var(--muted); font-size: 12px; word-break: break-word; }
+.sev { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 700; margin-top: 2px; }
+.sev.high { background: var(--high); } .sev.medium { background: var(--medium); border-radius: 3px; } .sev.low { background: var(--low); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+#map { width: 100%; height: 100%; display: block; }
+.map-wrap { position: relative; overflow: hidden; }
+#panels { display: none; }
+.glow { filter: drop-shadow(0 0 calc(3px * var(--u, 1)) var(--glow)) drop-shadow(0 0 calc(7px * var(--u, 1)) var(--glow)); }
+.tip { position: fixed; z-index: 10; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: 12px/1.3 ui-monospace, "SF Mono", Menlo, monospace; box-shadow: 0 2px 8px rgba(0,0,0,.25); max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: none; }
+.zoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
+.zoom button { width: 32px; height: 32px; padding: 0; font-size: 16px; background: var(--panel); }
+#map { cursor: grab; touch-action: none; } #map.panning { cursor: grabbing; }
+/* A module picked up to move lifts off the map; its band lights up while
+   the drop would move it, and its edges fade until it lands. */
+#map .module.carried { cursor: grabbing; opacity: .9; filter: drop-shadow(0 4px 6px rgba(0,0,0,.35)); }
+#map .carry-dim { opacity: .12; }
+#inspector .hint { color: var(--muted); font-size: 12px; }
+#map .backdrop.drop-target { stroke: var(--selection); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+#map .backdrop.drop-refused { stroke: var(--high); stroke-width: 2; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+/* Dragging pans the map; it must never select labels, legend text or tooltips. */
+.map-wrap { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* A browser focus ring on an SVG element is a box around its bounds. The map
+   shows selection with its own stroke, and keyboard focus with the glow. */
+#map :focus, #map :focus-visible { outline: none; }
+.legend { position: absolute; left: 10px; top: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 11px; color: var(--muted); }
+.legend .legend-hide { float: right; margin: -3px -5px 0 8px; padding: 1px 7px; font-size: 11px; }
+.legend-show { position: absolute; left: 10px; top: 10px; padding: 2px 9px; font-size: 11px; }
+.legend svg { vertical-align: middle; }
+.legend .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; vertical-align: -1px; }
+.ring-label { font-size: 10px; fill: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.module-label { font-size: 10px; fill: var(--ink); pointer-events: none; }
+.group { cursor: pointer; }
+.group-name { font-size: 11px; font-weight: 600; fill: var(--muted); pointer-events: none; }
+.group-count { font-size: 10px; fill: var(--muted); pointer-events: none; }
+.module { cursor: pointer; }
+.dim { opacity: .18; }
+.inspector dl { display: grid; grid-template-columns: 90px 1fr; gap: 4px 8px; margin: 0 0 12px; font-size: 13px; }
+.inspector dt { color: var(--muted); }
+.inspector dd { margin: 0; word-break: break-word; }
+pre { background: var(--code-bg); padding: 8px; border-radius: 6px; overflow: auto; font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; margin: 0 0 12px; }
+pre.doc { background: none; padding: 0 0 0 8px; border-left: 3px solid var(--code-bg); white-space: pre-wrap; font: inherit; }
+pre.file { max-height: 60vh; }
+li.link { cursor: pointer; text-decoration: underline dotted; }
+.where { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+.sig-old { color: var(--removed); } .sig-new { color: var(--added); }
+pre.diff div { white-space: pre; }
+pre.diff .sig-old { background: color-mix(in srgb, var(--removed) 12%, transparent); } pre.diff .sig-new { background: color-mix(in srgb, var(--added) 12%, transparent); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+.chip { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; cursor: pointer; background: var(--bg); color: var(--ink); }
+table.metrics { border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 12px; table-layout: fixed; }
+table.metrics td, table.metrics th { border-bottom: 1px solid var(--line); padding: 3px 4px; text-align: right; }
+table.metrics td:first-child, table.metrics th:first-child { text-align: left; }
+table.metrics th:not(:first-child) { width: 4.5em; }
+/* A metric's full name, cut off when the panel is narrow; its tooltip
+   always has the whole name and what it measures. */
+table.metrics td.metric-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
+.inspector dt[title] { cursor: help; text-decoration: underline dotted; text-underline-offset: 2px; }
+.code-panel pre.file { max-height: none; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.pill.fail { background: var(--high); color: #fff; } .pill.pass { background: var(--accent); color: #fff; }
+.empty { color: var(--muted); }
+.slice-head { display: flex; justify-content: space-between; align-items: center; }
+@media (max-width: 900px) {
+  body { height: auto; }
+  main#workspace { display: flex; flex-direction: column; }
+  .dock, .dock.bottom { height: auto; flex-direction: column; }
+  .splitter { display: none; }
+  #dock-center, .map-panel .map-wrap { height: 70vh; }
+}
+@media (prefers-reduced-motion: no-preference) { .queue-item, .chip { transition: background .12s; } }
