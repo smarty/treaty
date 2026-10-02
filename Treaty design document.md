@@ -27,7 +27,7 @@ Agents now produce diffs faster than humans can review them, and line-based revi
 3. Render an interactive map that stays legible at 50 modules and 2,000 contract symbols through aggregation and semantic zoom.
 4. Export a context slice per symbol or module that gives an agent the contracts it needs and nothing else.
 5. Let people design new features in AutoPen, then check the design against the code as it is built.
-6. Support languages through one extractor interface, each with a small hand-written contract scanner and no language treated as a special case. Version 1 supports Go only.
+6. Support languages through one extractor interface, each with a small hand-written contract scanner and no language treated as a special case. Version 1 supports Go, JavaScript, TypeScript and Python.
 
 **Non-goals**
 
@@ -38,7 +38,7 @@ Agents now produce diffs faster than humans can review them, and line-based revi
 - Treaty does not choose an architecture. Knowing which one fits the codebase is the team's job; the tool checks the one they declare.
 - No strict layering. In the layered architecture a layer may use every layer below it. Whether a team also forbids skipping a layer is a team decision, not a rule the tool enforces.
 - No test-strength scoring for now. Contract-scoped mutation testing was deferred on Sep 29, 2026 and may return later.
-- Go only in version 1. Other languages follow later, each through its own contract scanner behind the same extractor interface.
+- Go, JavaScript, TypeScript and Python only in version 1. Other languages follow later, each through its own contract scanner behind the same extractor interface.
 
 ## Core concepts
 
@@ -142,9 +142,28 @@ The tool is itself hexagonal: a pure Go core that never calls a parser or git di
 
 Treaty doesn't need a full parser, only contracts: package clauses, imports, top-level declarations and their signatures, struct fields and interface method sets. Bodies only need scanning for the identifiers that become reference edges. So each language gets a small hand-written contract scanner instead of a general-purpose grammar:
 
-- **A lexer** that knows the language's tokens, comments and string forms. For Go it also inserts semicolons at line ends, so declaration boundaries fall out of the token stream.
+- **A lexer** that knows the language's tokens, comments and string forms. For Go it also inserts semicolons at line ends, so declaration boundaries fall out of the token stream. For JavaScript and TypeScript it marks the first token of each line instead, which stands in for automatic semicolon insertion, tells regular expressions from division and JSX from less-than by what came before, and keeps only the tag names and embedded expressions of JSX.
 - **A declaration reader** that walks top-level declarations and renders signatures in AutoPen form. It skips bodies as balanced brackets and never parses an expression or statement.
 - **A reference scan** over each declaration's tokens that resolves `pkg.Name` through imports, `recv.Name` through the receiver's type, and bare identifiers within the module.
+
+The language scanners sit together under `internal/adapters/language/`, one package each, and the composition root merges their graphs. JavaScript and TypeScript share one scanner:
+
+- **Modules are directories.** As with Go packages, a module is a directory: `ts` when it holds any TypeScript file and `js` otherwise, so a mixed directory is one module. A directory's `package.json` is its manifest.
+- **Contracts are exports.** `export` declarations, export lists, `export default`, and CommonJS `module.exports` and `exports.name` assignments make contracts. A declaration exported by a later list gets `export` written ahead of its signature, so a signature alone says whether it is a contract. Class members are contracts unless `private` or `#`-named.
+- **Names are scoped to a file, symbols to a directory.** A top-level name declared in more than one file of a directory is qualified by its file's stem, as in `button/render`, so neither hides the other. Overloads and accessor pairs within one file are variants of one symbol.
+- **Imports resolve inside the tree only.** Relative paths, with TypeScript's `.js`-to-`.ts` mapping and index files; `paths` and `baseUrl` from the nearest `tsconfig.json` or `jsconfig.json` (its `extends` is not followed); and packages in the tree by their `package.json` name, through `source`, `exports`, `module` or `main`, then an index or `src/index`. Imports and re-exports, including barrels, resolve to the declaring symbol. Anything else, such as `node_modules`, is outside the repository.
+- **What is skipped.** Declaration files (`.d.ts`), tests (`.test.`, `.spec.`, `__tests__`), minified files, and `node_modules`, `dist`, `build` and `coverage` directories.
+- **Breaking changes** compare parameter types, optional and rest markers, and result types, ignoring parameter names; a parameter without a type compares as `_`. Constant values may change.
+
+Python has a scanner of its own, built the same way:
+
+- **The lexer** joins lines inside brackets and after a backslash into logical lines and records each one's indentation, which is how blocks are read. It knows prefixed and triple-quoted strings, and lexes an f-string's replacement fields as code.
+- **Modules are directories**, `py`, like packages. A directory's `pyproject.toml`, `setup.py` or `setup.cfg` is its manifest; a directory with `__main__.py`, or a file that tests `__name__ == "__main__"`, is an entry point; a directory whose path has an `_`-prefixed part is private.
+- **Contracts are public names**: those not starting with an underscore, plus special names such as `__init__`. `__all__` decides only what `from module import *` brings in. Signatures are the `def` and `class` lines without their colons, and `name: type = value` for module variables. A class's fields are the attributes its body assigns or annotates and those `__init__` assigns to `self`. A class with `Protocol` among its bases is an interface; every base becomes an embeds edge.
+- **Definitions inside `if`, `try` and `with` blocks** are read as top level, since that is where conditional imports and definitions live. Imports at any depth are dependencies.
+- **Imports resolve inside the tree only**: relative imports from the file's package, and absolute ones from the source roots, which are the repository root, `src`, and each project directory and its `src`. A package found in no root but in exactly one place in the tree, as a vendored dependency is, resolves there. `a.b.c.name` walks packages and submodules to the symbol. As with JavaScript, a name defined in more than one file of a directory is qualified by its file's stem.
+- **What is skipped.** Tests (`test_*.py`, `*_test.py`, `conftest.py`, `tests` directories), stubs (`.pyi`), virtual environments, caches, and `build` and `dist` directories.
+- **Breaking changes** compare annotations, defaults, `*`, `**`, `/` and `*` markers and the return annotation, ignoring parameter names and a method's `self` or `cls`. Variable values may change.
 
 The same scanner reads AutoPen declaration lines, so design signatures and code signatures are compared by one piece of code. The tool is pure Go with no cgo: it cross-compiles, and `go install` needs no C toolchain. On this repository, the Go scanner produced the same modules, symbols, signatures and fields as a tree-sitter-based extractor it replaced, in about a twentieth of the time.
 
@@ -153,7 +172,7 @@ The same scanner reads AutoPen declaration lines, so design signatures and code 
 A run moves through these steps in order:
 
 1. The VersionControl adapter materializes the base and head trees.
-2. The SourceExtractor builds a graph for each tree: modules, symbols, signatures and reference edges. Sub-trees with their own `go.mod` are part of the tree; each resolves imports through its own module path.
+2. The SourceExtractor builds a graph for each tree: modules, symbols, signatures and reference edges. Each language's extractor reads the whole tree and their graphs are merged. Sub-trees with their own `go.mod` are part of the tree; each resolves imports through its own module path.
 3. The config assigns each module a layer; modules that match no glob become Unclassified.
 4. The domain classifies each symbol's change kind by comparing base and head signatures.
 5. The domain checks layer rules and computes stability metrics on both graphs.
@@ -360,7 +379,9 @@ A test holds every default theme to the map's meaning: the five signals stay at 
 
 **Selecting files.** A file cell is selectable like a symbol or module. Selecting one keeps its cell, bracket and contracts lit, dims what it does not touch, and shows in the inspector its path, its symbol, contract and internal counts, the files and modules it uses and is used by, and chips for its contracts and internals. For agents, a file's selection id is its module's id and its path joined by `|`, with the module's slice.
 
-**Manifests.** A package holding its language's module file, such as `go.mod`, is where a module begins. The file takes the first cell of the package's ring, at 12:00, ahead of the source files, and names itself instead of being shaded, since it declares nothing. Selecting it shows the file in the inspector.
+**Manifests.** A package holding its language's module file, such as `go.mod`, `package.json` or `pyproject.toml`, is where a module begins. The file takes the first cell of the package's ring, at 12:00, ahead of the source files, and names itself instead of being shaded, since it declares nothing. Selecting it shows the file in the inspector.
+
+**Changes since the baseline.** Against a baseline, a changed symbol's inspector shows its signature as a removed line and an added line, and its code as a line diff with the baseline, removed lines red and added lines green, for implementation changes as well as contract changes. What the baseline had and the working tree does not stays on the map in red with a dashed outline where it was: removed modules, removed files as cells of their module, removed symbols in those cells or their file's cell, removed module dependencies as dashed red arrows, and, when a symbol is selected, the references it lost. A removed symbol's inspector shows its old code, all red. A symbol that moved shows only where it went.
 
 **Moving modules.** Pressing a module and holding still for half a second picks it up; moving first pans, as before. While it is carried, the band, ring or area under the pointer lights up, its edges fade, and the tip says what a drop will do; Escape puts it back. Dropped in its own band, ring or area, the module stays where it was put: the position is saved per repository and architecture in `.treaty/positions.json`, is honored only while it still lies in the module's band, and grows the module's groups to keep it inside. Dropped in another layer of a layered, hexagonal or clean architecture, including a side of the adapter ring or the composition arc, the server edits `treaty.yaml` through its YAML tree, keeping comments: it removes the module's exact path from every list and adds it to the target's, unless the wildcards already place it there. It then rebuilds, so the rules, checks and agents follow at once. Moves between layers are refused while another architecture is previewed, and for slices and modular, whose areas come from directories.
 
@@ -520,7 +541,7 @@ Three phases, ordered so that each one is useful on its own: layer checks and sl
 
 &#91;embedded content: delivery plan · 3 phases, 3 gates\]
 
-No dates are set; a phase starts only after the previous gate passes. Build a fixture repository that reproduces the mockup's `smarty/injection` PR #142 in phase 1 and use it as the regression test for every later phase. It lives in `internal/adapters/golang/testdata`: `injection-base` is the tree before the PR and `injection` the tree after it, and the tests commit the first and diff the second against it.
+No dates are set; a phase starts only after the previous gate passes. Build a fixture repository that reproduces the mockup's `smarty/injection` PR #142 in phase 1 and use it as the regression test for every later phase. It lives in `internal/adapters/language/golang/testdata`: `injection-base` is the tree before the PR and `injection` the tree after it, and the tests commit the first and diff the second against it.
 
 ## Acceptance criteria
 

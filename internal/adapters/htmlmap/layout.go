@@ -31,6 +31,8 @@ const (
 // the file's contracts sit on the module's border. Symbols counts every
 // symbol declared in the file, so crowded files stand out. Manifest marks
 // the module's go.mod, which declares nothing and always comes first.
+// Removed marks a file only the base has, kept so its removed symbols have
+// somewhere to be drawn.
 type Cell struct {
 	File     string  `json:"file"`
 	X        float64 `json:"x"`
@@ -38,6 +40,7 @@ type Cell struct {
 	Angle    float64 `json:"angle"`
 	Symbols  int     `json:"symbols"`
 	Manifest bool    `json:"manifest,omitempty"`
+	Removed  bool    `json:"removed,omitempty"`
 }
 
 // Group is a directory drawn as a hexagon around the modules beneath it.
@@ -581,9 +584,9 @@ func arrange(items []*item, radius, start, arc float64, wrap bool) {
 }
 
 // cellFiles lists the files drawn as cells in a module: its manifest, when
-// it has one, then its files in name order.
+// it has one, then its files, removed ones among them, in name order.
 func cellFiles(module app.MapModule) []string {
-	files := slices.Clone(module.Files)
+	files := append(slices.Clone(module.Files), module.RemovedFiles...)
 	sort.Strings(files)
 	if module.Manifest != "" {
 		files = append([]string{module.Manifest}, files...)
@@ -928,6 +931,7 @@ func placeFiles(result *Layout, view app.MapView) {
 			result.Cells[module.ID] = append(result.Cells[module.ID], Cell{
 				File: files[i], X: round(slot[0]), Y: round(slot[1]), Angle: math.Round(slot[2]*1000) / 1000,
 				Symbols: counts[module.ID+"\x00"+files[i]], Manifest: files[i] == module.Manifest,
+				Removed: module.Removed || slices.Contains(module.RemovedFiles, files[i]),
 			})
 		}
 	}

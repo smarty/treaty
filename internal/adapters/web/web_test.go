@@ -15,8 +15,8 @@ import (
 
 	"github.com/smarty/treaty/internal/adapters/filesystem"
 	"github.com/smarty/treaty/internal/adapters/gitvcs"
-	"github.com/smarty/treaty/internal/adapters/golang"
 	"github.com/smarty/treaty/internal/adapters/htmlmap"
+	"github.com/smarty/treaty/internal/adapters/language/golang"
 	"github.com/smarty/treaty/internal/app"
 )
 

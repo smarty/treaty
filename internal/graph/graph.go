@@ -220,6 +220,25 @@ func (this *Graph) Clone() *Graph {
 	return result
 }
 
+// Merge adds another graph's modules, symbols, edges and imports, so
+// several extractors can build one graph. A module or symbol id already
+// present keeps the first one.
+//
+// Parameters:
+//   - other: the graph to add.
+func (this *Graph) Merge(other *Graph) {
+	for _, module := range other.Modules {
+		this.AddModule(module)
+	}
+
+	for _, symbol := range other.Symbols {
+		this.AddSymbol(symbol)
+	}
+
+	this.Edges = append(this.Edges, other.Edges...)
+	this.Imports = append(this.Imports, other.Imports...)
+}
+
 // Module looks up a module by id.
 //
 // Parameters:

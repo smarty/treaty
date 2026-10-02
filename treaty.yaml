@@ -5,7 +5,7 @@ layers:
   application: ["internal/app/**"]
   adapter:
     driving:   ["internal/adapters/cli/**", "internal/adapters/mcp/**", "internal/adapters/web/**"]
-    driven:    ["internal/adapters/golang/**", "internal/adapters/filesystem/**", "internal/adapters/gitvcs/**", "internal/adapters/htmlmap/**"]
+    driven:    ["internal/adapters/language/**", "internal/adapters/filesystem/**", "internal/adapters/gitvcs/**", "internal/adapters/htmlmap/**"]
 rules:
   fail_on: [breaking, layer_violation]
   warn_on: [unclassified]

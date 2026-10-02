@@ -15,8 +15,10 @@ import (
 	"github.com/smarty/treaty/internal/adapters/cli"
 	"github.com/smarty/treaty/internal/adapters/filesystem"
 	"github.com/smarty/treaty/internal/adapters/gitvcs"
-	"github.com/smarty/treaty/internal/adapters/golang"
 	"github.com/smarty/treaty/internal/adapters/htmlmap"
+	"github.com/smarty/treaty/internal/adapters/language/golang"
+	"github.com/smarty/treaty/internal/adapters/language/javascript"
+	"github.com/smarty/treaty/internal/adapters/language/python"
 	"github.com/smarty/treaty/internal/adapters/mcp"
 	"github.com/smarty/treaty/internal/adapters/web"
 	"github.com/smarty/treaty/internal/app"
@@ -48,8 +50,8 @@ func main() {
 	service := app.NewService(
 		root,
 		filesystem.NewConfig(root),
-		golang.NewExtractor(),
-		[]app.Dialect{golang.NewDialect()},
+		app.Extractors{golang.NewExtractor(), javascript.NewExtractor(), python.NewExtractor()},
+		[]app.Dialect{golang.NewDialect(), javascript.NewDialect(javascript.LanguageJavaScript), javascript.NewDialect(javascript.LanguageTypeScript), python.NewDialect()},
 		gitvcs.New(root),
 		workspace,
 		htmlmap.New(),

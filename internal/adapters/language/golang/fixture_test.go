@@ -24,7 +24,7 @@ import (
 var update = flag.Bool("update", false, "rewrite the golden files")
 
 func TestOwnRepositoryPasses(t *testing.T) {
-	report, err := newService(t, "../../..").Check("")
+	report, err := newService(t, "../../../..").Check("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,5 +257,122 @@ func copyTree(t *testing.T, from, to string) {
 
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// viewRecorder is a map renderer that keeps the last view it was given.
+type viewRecorder struct{ view app.MapView }
+
+func (this *viewRecorder) Page() []byte { return nil }
+
+func (this *viewRecorder) Payload(view app.MapView) ([]byte, error) {
+	this.view = view
+	return nil, nil
+}
+
+func (this *viewRecorder) Render(view app.MapView) ([]byte, error) {
+	this.view = view
+	return nil, nil
+}
+
+func TestMapShowsCodeChangesAndRemovals(t *testing.T) {
+	root := t.TempDir()
+	write := func(files map[string]string) {
+		for name, text := range files {
+			file := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	git := func(args ...string) {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+
+	write(map[string]string{
+		"go.mod":      "module example.com/m\n",
+		"a/a.go":      "package a\n\nimport \"example.com/m/b\"\n\nfunc Run() int {\n\treturn b.Help()\n}\n",
+		"b/b.go":      "package b\n\nfunc Help() int {\n\treturn 1\n}\n",
+		"b/extra.go":  "package b\n\nfunc Extra() {}\n",
+		"gone/old.go": "package gone\n\nfunc Old() {}\n",
+	})
+	git("init", "-q")
+	git("add", ".")
+	git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "before")
+	for _, name := range []string{"b/extra.go", "gone/old.go"} {
+		if err := os.Remove(filepath.Join(root, filepath.FromSlash(name))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write(map[string]string{
+		"a/a.go": "package a\n\nfunc Run() int {\n\treturn 2\n}\n",
+		"b/b.go": "package b\n\nfunc Help() int {\n\tvalue := 1\n\treturn value\n}\n",
+	})
+
+	recorder := &viewRecorder{}
+	service := app.NewService(root, filesystem.NewConfig(root), NewExtractor(), []app.Dialect{NewDialect()},
+		gitvcs.New(root), filesystem.NewWorkspace(t.TempDir()), recorder, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	if _, err := service.Map("HEAD", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	view := recorder.view
+	symbols := map[string]app.MapSymbol{}
+	for _, symbol := range view.Symbols {
+		symbols[symbol.ID] = symbol
+	}
+
+	diffText := func(lines []app.DiffLine) string {
+		var parts []string
+		for _, line := range lines {
+			parts = append(parts, line.Op+line.Text)
+		}
+
+		return strings.Join(parts, "\n")
+	}
+
+	help := symbols["go:b:Help"]
+	if want := " func Help() int {\n-\treturn 1\n+\tvalue := 1\n+\treturn value\n }"; help.Change != rules.ChangeImplementation || diffText(help.Diff) != want {
+		t.Errorf("Help's code change: %s %q", help.Change, diffText(help.Diff))
+	}
+
+	for _, id := range []string{"go:b:Extra", "go:gone:Old"} {
+		if symbol := symbols[id]; !symbol.Removed || symbol.Change != rules.ChangeRemoved || len(symbol.Diff) == 0 || symbol.Diff[0].Op != app.DiffRemoved {
+			t.Errorf("%s must show as removed with its old code: %+v", id, symbol)
+		}
+	}
+
+	var removedModule bool
+	for _, module := range view.Modules {
+		if module.ID == "go:b" && !slices.Equal(module.RemovedFiles, []string{"b/extra.go"}) {
+			t.Errorf("b's removed files: %q", module.RemovedFiles)
+		}
+
+		removedModule = removedModule || module.ID == "go:gone" && module.Removed
+	}
+
+	if !removedModule {
+		t.Error("the deleted package must show as a removed module")
+	}
+
+	var removedEdge bool
+	for _, edge := range view.Edges {
+		removedEdge = removedEdge || edge.From == "go:a" && edge.To == "go:b" && edge.Removed
+	}
+
+	if !removedEdge {
+		t.Error("a's dropped dependency on b must show as a removed edge")
+	}
+
+	if len(view.RemovedLinks) != 1 || view.RemovedLinks[0].From != "go:a:Run" || view.RemovedLinks[0].To != "go:b:Help" {
+		t.Errorf("removed references: %+v", view.RemovedLinks)
 	}
 }

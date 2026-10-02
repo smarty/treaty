@@ -131,7 +131,7 @@ type Live struct {
 	version     int
 	failure     string
 	fingerprint string
-	bases       map[string]*graph.Graph
+	bases       map[string]baseRevision
 	baseOrder   []string
 	subscribers map[chan LiveState]bool
 	pointer     *Pointer
@@ -161,7 +161,7 @@ func NewLive(service *Service, watcher Watcher, peer Peer) *Live {
 		watcher:     watcher,
 		peer:        peer,
 		baseline:    Baseline{Mode: BaselineHead},
-		bases:       map[string]*graph.Graph{},
+		bases:       map[string]baseRevision{},
 		subscribers: map[chan LiveState]bool{},
 		showEvery:   ShowEvery,
 		adoptAfter:  AdoptAfter,
@@ -426,21 +426,28 @@ func (this *Live) Subscribe() (updates <-chan LiveState, cancel func()) {
 	}
 }
 
-func (this *Live) baseGraph(commit string) (*graph.Graph, error) {
+// baseRevision is a cached baseline: its graph and the text of its files,
+// which are only read.
+type baseRevision struct {
+	graph   *graph.Graph
+	sources map[string]string
+}
+
+func (this *Live) baseGraph(commit string) (*graph.Graph, map[string]string, error) {
 	this.mutex.Lock()
-	cached := this.bases[commit]
+	cached, ok := this.bases[commit]
 	this.mutex.Unlock()
-	if cached != nil {
-		return cached.Clone(), nil
+	if ok {
+		return cached.graph.Clone(), cached.sources, nil
 	}
 
-	built, err := this.service.graphAt(commit)
+	built, sources, err := this.service.graphAt(commit)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	this.mutex.Lock()
-	this.bases[commit] = built
+	this.bases[commit] = baseRevision{graph: built, sources: sources}
 	this.baseOrder = append(this.baseOrder, commit)
 	if len(this.baseOrder) > cachedBases {
 		delete(this.bases, this.baseOrder[0])
@@ -448,7 +455,7 @@ func (this *Live) baseGraph(commit string) (*graph.Graph, error) {
 	}
 
 	this.mutex.Unlock()
-	return built.Clone(), nil
+	return built.Clone(), sources, nil
 }
 
 // build analyzes the working tree against a baseline. The analysis follows
@@ -466,13 +473,15 @@ func (this *Live) build(baseline Baseline, preview string) (*analysis, []byte, e
 	}
 
 	var base *graph.Graph
+	var baseSources map[string]string
 	if baseline.Commit != "" {
-		if base, err = this.baseGraph(baseline.Commit); err != nil {
+		if base, baseSources, err = this.baseGraph(baseline.Commit); err != nil {
 			return nil, nil, err
 		}
 	}
 
 	result := this.service.analyzeGraphs(config, head, base, baseline.Label)
+	result.baseSources = baseSources
 	shown := result
 	if preview != "" && preview != config.Architecture.Style {
 		fitted := config
@@ -483,6 +492,7 @@ func (this *Live) build(baseline Baseline, preview string) (*analysis, []byte, e
 		}
 
 		shown = this.service.analyzeGraphs(fitted, head.Clone(), previewBase, baseline.Label)
+		shown.baseSources = baseSources
 	}
 
 	designs, err := this.service.workspace.Designs()

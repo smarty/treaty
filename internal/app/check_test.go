@@ -37,3 +37,18 @@ func TestReportSummary(t *testing.T) {
 		t.Errorf("a violation is listed once, not again as a finding:\n%s", summary)
 	}
 }
+
+func TestLineDiff(t *testing.T) {
+	var got []string
+	for _, line := range lineDiff("a\nb\nc\n", "a\nx\nc\nd") {
+		got = append(got, line.Op+line.Text)
+	}
+
+	if want := []string{" a", "-b", "+x", " c", "+d"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("got %q, want %q", got, want)
+	}
+
+	if got := linesOf("one\ntwo\nthree", 2, 3); got != "two\nthree" {
+		t.Errorf("linesOf: %q", got)
+	}
+}

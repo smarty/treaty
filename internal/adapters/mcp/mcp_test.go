@@ -11,8 +11,8 @@ import (
 
 	"github.com/smarty/treaty/internal/adapters/filesystem"
 	"github.com/smarty/treaty/internal/adapters/gitvcs"
-	"github.com/smarty/treaty/internal/adapters/golang"
 	"github.com/smarty/treaty/internal/adapters/htmlmap"
+	"github.com/smarty/treaty/internal/adapters/language/golang"
 	"github.com/smarty/treaty/internal/app"
 )
 
@@ -88,7 +88,7 @@ func callText(t *testing.T, server *Server, name string, arguments map[string]st
 // fixture copies the PR #142 fixture so a test may edit it.
 func fixture(t *testing.T) string {
 	t.Helper()
-	from, root := "../golang/testdata/injection", t.TempDir()
+	from, root := "../language/golang/testdata/injection", t.TempDir()
 	err := filepath.WalkDir(from, func(current string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err

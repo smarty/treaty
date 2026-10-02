@@ -1,0 +1,7 @@
+architecture: hexagonal
+layers:
+  domain:      ["src/domain/**"]
+  application: ["src/app/**"]
+  adapter:
+    driving:   ["src/ui/**"]
+    driven:    ["lib/**", "src/util/**", "packages/**"]

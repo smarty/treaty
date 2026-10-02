@@ -53,7 +53,7 @@ implementation detail, and it is judged through the contracts that reach it.
 - **Small, hand-written scanners.** Treaty needs contracts, not a full
   parse tree. Each language gets a small hand-written contract scanner
   behind one extractor interface. The tool is pure Go with no cgo, so
-  `go install` just works. Go is the only supported language for now.
+  `go install` just works. Go, JavaScript, TypeScript and Python are supported.
 - **Treaty passes its own checks.** The tool is hexagonal itself: a pure core
   with every side effect behind a port.
 
@@ -94,7 +94,7 @@ layers:
   application: ["internal/app/**"]
   adapter:
     driving:   ["internal/adapters/cli/**", "internal/adapters/web/**"]
-    driven:    ["internal/adapters/golang/**", "internal/adapters/gitvcs/**"]
+    driven:    ["internal/adapters/language/**", "internal/adapters/gitvcs/**"]
 rules:
   fail_on: [breaking, layer_violation]
   warn_on: [unclassified]

@@ -18,7 +18,7 @@ import (
 //   - result: the AutoPen text.
 //   - err: the tree could not be read.
 func (this *Service) Dump(at string) (result string, err error) {
-	g, err := this.graphAt(at)
+	g, _, err := this.graphAt(at)
 	if err != nil {
 		return "", err
 	}

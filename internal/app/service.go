@@ -37,6 +37,10 @@ type analysis struct {
 	metrics     map[string]rules.Metric
 	baseMetrics map[string]rules.Metric
 	findings    []rules.Finding
+
+	// baseSources holds the text of the base tree's files, keyed by path,
+	// so the map can show how a symbol's code changed.
+	baseSources map[string]string
 }
 
 // NewService wires the use cases to their adapters.
@@ -87,13 +91,16 @@ func (this *Service) analyze(baseRef string) (*analysis, error) {
 	}
 
 	var base *graph.Graph
+	var baseSources map[string]string
 	if baseRef != "" {
-		if base, err = this.graphAt(baseRef); err != nil {
+		if base, baseSources, err = this.graphAt(baseRef); err != nil {
 			return nil, err
 		}
 	}
 
-	return this.analyzeGraphs(config, head, base, baseRef), nil
+	result := this.analyzeGraphs(config, head, base, baseRef)
+	result.baseSources = baseSources
+	return result, nil
 }
 
 // analyzeGraphs scores a head graph, and its diff from base when base is
@@ -132,18 +139,26 @@ func (this *Service) dialect(language string) (Dialect, error) {
 	return dialect, nil
 }
 
-func (this *Service) graphAt(ref string) (*graph.Graph, error) {
+// graphAt builds the graph of the tree at a ref, with the text of its
+// files, which are gone once the materialized tree is cleaned up. The
+// working tree, at an empty ref, needs no copy of its text.
+func (this *Service) graphAt(ref string) (result *graph.Graph, sources map[string]string, err error) {
 	if ref == "" {
-		return this.extractor.Extract(this.root)
+		result, err = this.extractor.Extract(this.root)
+		return result, nil, err
 	}
 
 	dir, cleanup, err := this.vcs.Materialize(ref)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	defer cleanup()
-	return this.extractor.Extract(dir)
+	if result, err = this.extractor.Extract(dir); err != nil {
+		return nil, nil, err
+	}
+
+	return result, this.sourcesAt(dir, result), nil
 }
 
 // fromEntry reports whether a change moved a symbol out of an entry module,

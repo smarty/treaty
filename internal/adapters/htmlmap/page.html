@@ -75,13 +75,38 @@ main#workspace { position: relative; display: grid; grid-template-columns: var(-
 .stack { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; background: var(--panel); }
 .tabbar { display: flex; gap: 2px; padding: 4px 6px 0; border-bottom: 1px solid var(--line); background: var(--bg); flex: none; overflow-x: auto; }
 .tab { font-size: 12px; padding: 4px 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: transparent; color: var(--muted); cursor: grab; white-space: nowrap; -webkit-user-select: none; user-select: none; touch-action: none; }
-.tab.pinned { cursor: pointer; }
 .tab.active { background: var(--panel); border-color: var(--line); color: var(--ink); }
 .stack-body { flex: 1; min-height: 0; overflow: auto; position: relative; }
 .stack-body.fill { overflow: hidden; }
 .panel { padding: 12px; }
-.map-panel { padding: 0; height: 100%; }
-.map-panel .map-wrap { height: 100%; }
+.map-panel { padding: 0; height: 100%; display: flex; flex-direction: column; position: relative; }
+.map-panel .map-wrap { flex: 1; min-height: 0; }
+.map-wrap[hidden], .symbol-tree[hidden] { display: none; }
+/* The map's own views. They belong to the map panel and go wherever it goes,
+   so they stay put and can't be dragged like the workspace's tabs. */
+.map-tabs { display: flex; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
+.map-tab { font-size: 12px; padding: 2px 12px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--muted); }
+.map-tab[aria-selected="true"] { background: var(--bg); border-color: var(--line); color: var(--ink); font-weight: 600; }
+.stack-empty { color: var(--muted); font-size: 12px; padding: 16px; }
+/* The symbols view: a column per level, the chosen item alone in its column
+   and its children in the next. */
+.symbol-tree { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--panel); }
+.tree-key { flex: none; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.tree-key span { display: inline-flex; align-items: center; gap: 4px; }
+.tree-columns { flex: 1; min-height: 0; display: flex; overflow: auto; }
+.tree-col { flex: none; width: 270px; border-right: 1px solid var(--line); overflow-y: auto; padding: 6px; }
+.tree-col h2 { margin: 2px 6px 6px; font-size: 11px; }
+.tree-row { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 3px 6px; font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); cursor: pointer; }
+.tree-row:hover { background: var(--bg); }
+.tree-row.expanded { background: var(--bg); border-color: var(--line); }
+.tree-row.selected { border-color: var(--selection); }
+.tree-row.pointed { box-shadow: 0 0 0 2px var(--claude); }
+.tree-row svg { flex: none; overflow: visible; }
+.tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-row.internal .tree-name { color: var(--muted); }
+.tree-count { color: var(--muted); font-size: 11px; }
+.tree-arrow { color: var(--muted); width: 10px; text-align: center; font-size: 14px; line-height: 1; }
+.tree-row.expanded .tree-arrow { color: var(--accent); font-weight: 700; }
 .float { position: absolute; z-index: 6; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,.35); overflow: hidden; }
 .float .tabbar { cursor: move; }
 .float-resize { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--line) 50%); }
@@ -137,6 +162,7 @@ pre.file { max-height: 60vh; }
 li.link { cursor: pointer; text-decoration: underline dotted; }
 .where { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 .sig-old { color: var(--removed); } .sig-new { color: var(--added); }
+pre.diff div { white-space: pre; } pre.diff .sig-old { background: color-mix(in srgb, var(--removed) 12%, transparent); } pre.diff .sig-new { background: color-mix(in srgb, var(--added) 12%, transparent); }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
 .chip { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; cursor: pointer; background: var(--bg); color: var(--ink); }
 table.metrics { border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 12px; }
@@ -191,21 +217,30 @@ table.metrics td:first-child, table.metrics th:first-child { text-align: left; }
 <div id="panels">
   <section class="panel" data-panel="queue" aria-label="Review queue"><div id="queue"></div></section>
   <section class="panel map-panel" data-panel="map" aria-label="Map">
+  <div class="map-tabs" role="tablist" aria-label="Map views">
+    <button type="button" class="map-tab" role="tab" data-map-tab="references" title="Modules and the references between them">References</button>
+    <button type="button" class="map-tab" role="tab" data-map-tab="files" title="Directories and files as they sit on disk">Files</button>
+    <button type="button" class="map-tab" role="tab" data-map-tab="symbols" title="Every namespace and the symbols it offers">Symbols</button>
+  </div>
   <div class="map-wrap">
     <svg id="map" role="application" aria-label="Hexagon map of modules and contracts"></svg>
     <div class="legend" id="legend"></div>
     <button type="button" class="legend-show" id="legend-show" hidden title="Show the key (k)">Key</button>
     <div class="tip" id="tip" role="tooltip"></div>
-    <div class="offer" id="offer" role="status" aria-live="polite" hidden>
-      <div><span class="who" id="offer-who"></span> <span id="offer-what"></span></div>
-      <div class="why" id="offer-why"></div>
-      <div class="actions"><button type="button" id="offer-go">Go</button><button type="button" id="offer-dismiss">Dismiss</button></div>
-    </div>
     <div class="zoom" role="group" aria-label="Zoom">
       <button type="button" id="zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
       <button type="button" id="zoom-out" aria-label="Zoom out" title="Zoom out (−)">−</button>
       <button type="button" id="zoom-fit" aria-label="Fit to view" title="Fit (0)">⤢</button>
     </div>
+  </div>
+  <div class="symbol-tree" id="symbol-tree" hidden>
+    <div class="tree-key" id="symbol-key"></div>
+    <div class="tree-columns" id="symbol-columns" role="tree" aria-label="Namespaces and their symbols"></div>
+  </div>
+  <div class="offer" id="offer" role="status" aria-live="polite" hidden>
+    <div><span class="who" id="offer-who"></span> <span id="offer-what"></span></div>
+    <div class="why" id="offer-why"></div>
+    <div class="actions"><button type="button" id="offer-go">Go</button><button type="button" id="offer-dismiss">Dismiss</button></div>
   </div>
   </section>
   <section class="panel inspector" data-panel="inspector" aria-label="Inspector"><div id="inspector"><p class="empty">Select a module, file, symbol, edge or queue item.</p></div></section>
@@ -215,7 +250,7 @@ let D = /*DATA*/null;
 // With no data embedded, the page is the live map: it loads the view from the
 // server that served it and redraws on every rebuild.
 const LIVE = D === null;
-let modules, symbols, byModule, edges, links, groups, groupOf;
+let modules, symbols, byModule, edges, links, removedLinks, groups, groupOf, parentOf, members;
 // ingest indexes one view. Everything drawn is derived from D and these maps.
 function ingest(data) {
   D = data;
@@ -226,13 +261,24 @@ function ingest(data) {
   for (const s of D.symbols) { if (!byModule.has(s.module)) byModule.set(s.module, []); byModule.get(s.module).push(s); }
   // An edge made only of imports, such as a blank import, has no references.
   for (const e of D.edges) { e.references = e.references || []; e.imports = e.imports || []; }
-  edges = D.edges; links = D.links;
+  edges = D.edges; links = D.links; removedLinks = D.removed_links || [];
   const note = document.getElementById("legend-public");
   if (note) note.hidden = D.architecture !== "modular";
   groups = new Map((D.layout.groups || []).map(g => [g.id, g]));
   groupOf = new Map();
   for (const g of D.layout.groups || []) for (const id of g.modules) if (!groupOf.has(id) || groups.get(groupOf.get(id)).depth < g.depth) groupOf.set(id, g.id);
+  // A member such as Service.Map hangs under the type it belongs to in the
+  // symbols view.
+  parentOf = new Map(); members = new Map();
+  for (const s of D.symbols) {
+    const at = s.name.lastIndexOf("."); if (at < 0) continue;
+    const owner = (byModule.get(s.module) || []).find(p => p.name === s.name.slice(0, at)); if (!owner) continue;
+    parentOf.set(s.id, owner);
+    if (!members.has(owner.id)) members.set(owner.id, []);
+    members.get(owner.id).push(s);
+  }
   placeMoved();
+  layoutFiles();
   // The caller draws next, so the theme only sets the tokens here.
   fillThemeMenu(); applyTheme(false);
 }
@@ -252,8 +298,11 @@ const AUTO_COLLAPSE_PX = 45;
 // the symbols stay on the module's border and the cells show only shading.
 const CELL_DETAIL_PX = 20;
 const LABEL_MIN_PX = 9;
-const state = { pointer: null, selected: null, internals: false, symbolPos: new Map(), view: null, groupOpen: {}, signature: undefined, rendering: false, positions: {}, moved: new Set() };
-const home = () => { const E = D.layout.extent + 20; return { x: -E, y: -E, w: 2 * E, h: 2 * E }; };
+// mapTab is the map view shown: references, files or symbols. Each view
+// keeps its own camera in views while another is shown, and trail is the
+// path open in the symbols view.
+const state = { pointer: null, selected: null, internals: false, symbolPos: new Map(), view: null, groupOpen: {}, signature: undefined, rendering: false, positions: {}, moved: new Set(), mapTab: "references", views: {}, trail: [], treeFocus: null };
+const home = () => { const E = (state.mapTab === "files" && filesLayout ? filesLayout.extent : D.layout.extent) + 20; return { x: -E, y: -E, w: 2 * E, h: 2 * E }; };
 function applyView() {
   if (!D) return;
   if (!state.view) state.view = home();
@@ -346,11 +395,12 @@ function glyph(change) { return { added: "+", contract: "Δ", breaking: "!", rem
 // drawShape draws one symbol icon. Shape and fill show the kind: hollow
 // circle function, filled circle method, hollow square interface, filled
 // square concrete type, filled triangle value. Color shows the change (grey
-// unchanged, green added, amber changed), with a glyph beside the icon.
+// unchanged, green added, red removed, amber changed), with a glyph beside
+// the icon.
 // Designed or planned symbols that are not built yet are teal with a dashed
 // outline, so the state never relies on color alone.
 function drawShape(g, kind, x, y, r, change, design) {
-  const hue = change === "added" ? color("--added") : change ? color("--changed") : color("--module-stroke");
+  const hue = change === "added" ? color("--added") : change === "removed" ? color("--removed") : change ? color("--changed") : color("--module-stroke");
   const hollow = kind === "function" || kind === "interface";
   const common = { fill: hollow ? color("--module") : hue, stroke: hue, "stroke-width": hollow ? 1.6 : 1 };
   if (design) Object.assign(common, { fill: color("--module"), stroke: color("--planned"), "stroke-width": 1.6, "stroke-dasharray": "2 1.5" });
@@ -381,7 +431,12 @@ function anchorOf(moduleId) {
   return p ? { key: moduleId, x: p.x, y: p.y, r: moduleSize(moduleId), label: m.label || m.path, layer: m.layer } : null;
 }
 function cellDetail() { return (D.layout.cell_size || 0) * pixelsPerUnit() >= CELL_DETAIL_PX; }
-function collapsedSignature() { return (D.layout.groups || []).filter(isCollapsed).map(g => g.id).join("|") + (cellDetail() ? "|cells" : ""); }
+function collapsedSignature() {
+  // The files view redraws every half doubling of zoom, to show or hide names
+  // and symbols.
+  if (state.mapTab === "files") return "files|" + Math.round(Math.log2(pixelsPerUnit()) * 2);
+  return (D.layout.groups || []).filter(isCollapsed).map(g => g.id).join("|") + (cellDetail() ? "|cells" : "");
+}
 // placeName says where the architecture puts a module: its slice or
 // context, its layer and side, and whether it is public.
 function placeName(m) {
@@ -440,6 +495,7 @@ function relatedKey(rel, key) { if (!rel) return true; const g = groups.get(key)
 
 function render() {
   if (!D) return;
+  if (state.mapTab === "symbols") { renderSymbolTree(); return; }
   state.rendering = true;
   try { draw(); } finally { state.rendering = false; }
   if (carry) liftCarried();
@@ -448,7 +504,38 @@ function draw() {
   const svg = document.getElementById("map"); svg.innerHTML = "";
   applyView();
   state.signature = collapsedSignature();
+  state.symbolPos = new Map();
   const rel = related();
+  if (state.mapTab === "files") drawFiles(svg, rel); else drawReferences(svg, rel);
+  if (state.selected && state.selected.type === "symbol") {
+    const layer = el("g", {}, svg);
+    const own = state.symbolPos.get(state.selected.id), s = symbols.get(state.selected.id);
+    if (own && s) el("text", { x: 8, y: -8, "font-size": 11, class: "selected-label" }, anchored(layer, own[0], own[1], {}, false, true)).textContent = s.name;
+    const where = id => { const at = positionOf({ type: "symbol", id }); return at ? [at.x, at.y] : null; };
+    // References the base had and the working tree lost draw red and dashed.
+    for (const l of [...links, ...removedLinks.map(r => ({ ...r, removed: true }))]) {
+      if (l.from !== state.selected.id && l.to !== state.selected.id) continue;
+      const a = where(l.from), b = where(l.to); if (!a || !b) continue;
+      const line = el("line", { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: color(l.removed ? "--removed" : "--accent"), "stroke-width": 1.5, "vector-effect": "non-scaling-stroke" }, layer);
+      if (inherits(l.kind) || l.removed) line.setAttribute("stroke-dasharray", l.removed ? "2 3" : "5 3");
+      const other = l.from === state.selected.id ? l.to : l.from, o = where(other);
+      el("text", { x: 6, y: -6, "font-size": 10, fill: color("--ink") }, anchored(layer, o[0], o[1], {}, false, true)).textContent = (symbols.get(other) || {}).name || other;
+    }
+  }
+  const picked = state.selected && state.selected.type === "symbol" && symbols.get(state.selected.id);
+  const pickedFile = state.selected && state.selected.type === "file" ? state.selected.id : picked && picked.file ? fileKey(picked.module, picked.file) : "";
+  lightFile(pickedFile, "file-picked");
+  state.hotFile = "";
+  const selectedNode = state.selected && (state.selected.type === "edge" ? svg.querySelector(`[data-edge="${CSS.escape(state.selected.from + "|" + state.selected.to + (state.selected.removed ? "|removed" : ""))}"]`) : glowNode(state.selected.id));
+  if (selectedNode) selectedNode.classList.add("selected-glow");
+  const pointedNode = state.pointer && Date.now() < state.pointer.until && glowNode(state.pointer.target);
+  if (pointedNode) pointedNode.classList.add("pointed-glow");
+  applyView();
+}
+// drawReferences draws the references view: the architecture's rings or
+// areas, the groups, the modules with their files and contracts, and the
+// dependencies between them.
+function drawReferences(svg, rel) {
   // Rings for hexagonal and clean; bands, slices, cells and contexts as
   // regions for the other architectures.
   const tones = ["--ring-domain", "--ring-app", "--ring-adapter", "--ring-outer"];
@@ -492,8 +579,9 @@ function draw() {
   const pairs = new Map();
   for (const e of edges) {
     const a = anchorOf(e.from), b = anchorOf(e.to); if (!a || !b || a.key === b.key) continue;
-    const key = a.key + "\u0000" + b.key;
-    if (!pairs.has(key)) pairs.set(key, { from: a.key, to: b.key, a, b, references: [], imports: [], count: 0, violation: false, new: false });
+    // A removed dependency stays apart from a live one between the same ends.
+    const key = a.key + "\u0000" + b.key + (e.removed ? "\u0000removed" : "");
+    if (!pairs.has(key)) pairs.set(key, { from: a.key, to: b.key, a, b, references: [], imports: [], count: 0, violation: false, new: false, removed: !!e.removed });
     const pair = pairs.get(key); pair.references.push(...e.references); pair.imports.push(...(e.imports || [])); pair.count += e.count; pair.violation ||= e.violation; pair.new ||= e.new;
   }
   const edgeLayer = el("g", {}, svg);
@@ -512,16 +600,16 @@ function draw() {
       const cx = mx - dy * part.bend, cy = my + dx * part.bend;
       const trim = (p, toward, by) => { const vx = toward[0] - p.x, vy = toward[1] - p.y, d = Math.hypot(vx, vy) || 1; return { x: p.x + vx / d * by, y: p.y + vy / d * by }; };
       const a = trim(from, [cx, cy], from.r + 4), b = trim(to, [cx, cy], to.r + 8);
-      const stroke = e.violation ? color("--violation") : e.new ? color("--added") : color("--edge");
+      const stroke = e.violation ? color("--violation") : e.new ? color("--added") : e.removed ? color("--removed") : color("--edge");
       const width = e.violation ? 2.5 : 1 + 3 * part.refs.length / maxCount;
       const dimmed = rel && !(relatedKey(rel, e.from) && relatedKey(rel, e.to));
       const kinds = part.inherit ? [...new Set(part.refs.map(r => r.kind))].join(", ") : "uses";
       const imported = !part.inherit && !part.refs.length ? ` · ${e.imports.length} import${e.imports.length === 1 ? "" : "s"}, no references` : "";
-      const label = `${from.label} → ${to.label} · ${kinds} · ${part.refs.length} reference${part.refs.length === 1 ? "" : "s"}${imported}${e.violation ? " · violation" + (e.rule ? ": " + e.rule : "") : ""}`;
+      const label = `${from.label} → ${to.label} · ${kinds} · ${part.refs.length} reference${part.refs.length === 1 ? "" : "s"}${imported}${e.violation ? " · violation" + (e.rule ? ": " + e.rule : "") : ""}${e.removed ? " · removed" : ""}`;
       const path = el("path", { d: `M${a.x},${a.y} Q${cx},${cy} ${b.x},${b.y}`, fill: "none", stroke, "stroke-width": width, "marker-end": part.inherit ? "url(#inherit)" : "url(#arrow)", "vector-effect": "non-scaling-stroke", "data-label": label, class: dimmed && !e.violation ? "dim" : "", tabindex: 0, role: "button", "aria-label": `${part.inherit ? "Inherits" : "Dependency"} ${from.label} to ${to.label}${e.violation ? ", layer violation" : ""}` }, edgeLayer);
-      if (part.inherit) path.setAttribute("stroke-dasharray", "6 4");
-      path.dataset.edge = e.from + "|" + e.to;
-      const pick = () => select({ type: "edge", from: e.from, to: e.to, edge: e });
+      if (part.inherit || e.removed) path.setAttribute("stroke-dasharray", e.removed ? "3 3" : "6 4");
+      path.dataset.edge = e.from + "|" + e.to + (e.removed ? "|removed" : "");
+      const pick = () => select({ type: "edge", from: e.from, to: e.to, removed: e.removed, edge: e });
       const hit = el("path", { d: path.getAttribute("d"), fill: "none", stroke: "transparent", "stroke-width": 14, "vector-effect": "non-scaling-stroke", "pointer-events": "stroke", "data-label": label }, edgeLayer);
       hit.glowTarget = path;
       for (const target of [path, hit]) { target.style.cursor = "pointer"; target.addEventListener("click", pick); }
@@ -544,13 +632,12 @@ function draw() {
   const cellsOf = D.layout.cells || {};
   // A file's shade grows with its share of the most crowded file's symbols.
   const crowded = Math.max(1, ...Object.values(cellsOf).flat().map(c => c.symbols));
-  state.symbolPos = new Map();
   for (const m of D.modules) {
     const p = pos[m.id]; if (!p || hidden.has(m.id)) continue;
     const S = moduleSize(m.id);
-    const g = el("g", { class: "module" + (rel && !rel.has(m.id) ? " dim" : ""), "data-module": m.id, tabindex: 0, role: "button", "aria-label": `Module ${m.id}, ${m.layer}`, "data-label": `${m.label || m.path} · ${placeName(m)}${m.design ? " · planned, not built" : ""}` }, svg);
-    const hex = el("polygon", { points: hexPoints(p.x, p.y, S).map(q => q.join(",")).join(" "), fill: color("--module"), stroke: m.new ? color("--added") : m.design ? color("--planned") : state.selected && state.selected.id === m.id ? color("--selection") : color("--hex-stroke"), "stroke-width": state.selected && state.selected.id === m.id ? 2.5 : 1.4, "vector-effect": "non-scaling-stroke" }, g);
-    if (m.new || m.design) hex.setAttribute("stroke-dasharray", "5 3");
+    const g = el("g", { class: "module" + (rel && !rel.has(m.id) ? " dim" : ""), "data-module": m.id, tabindex: 0, role: "button", "aria-label": `Module ${m.id}, ${m.layer}`, "data-label": `${m.label || m.path} · ${placeName(m)}${m.design ? " · planned, not built" : ""}${m.removed ? " · removed" : ""}` }, svg);
+    const hex = el("polygon", { points: hexPoints(p.x, p.y, S).map(q => q.join(",")).join(" "), fill: color("--module"), stroke: m.new ? color("--added") : m.removed ? color("--removed") : m.design ? color("--planned") : state.selected && state.selected.id === m.id ? color("--selection") : color("--hex-stroke"), "stroke-width": state.selected && state.selected.id === m.id ? 2.5 : 1.4, "vector-effect": "non-scaling-stroke" }, g);
+    if (m.new || m.removed || m.design) hex.setAttribute("stroke-dasharray", "5 3");
     // Composition wires adapters into the core: a double outline marks the
     // only modules allowed to depend on adapters.
     if (m.layer === "composition") el("polygon", { points: hexPoints(p.x, p.y, S * 0.84).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--hex-stroke"), "stroke-width": 1, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
@@ -599,8 +686,9 @@ function draw() {
           el("text", { x: cx, y: cy + C * 0.16, "text-anchor": "middle", "font-size": (C * 1.5 / Math.max(name.length, 4)).toFixed(2), "font-family": "ui-monospace, Menlo, monospace", fill: color("--ink"), "pointer-events": "none" }, g).textContent = name;
           continue;
         }
-        const label = `${cell.file} · ${cell.symbols} symbol${cell.symbols === 1 ? "" : "s"}, ${mine.length} contract${mine.length === 1 ? "" : "s"}`;
-        el("polygon", { class: "file-cell", "data-file": key, "data-label": label, tabindex: 0, role: "button", "aria-label": `File ${cell.file}`, points: hexPoints(cx, cy, C).map(q => q.join(",")).join(" "), fill: color("--accent"), "fill-opacity": (0.04 + 0.3 * cell.symbols / crowded).toFixed(3), stroke: color("--hex-stroke"), "stroke-width": 0.8, "vector-effect": "non-scaling-stroke" }, g);
+        const label = `${cell.file} · ${cell.symbols} symbol${cell.symbols === 1 ? "" : "s"}, ${mine.length} contract${mine.length === 1 ? "" : "s"}${cell.removed ? " · removed" : ""}`;
+        const fileShape = el("polygon", { class: "file-cell", "data-file": key, "data-label": label, tabindex: 0, role: "button", "aria-label": `File ${cell.file}${cell.removed ? ", removed" : ""}`, points: hexPoints(cx, cy, C).map(q => q.join(",")).join(" "), fill: color(cell.removed ? "--removed" : "--accent"), "fill-opacity": cell.removed ? "0.08" : (0.04 + 0.3 * cell.symbols / crowded).toFixed(3), stroke: color(cell.removed ? "--removed" : "--hex-stroke"), "stroke-width": 0.8, "vector-effect": "non-scaling-stroke" }, g);
+        if (cell.removed) fileShape.setAttribute("stroke-dasharray", "3 2");
         // Contracts run clockwise from the left end of the file's bracket,
         // and internals left to right, top to bottom, both in symbolOrder.
         const inner = all.filter(s => !s.contract && s.file === cell.file && (detail || shownInternal.has(s.id))).sort(symbolOrder);
@@ -626,29 +714,6 @@ function draw() {
       internals.forEach((s, i) => placeSymbol(g, s, p.x - S * 0.55 + step * (i % cols + 0.5), p.y - S * 0.55 + step * (Math.floor(i / cols) + 0.5), Math.min(r, step / 3), rel));
     }
   }
-  if (state.selected && state.selected.type === "symbol") {
-    const layer = el("g", {}, svg);
-    const own = state.symbolPos.get(state.selected.id), s = symbols.get(state.selected.id);
-    if (own && s) el("text", { x: 8, y: -8, "font-size": 11, class: "selected-label" }, anchored(layer, own[0], own[1], {}, false, true)).textContent = s.name;
-    const where = id => { const at = state.symbolPos.get(id); if (at) return at; const s = symbols.get(id), a = s && anchorOf(s.module); return a ? [a.x, a.y] : null; };
-    for (const l of links) {
-      if (l.from !== state.selected.id && l.to !== state.selected.id) continue;
-      const a = where(l.from), b = where(l.to); if (!a || !b) continue;
-      const line = el("line", { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: color("--accent"), "stroke-width": 1.5, "vector-effect": "non-scaling-stroke" }, layer);
-      if (inherits(l.kind)) line.setAttribute("stroke-dasharray", "5 3");
-      const other = l.from === state.selected.id ? l.to : l.from, o = where(other);
-      el("text", { x: 6, y: -6, "font-size": 10, fill: color("--ink") }, anchored(layer, o[0], o[1], {}, false, true)).textContent = (symbols.get(other) || {}).name || other;
-    }
-  }
-  const picked = state.selected && state.selected.type === "symbol" && symbols.get(state.selected.id);
-  const pickedFile = state.selected && state.selected.type === "file" ? state.selected.id : picked && picked.file ? fileKey(picked.module, picked.file) : "";
-  lightFile(pickedFile, "file-picked");
-  state.hotFile = "";
-  const selectedNode = state.selected && (state.selected.type === "edge" ? svg.querySelector(`[data-edge="${CSS.escape(state.selected.from + "|" + state.selected.to)}"]`) : glowNode(state.selected.id));
-  if (selectedNode) selectedNode.classList.add("selected-glow");
-  const pointedNode = state.pointer && Date.now() < state.pointer.until && glowNode(state.pointer.target);
-  if (pointedNode) pointedNode.classList.add("pointed-glow");
-  applyView();
 }
 // glowNode finds what to light up for a symbol, module or group id: the
 // symbol's icon, the module's hexagon, or the collapsed group hiding it.
@@ -687,7 +752,20 @@ function placeSymbol(g, s, x, y, r, rel, file) {
 function select(sel) {
   state.selected = sel;
   if (LIVE) postSelection(sel);
+  // The symbols view opens the path to a selection made elsewhere, such as
+  // from the inspector or the review queue.
+  if (state.mapTab === "symbols" && sel && !treeShows(sel)) state.trail = trailTo(sel);
   render(); inspect(); highlightQueue();
+}
+// selectionOf turns an id into the selection it names: a symbol, module,
+// group or file.
+function selectionOf(id) {
+  if (!id) return null;
+  if (symbols.has(id)) return { type: "symbol", id };
+  if (modules.has(id)) return { type: "module", id };
+  if (groups.has(id)) return { type: "group", id };
+  if (id.includes("|") && fileCell(id)) return { type: "file", id };
+  return null;
 }
 // moduleOfSelection is the module a selection belongs to, if any.
 function moduleOfSelection(sel) {
@@ -703,6 +781,7 @@ function moduleOfSelection(sel) {
 // the map.
 function goToSelection() {
   const sel = state.selected; if (!sel) return;
+  if (state.mapTab !== "references") { goTo(sel); inspect(); return; }
   if (sel.type === "group") {
     const g = groups.get(sel.id); if (!g) return;
     const v = state.view; state.view = { ...v, x: g.x - v.w / 2, y: g.y - v.h / 2 }; applyView(); return;
@@ -714,7 +793,7 @@ function goToSelection() {
 // it, and offers to go there.
 function whereBlock(box) {
   const sel = state.selected, moduleId = moduleOfSelection(sel), v = state.view, at = positionOf(sel);
-  const hidden = moduleId && anchorOf(moduleId) && anchorOf(moduleId).key !== moduleId;
+  const hidden = state.mapTab === "references" && moduleId && anchorOf(moduleId) && anchorOf(moduleId).key !== moduleId;
   const off = at && v && (at.x < v.x || at.x > v.x + v.w || at.y < v.y || at.y > v.y + v.h);
   const row = h("div", { class: "where" });
   const go = h("button", { type: "button" }, "Go to"); go.addEventListener("click", goToSelection); row.appendChild(go);
@@ -745,14 +824,23 @@ function inspect() {
     box.appendChild(h("h3", {}, s.name));
     dl(box, [["Id", s.id], ["Kind", s.kind], ["Contract", s.contract ? "yes" : "internal"], ["File", s.file ? `${s.file}:${s.line}` : "not built"], ["Change", s.change || (s.design ? "planned, not built" : "unchanged")]]);
     const sig = h("pre");
-    if (s.before) { sig.appendChild(h("div", { class: "sig-old" }, "- " + s.before)); sig.appendChild(h("div", { class: "sig-new" }, "+ " + s.signature)); }
+    if (s.removed) sig.appendChild(h("div", { class: "sig-old" }, "- " + s.signature));
+    else if (s.before) { sig.appendChild(h("div", { class: "sig-old" }, "- " + s.before)); sig.appendChild(h("div", { class: "sig-new" }, "+ " + s.signature)); }
     else sig.textContent = s.signature;
     box.appendChild(h("h2", {}, "Signature")); box.appendChild(sig);
     const uses = links.filter(l => l.from === s.id).map(l => l.to), callers = links.filter(l => l.to === s.id).map(l => l.from);
-    if (uses.length) { box.appendChild(h("h2", {}, "Uses")); const c = h("div", { class: "chips" }); [...new Set(uses)].forEach(id => chip(id, c)); box.appendChild(c); }
-    if (callers.length) { box.appendChild(h("h2", {}, "Callers")); const c = h("div", { class: "chips" }); [...new Set(callers)].forEach(id => chip(id, c)); box.appendChild(c); }
+    const usedBefore = removedLinks.filter(l => l.from === s.id).map(l => l.to), calledBefore = removedLinks.filter(l => l.to === s.id).map(l => l.from);
+    const chipList = (title, ids) => { if (!ids.length) return; box.appendChild(h("h2", {}, title)); const c = h("div", { class: "chips" }); [...new Set(ids)].forEach(id => chip(id, c)); box.appendChild(c); };
+    chipList("Uses", uses); chipList("Callers", callers);
+    chipList("No longer uses", usedBefore); chipList("No longer called by", calledBefore);
     if (s.doc) { box.appendChild(h("h2", {}, "Documentation")); box.appendChild(h("pre", { class: "doc" }, s.doc)); }
-    const code = codeOf(s); if (code) { box.appendChild(h("h2", {}, "Code")); box.appendChild(h("pre", {}, code)); }
+    // A changed symbol's code shows as a diff with the base: removed lines
+    // red, added lines green, as its signature does.
+    if (s.diff && s.diff.length) {
+      const pre = h("pre", { class: "diff" });
+      for (const d of s.diff) pre.appendChild(h("div", { class: d.op === "-" ? "sig-old" : d.op === "+" ? "sig-new" : "" }, d.op + " " + d.text));
+      box.appendChild(h("h2", {}, s.removed ? "Code (removed)" : "Code changes")); box.appendChild(pre);
+    } else if (!s.removed) { const code = codeOf(s); if (code) { box.appendChild(h("h2", {}, "Code")); box.appendChild(h("pre", {}, code)); } }
     sliceBlock(box, s.slice);
   } else if (sel.type === "file") {
     const f = fileOf(sel.id), cell = fileCell(sel.id), m = modules.get(f.module); if (!cell || !m) return;
@@ -789,7 +877,7 @@ function inspect() {
   } else if (sel.type === "module") {
     const m = modules.get(sel.id); if (!m) return;
     box.appendChild(h("h3", {}, m.label || m.path));
-    dl(box, [["Id", m.id], ["Manifest", m.manifest || ""], ["Layer", m.layer + (m.side ? ` (${m.side})` : "")], [D.architecture === "modular" ? "Context" : "Slice", m.section || ""], ["API", m.public ? "public" : ""], ["Status", m.design ? "planned, not built" : m.new ? "new" : ""]]);
+    dl(box, [["Id", m.id], ["Manifest", m.manifest || ""], ["Layer", m.layer + (m.side ? ` (${m.side})` : "")], [D.architecture === "modular" ? "Context" : "Slice", m.section || ""], ["API", m.public ? "public" : ""], ["Status", m.design ? "planned, not built" : m.new ? "new" : m.removed ? "removed" : ""]]);
     box.appendChild(h("p", {}, m.guidance));
     if (state.moved.has(m.id)) {
       const moved = h("p", {}, "You placed this module here. "), back = h("button", { type: "button" }, "Put it back");
@@ -814,8 +902,12 @@ function inspect() {
     const end = key => { const g = groups.get(key), m = modules.get(key); return g ? { label: g.path + "/", layer: g.layer } : { label: m.label || m.path, layer: m.layer }; };
     const a = end(e.from), b = end(e.to);
     box.appendChild(h("h3", {}, `${shortName(a.label)} → ${shortName(b.label)}`));
-    const p = h("p"); p.appendChild(h("span", { class: "pill " + (e.violation ? "fail" : "pass") }, e.violation ? "Violation" : "Allowed"));
-    p.appendChild(document.createTextNode(` ${a.layer} → ${b.layer}: ${e.violation ? e.rule || "breaks the architecture's rules" : "allowed by the architecture's rules"}.`));
+    const p = h("p");
+    if (e.removed) p.appendChild(document.createTextNode("Removed: the base had this dependency and the working tree no longer does. Its references are as they were in the base."));
+    else {
+      p.appendChild(h("span", { class: "pill " + (e.violation ? "fail" : "pass") }, e.violation ? "Violation" : "Allowed"));
+      p.appendChild(document.createTextNode(` ${a.layer} → ${b.layer}: ${e.violation ? e.rule || "breaks the architecture's rules" : "allowed by the architecture's rules"}.`));
+    }
     box.appendChild(p);
     box.appendChild(h("h2", {}, `References (${e.references.length})`));
     const ul = h("ul"); for (const r of e.references) { const li = h("li"); li.appendChild(h("code", {}, `${r.from.split(":").pop()} → ${r.to.split(":").pop()}`)); li.appendChild(document.createTextNode(` ${r.kind} at ${r.file}:${r.line}`)); ul.appendChild(li); } box.appendChild(ul);
@@ -877,7 +969,7 @@ function buildLegend() {
   // Colors show as swatches of the live tokens, never by name, so the legend
   // stays true in every theme and in the color-blind safe variants.
   const swatch = (token, text) => { legend.appendChild(h("span", { class: "swatch", style: `background: var(--${token})` })); legend.appendChild(document.createTextNode(text)); };
-  swatch("added", " + added · "); swatch("changed", " Δ compatible, ! breaking, ~ implementation, → moved · "); swatch("planned", " dashed = planned, not built");
+  swatch("added", " + added · "); swatch("removed", " − removed, dashed · "); swatch("changed", " Δ compatible, ! breaking, ~ implementation, → moved · "); swatch("planned", " dashed = planned, not built");
   legend.appendChild(h("br"));
   legend.appendChild(document.createTextNode("solid ▶ uses · dashed ▷ implements or embeds · "));
   swatch("violation", " ! = rule violation · double hexagon = composition · inner cells = files, darker = more symbols; a file's contracts sit on the border facing it; a go.mod takes the first cell" + (LIVE ? " · long-press a module to move it" : ""));
@@ -964,7 +1056,7 @@ mapEl.closest(".map-wrap").addEventListener("selectstart", ev => ev.preventDefau
 mapEl.addEventListener("pointerdown", ev => {
   if (ev.button !== 0 || carry) return;
   drag = { x: ev.clientX, y: ev.clientY, view: { ...state.view }, moved: false, target: ev.target };
-  const node = LIVE && ev.target.closest && ev.target.closest("[data-module]");
+  const node = LIVE && state.mapTab === "references" && ev.target.closest && ev.target.closest("[data-module]");
   if (node) { const id = node.dataset.module, pointer = ev.pointerId; drag.press = setTimeout(() => pickUp(id, drag.x, drag.y, pointer), LONG_PRESS_MS); }
 });
 window.addEventListener("pointermove", ev => {
@@ -1188,7 +1280,7 @@ function setGlow(target) {
   if (file !== state.hotFile) { state.hotFile = file; lightFile(file, "file-hot"); }
   let node = target;
   if (node && node.glowTarget) node = node.glowTarget;
-  else if (node && node.classList && (node.classList.contains("module") || node.classList.contains("group"))) node = node.querySelector("polygon");
+  else if (node && node.classList && (["module", "group", "dir"].some(name => node.classList.contains(name)))) node = node.querySelector("polygon");
   if (node === glowing) return;
   if (glowing) glowing.classList.remove("glow");
   glowing = node && node.isConnected ? node : null;
@@ -1219,7 +1311,7 @@ document.getElementById("zoom-out").addEventListener("click", () => zoom(1.4));
 document.getElementById("zoom-fit").addEventListener("click", () => { state.view = home(); applyView(); });
 window.addEventListener("keydown", ev => {
   if (carry && ev.key === "Escape") { ev.preventDefault(); putBack("Put back."); return; }
-  if (["INPUT", "SELECT", "TEXTAREA"].includes(ev.target.tagName) || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(ev.target.tagName) || ev.metaKey || ev.ctrlKey || ev.altKey || state.mapTab === "symbols") return;
   if (ev.key === "+" || ev.key === "=") zoom(1 / 1.4);
   else if (ev.key === "-" || ev.key === "_") zoom(1.4);
   else if (ev.key === "0") { state.view = home(); applyView(); }
@@ -1245,20 +1337,16 @@ const live = { shown: -1, loading: false, pending: null, state: null, pointerSee
 const FOLLOW_IDLE_MS = 4000, OFFER_MS = 20000, PULSE_MS = 6000;
 let lastInteraction = 0, offerTimer = null, offered = null;
 for (const type of ["pointerdown", "pointermove", "wheel", "keydown"]) window.addEventListener(type, () => { lastInteraction = Date.now(); }, { passive: true, capture: true });
-function pointerPosition(target) {
-  const s = symbols.get(target), moduleId = s ? s.module : target;
-  const at = s && state.symbolPos.get(target);
-  if (at) return { x: at[0], y: at[1] };
-  const a = anchorOf(moduleId);
-  return a && { x: a.x, y: a.y };
-}
-// goTo centers the view on a target, zooming in close enough to read its
-// module, but never zooming out.
+// goTo centers the view on a target, an id or a selection, zooming in close
+// enough to read it, but never zooming out. The symbols view opens the path
+// to it instead.
 function goTo(target) {
-  const s = symbols.get(target), moduleId = s ? s.module : target;
-  openAncestors(moduleId); render();
-  const at = pointerPosition(target); if (!at) return;
-  const close = D.layout.size * (s ? 9 : 14), v = state.view;
+  const sel = typeof target === "string" ? selectionOf(target) : target; if (!sel) return;
+  if (state.mapTab === "symbols") { state.trail = trailTo(sel); render(); return; }
+  if (state.mapTab === "references") openAncestors(sel.type === "symbol" ? symbols.get(sel.id).module : moduleOfSelection(sel) || sel.id);
+  render();
+  const at = positionOf(sel); if (!at) return;
+  const close = state.mapTab === "files" ? FILE_R * (sel.type === "symbol" ? 6 : sel.type === "file" ? 10 : 24) : D.layout.size * (sel.type === "symbol" ? 9 : 14), v = state.view;
   const w = Math.min(v.w, close), h = v.h * w / v.w;
   state.view = { x: at.x - w / 2, y: at.y - h / 2, w, h }; applyView();
 }
@@ -1282,7 +1370,8 @@ function offer(pointer) {
 }
 function dismissOffer() { document.getElementById("offer").hidden = true; clearTimeout(offerTimer); offered = null; }
 function positionOf(sel) {
-  if (!sel) return null;
+  if (!sel || state.mapTab === "symbols") return null;
+  if (state.mapTab === "files") return filesPositionOf(sel);
   if (sel.type === "module") { const a = anchorOf(sel.id); return a && { x: a.x, y: a.y }; }
   if (sel.type === "group") { const g = groups.get(sel.id); return g && { x: g.x, y: g.y }; }
   if (sel.type === "file") { const f = fileOf(sel.id), a = anchorOf(f.module), c = fileCell(sel.id); return a && (c && a.key === f.module ? { x: a.x + c.x, y: a.y + c.y } : { x: a.x, y: a.y }); }
@@ -1296,7 +1385,7 @@ function stillExists(sel) {
   if (sel.type === "module") return modules.has(sel.id);
   if (sel.type === "group") return groups.has(sel.id);
   if (sel.type === "file") return !!fileCell(sel.id);
-  if (sel.type === "edge") { const e = edges.find(x => x.from === sel.from && x.to === sel.to); if (e) sel.edge = e; return !!e; }
+  if (sel.type === "edge") { const e = edges.find(x => x.from === sel.from && x.to === sel.to && !x.removed === !sel.removed); if (e) sel.edge = e; return !!e; }
   return false;
 }
 function applyUpdate(data) {
@@ -1430,7 +1519,7 @@ async function loadPreferences() {
   else if (follow.checked) savePreferences({ follow: true });
   if (typeof saved.legend === "boolean") setLegend(saved.legend, false);
   else if (!legendShown()) savePreferences({ legend: false });
-  if (saved.layout) { dock = loadLayout(saved.layout); renderLayout(); }
+  if (saved.layout) { dock = loadLayout(saved.layout); renderLayout(); setMapTab(dock.mapTab, false); }
   else if (storedLayout()) savePreferences({ layout: dock });
 }
 function startLive() {
@@ -1458,15 +1547,318 @@ function startLive() {
   events.onerror = () => { const dot = document.getElementById("live-dot"); dot.classList.remove("on"); dot.title = "disconnected"; setStatus("disconnected from treaty; retrying…", true); };
 }
 
+// ---- Map views ----
+// setMapTab shows one of the map's views. Each view keeps its own camera,
+// and the choice is kept with the layout.
+function setMapTab(tab, save = true) {
+  if (!MAP_TABS[tab]) tab = "references";
+  if (carry) putBack("");
+  if (tab !== state.mapTab) { state.views[state.mapTab] = state.view; state.view = state.views[tab] || null; state.mapTab = tab; }
+  for (const button of document.querySelectorAll(".map-tab")) { const on = button.dataset.mapTab === tab; button.setAttribute("aria-selected", String(on)); button.tabIndex = on ? 0 : -1; }
+  document.querySelector(".map-wrap").hidden = tab === "symbols";
+  document.getElementById("symbol-tree").hidden = tab !== "symbols";
+  tip.style.display = "none"; setGlow(null);
+  // The data is indexed by ingest; before that there is nothing to draw.
+  if (modules && tab === "symbols" && state.selected && !treeShows(state.selected)) state.trail = trailTo(state.selected);
+  dock.mapTab = tab;
+  if (save) saveLayout();
+  if (modules) { render(); inspect(); }
+}
+
+// ---- Files view ----
+// The files view draws the repository as it sits on disk: each directory a
+// hexagon holding its subdirectories and files, packed tight, and each file
+// a small hexagon shaded by how many symbols it declares. Names show once
+// they are large enough to read, and a file's symbols once there is room.
+const FILE_R = 10, FILE_GAP = 2, DIR_PAD = 5, DIR_LABEL_ROOM = 10, PACK_EXACT_MAX = 60;
+const FILE_NAME_PX = 22, FILE_SYMBOLS_PX = 70, DIR_LABEL_PX = 45;
+let filesLayout = null;
+// layoutFiles builds the directory tree from the modules' files and places
+// it, innermost first, around the origin.
+function layoutFiles() {
+  const root = { name: "", path: "", dirs: new Map(), files: [] };
+  const dirAt = path => {
+    let node = root, at = "";
+    if (!path) return node;
+    for (const part of path.split("/")) {
+      at = at ? at + "/" + part : part;
+      if (!node.dirs.has(part)) node.dirs.set(part, { name: part, path: at, dirs: new Map(), files: [] });
+      node = node.dirs.get(part);
+    }
+
+    return node;
+  };
+  const bySource = new Map();
+  for (const s of D.symbols) if (s.file) { if (!bySource.has(s.file)) bySource.set(s.file, []); bySource.get(s.file).push(s); }
+  for (const m of D.modules) {
+    const path = m.path === "." ? "" : m.path, gone = new Set(m.removed_files || []);
+    const own = [...(m.manifest ? [m.manifest] : []), ...(m.files || []), ...gone];
+    const dir = dirAt(path);
+    dir.module = m.id;
+    for (const file of own) {
+      const at = file.lastIndexOf("/");
+      dirAt(at < 0 ? "" : file.slice(0, at)).files.push({ path: file, name: file.slice(at + 1), module: m.id, manifest: file === m.manifest, removed: !!m.removed || gone.has(file), symbols: (bySource.get(file) || []).filter(s => s.module === m.id), r: FILE_R });
+    }
+  }
+  const groupByPath = new Map((D.layout.groups || []).map(g => [g.path, g.id]));
+  const dirs = [], files = [], byKey = new Map(), moduleDirs = new Map(), byGroup = new Map();
+  const measure = node => {
+    const children = [...[...node.dirs.values()].map(d => measure(d)), ...node.files];
+    children.sort((a, b) => b.r - a.r || (!!b.dirs - !!a.dirs) || (a.name < b.name ? -1 : 1));
+    const R = children.length ? packCircles(children) : FILE_R;
+    for (const c of children) c.y += DIR_LABEL_ROOM / 2;
+    node.children = children;
+    node.inner = R + DIR_PAD + DIR_LABEL_ROOM / 2;
+    node.r = node.inner / Math.cos(Math.PI / 6);
+    node.group = groupByPath.get(node.path);
+    return node;
+  };
+  const place = (node, x, y) => {
+    node.x = x; node.y = y; dirs.push(node);
+    if (node.module) moduleDirs.set(node.module, node);
+    if (node.group) byGroup.set(node.group, node);
+    for (const c of node.children) {
+      if (c.dirs) { place(c, x + c.x, y + c.y); continue; }
+      c.x += x; c.y += y; files.push(c); byKey.set(fileKey(c.module, c.path), c);
+    }
+  };
+  measure(root);
+  place(root, 0, 0);
+  filesLayout = { root, dirs, files, byKey, byModule: moduleDirs, byGroup, extent: root.r };
+}
+// packCircles places circles of radius r, largest first, each where it keeps
+// the whole closest to the middle without touching another, then centers
+// them. Past PACK_EXACT_MAX circles it lays them on a honeycomb instead.
+//
+// Parameters:
+//   - items: circles with r; their x and y are set.
+//
+// Returns:
+//   - result: the radius of the circle holding them all.
+function packCircles(items) {
+  const placed = [];
+  if (items.length > PACK_EXACT_MAX) {
+    const step = 2 * items[0].r + FILE_GAP;
+    let ring = 0, index = 0;
+    for (const item of items) {
+      if (index >= Math.max(1, ring * 6)) { ring++; index = 0; }
+      const side = ring ? Math.floor(index / ring) : 0, along = ring ? index % ring : 0;
+      const a = hexPoints(0, 0, ring * step)[side], b = hexPoints(0, 0, ring * step)[(side + 1) % 6];
+      item.x = a[0] + (b[0] - a[0]) * along / (ring || 1); item.y = a[1] + (b[1] - a[1]) * along / (ring || 1);
+      index++;
+    }
+  } else {
+    const clear = (x, y, r) => placed.every(p => Math.hypot(p.x - x, p.y - y) >= p.r + r + FILE_GAP - 1e-6);
+    for (const item of items) {
+      let best = null, score = Infinity;
+      const consider = (x, y) => { const d = Math.hypot(x, y) + item.r; if (d < score && clear(x, y, item.r)) { score = d; best = [x, y]; } };
+      if (!placed.length) best = [0, 0];
+      for (const a of placed) {
+        const d = a.r + item.r + FILE_GAP;
+        for (let k = 0; k < 12; k++) consider(a.x + d * Math.cos(k * Math.PI / 6), a.y + d * Math.sin(k * Math.PI / 6));
+      }
+      for (let i = 0; i < placed.length; i++) for (let j = i + 1; j < placed.length; j++) {
+        const a = placed[i], b = placed[j], da = a.r + item.r + FILE_GAP, db = b.r + item.r + FILE_GAP;
+        const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
+        if (!d || d > da + db || d < Math.abs(da - db)) continue;
+        const l = (da * da - db * db + d * d) / (2 * d), t = Math.sqrt(Math.max(0, da * da - l * l));
+        const mx = a.x + dx * l / d, my = a.y + dy * l / d;
+        consider(mx - dy * t / d, my + dx * t / d);
+        consider(mx + dy * t / d, my - dx * t / d);
+      }
+      item.x = best[0]; item.y = best[1];
+      placed.push(item);
+    }
+  }
+  const xs = items.map(c => [c.x - c.r, c.x + c.r]).flat(), ys = items.map(c => [c.y - c.r, c.y + c.r]).flat();
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  let R = 0;
+  for (const c of items) { c.x -= cx; c.y -= cy; R = Math.max(R, Math.hypot(c.x, c.y) + c.r); }
+  return R;
+}
+// fileRelated reports whether a file belongs with the selection, so the
+// others dim.
+function fileRelated(rel, f) {
+  if (!rel) return true;
+  const sel = state.selected;
+  if (rel.has(fileKey(f.module, f.path)) || f.symbols.some(s => rel.has(s.id))) return true;
+  return (sel.type === "module" || sel.type === "group") && rel.has(f.module);
+}
+function drawFiles(svg, rel) {
+  const L = filesLayout, ppu = pixelsPerUnit();
+  const crowded = Math.max(1, ...L.files.map(f => f.symbols.length));
+  for (const d of L.dirs) {
+    const m = d.module && modules.get(d.module), group = !m && d.group;
+    const selected = state.selected && (state.selected.id === d.module || state.selected.id === d.group) && ["module", "group"].includes(state.selected.type);
+    const name = d === L.root ? (D.title || "repository") : d.name + "/";
+    const fileCount = d.children.filter(c => !c.dirs).length, dirCount = d.children.length - fileCount;
+    const attrs = m ? { "data-module": m.id, tabindex: 0, role: "button", "aria-label": `Directory ${d.path || name}, module` } : group ? { "data-group": group, tabindex: 0, role: "button", "aria-label": `Directory ${d.path}` } : {};
+    const node = el("g", { ...attrs, class: m || group ? "dir" : "", "data-label": `${d.path ? d.path + "/" : name} · ${fileCount} file${fileCount === 1 ? "" : "s"}, ${dirCount} director${dirCount === 1 ? "y" : "ies"}${m ? " · module " + (m.label || m.path) : ""}${m && m.design ? " · planned, not built" : ""}` }, svg);
+    const hex = el("polygon", { class: m || group ? "" : "backdrop", points: hexPoints(d.x, d.y, d.r).map(q => q.join(",")).join(" "), fill: color("--group"), stroke: selected ? color("--selection") : m && m.design ? color("--planned") : m && m.new ? color("--added") : m && m.removed ? color("--removed") : color(m ? "--module-stroke" : "--hex-stroke"), "stroke-width": selected ? 2.5 : m ? 1.4 : 1, "vector-effect": "non-scaling-stroke" }, node);
+    if (m && (m.design || m.new || m.removed)) hex.setAttribute("stroke-dasharray", "5 3");
+    if (d === L.root || d.r * ppu >= DIR_LABEL_PX) el("text", { x: 0, y: 0, "text-anchor": "middle", class: "group-name" + (selected ? " selected-label" : "") }, anchored(node, d.x, d.y - d.inner + 12, {}, true, true)).textContent = name;
+    const pick = () => { if (m) select({ type: "module", id: m.id }); else if (group) select({ type: "group", id: group }); };
+    if (m || group) {
+      node.style.cursor = "pointer";
+      node.addEventListener("click", ev => { if (ev.target.closest("[data-symbol]")) return; ev.stopPropagation(); pick(); });
+      node.addEventListener("keydown", ev => { if (ev_is(ev)) { ev.preventDefault(); pick(); } });
+    }
+  }
+  const names = FILE_R * ppu >= FILE_NAME_PX, detail = FILE_R * ppu >= FILE_SYMBOLS_PX;
+  for (const f of L.files) {
+    const key = fileKey(f.module, f.path), contracts = f.symbols.filter(s => s.contract).length;
+    const g = el("g", { class: fileRelated(rel, f) ? "" : "dim" }, svg);
+    const label = (f.manifest ? `${f.path} · the Go module begins here` : `${f.path} · ${f.symbols.length} symbol${f.symbols.length === 1 ? "" : "s"}, ${contracts} contract${contracts === 1 ? "" : "s"}`) + (f.removed ? " · removed" : "");
+    const shape = el("polygon", { class: "file-cell" + (f.manifest ? " manifest" : ""), "data-file": key, "data-label": label, tabindex: 0, role: "button", "aria-label": `File ${f.path}`, points: hexPoints(f.x, f.y, FILE_R).map(q => q.join(",")).join(" "), "vector-effect": "non-scaling-stroke" }, g);
+    if (f.manifest) Object.entries({ fill: color("--panel"), stroke: color("--module-stroke"), "stroke-width": 1.2 }).forEach(([k, v]) => shape.setAttribute(k, v));
+    else if (f.removed) Object.entries({ fill: color("--removed"), "fill-opacity": "0.08", stroke: color("--removed"), "stroke-width": 0.8, "stroke-dasharray": "3 2" }).forEach(([k, v]) => shape.setAttribute(k, v));
+    else Object.entries({ fill: color("--accent"), "fill-opacity": (0.04 + 0.3 * f.symbols.length / crowded).toFixed(3), stroke: color("--hex-stroke"), "stroke-width": 0.8 }).forEach(([k, v]) => shape.setAttribute(k, v));
+    const pick = () => select({ type: "file", id: key });
+    shape.style.cursor = "pointer";
+    shape.addEventListener("click", ev => { ev.stopPropagation(); pick(); });
+    shape.addEventListener("keydown", ev => { if (ev_is(ev)) { ev.preventDefault(); pick(); } });
+    const shown = detail && !f.manifest ? [...f.symbols].sort(symbolOrder) : [];
+    if (names || f.manifest) {
+      const size = Math.min(FILE_R * 0.3, FILE_R * 1.6 / Math.max(f.name.length, 4));
+      el("text", { x: f.x, y: shown.length ? f.y - FILE_R * 0.42 : f.y + size * 0.35, "text-anchor": "middle", "font-size": size.toFixed(2), "font-family": "ui-monospace, Menlo, monospace", fill: color("--ink"), "pointer-events": "none" }, g).textContent = f.name;
+    }
+    // A file's symbols fill the lower part of its hexagon, left to right and
+    // top to bottom, in symbolOrder.
+    if (shown.length) {
+      const cols = Math.ceil(Math.sqrt(shown.length * 1.8)), rows = Math.ceil(shown.length / cols);
+      const step = Math.min(FILE_R * 1.3 / cols, FILE_R * 0.95 / rows), top = f.y - FILE_R * 0.2;
+      shown.forEach((s, i) => placeSymbol(g, s, f.x - cols * step / 2 + step * (i % cols + 0.5), top + step * (Math.floor(i / cols) + 0.5), Math.min(step / 2.6, 1.6), rel, key));
+    }
+  }
+}
+// filesPositionOf is where a selection sits in the files view: a symbol's
+// icon or its file, a file, or a module's or group's directory.
+function filesPositionOf(sel) {
+  const L = filesLayout; if (!L) return null;
+  const at = node => node && { x: node.x, y: node.y };
+  if (sel.type === "symbol") {
+    const own = state.symbolPos.get(sel.id); if (own) return { x: own[0], y: own[1] };
+    const s = symbols.get(sel.id); if (!s) return null;
+    return at(s.file && L.byKey.get(fileKey(s.module, s.file))) || at(L.byModule.get(s.module));
+  }
+  if (sel.type === "file") return at(L.byKey.get(sel.id));
+  if (sel.type === "group") return at(L.byGroup.get(sel.id));
+  const moduleId = moduleOfSelection(sel);
+  return moduleId ? at(L.byModule.get(moduleId)) : null;
+}
+
+// ---- Symbols view ----
+// The symbols view starts with every namespace. Choosing one hides its
+// siblings and opens what it holds in the next column; choosing it again
+// brings the siblings back and closes everything to its right. Types open
+// to their members. Internals show with "Show internals".
+function treeVisible(s) { return s.contract || state.internals || (state.selected && state.selected.id === s.id); }
+// treeChildren lists what an item opens to: the namespaces for the root, a
+// namespace's top-level symbols, or a type's members.
+function treeChildren(id) {
+  if (id === undefined) return [...D.modules].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(m => ({ id: m.id, module: m }));
+  if (modules.has(id)) return (byModule.get(id) || []).filter(s => treeVisible(s) && !(parentOf.has(s.id) && treeVisible(parentOf.get(s.id)))).sort(symbolOrder).map(s => ({ id: s.id, symbol: s }));
+  return (members.get(id) || []).filter(treeVisible).sort(symbolOrder).map(s => ({ id: s.id, symbol: s }));
+}
+function treeItem(id) { return modules.has(id) ? { id, module: modules.get(id) } : { id, symbol: symbols.get(id) }; }
+function treeSelection(item) { return item.module ? { type: "module", id: item.id } : { type: "symbol", id: item.id }; }
+// treeShows reports whether a selection is already on screen in the tree.
+function treeShows(sel) { return state.trail.includes(sel.id) || treeChildren(state.trail[state.trail.length - 1]).some(item => item.id === sel.id); }
+// trailTo is the path that shows a selection among its siblings: its
+// namespace, and its type for a member.
+function trailTo(sel) {
+  if (sel.type === "symbol") {
+    const s = symbols.get(sel.id); if (!s) return [];
+    const owner = parentOf.get(s.id);
+    return owner && treeVisible(owner) ? [s.module, owner.id] : [s.module];
+  }
+  if (sel.type === "file") return [fileOf(sel.id).module];
+  return [];
+}
+// treeIcon draws an item's icon in the map's language: a hexagon for a
+// namespace, and the symbol shapes for the rest.
+function treeIcon(item) {
+  const svg = el("svg", { width: 16, height: 14, viewBox: "-7 -7 16 14", "aria-hidden": "true" });
+  if (item.module) {
+    const m = item.module;
+    const hex = el("polygon", { points: hexPoints(0, 0, 6).map(q => q.join(",")).join(" "), fill: color("--module"), stroke: m.design ? color("--planned") : m.new ? color("--added") : color("--module-stroke"), "stroke-width": 1.4 }, svg);
+    if (m.design || m.new) hex.setAttribute("stroke-dasharray", "2 1.5");
+  } else drawShape(svg, item.symbol.kind, 0, 0, 4.6, item.symbol.change, item.symbol.design);
+  return svg;
+}
+function treeName(item) {
+  if (item.module) return item.module.path === "." ? item.module.label || item.module.path : item.module.path;
+  const s = item.symbol;
+  return parentOf.has(s.id) ? s.name.slice(s.name.lastIndexOf(".") + 1) : s.name;
+}
+function treeCaption(id) {
+  if (id === undefined) return "Namespaces";
+  if (modules.has(id)) return "In " + treeName(treeItem(id));
+  return "Members of " + (symbols.get(id) || {}).name;
+}
+function buildTreeKey() {
+  const key = document.getElementById("symbol-key"); key.innerHTML = "";
+  const entry = (item, text) => { const span = h("span"); span.appendChild(treeIcon(item)); span.appendChild(document.createTextNode(text)); key.appendChild(span); };
+  entry({ module: { path: "" } }, "namespace");
+  for (const [kind, text] of [["function", "function"], ["method", "method"], ["interface", "interface"], ["type", "concrete type"], ["value", "value"]]) entry({ symbol: { kind } }, text);
+  key.appendChild(h("span", {}, "› opens · choose again to close"));
+}
+// openTrail makes the trail end at an item's column: down to the item when
+// open is true, or just above it, showing its siblings again.
+function openTrail(depth, id, open) {
+  state.trail = open ? [...state.trail.slice(0, depth), id] : state.trail.slice(0, depth);
+  state.treeFocus = id;
+  select(treeSelection(treeItem(id)));
+}
+function renderSymbolTree() {
+  const box = document.getElementById("symbol-columns"), hadFocus = box.contains(document.activeElement);
+  const cut = state.trail.findIndex(id => !modules.has(id) && !symbols.has(id));
+  if (cut >= 0) state.trail = state.trail.slice(0, cut);
+  buildTreeKey();
+  box.innerHTML = "";
+  const pointed = state.pointer && Date.now() < state.pointer.until ? state.pointer.target : null;
+  const column = (caption, items, depth, open) => {
+    const col = h("div", { class: "tree-col", role: "group", "aria-label": caption });
+    col.appendChild(h("h2", {}, caption));
+    if (!items.length) col.appendChild(h("p", { class: "empty" }, state.internals ? "Nothing here." : "No contracts here. Turn on Show internals to see the rest."));
+    for (const item of items) {
+      const kids = open ? 0 : treeChildren(item.id).length;
+      const s = item.symbol, selected = state.selected && state.selected.id === item.id;
+      const row = h("button", { type: "button", class: "tree-row" + (open ? " expanded" : "") + (selected ? " selected" : "") + (pointed === item.id ? " pointed" : "") + (s && !s.contract ? " internal" : ""), role: "treeitem", "data-tree": item.id, "aria-selected": String(!!selected), title: s ? `${s.signature || s.name}${s.change ? " · " + s.change : ""}${s.design ? " · planned, not built" : ""}` : `${item.module.path} · ${placeName(item.module)}` });
+      if (open || kids) row.setAttribute("aria-expanded", String(open));
+      row.appendChild(treeIcon(item));
+      row.appendChild(h("span", { class: "tree-name" }, treeName(item)));
+      if (kids) row.appendChild(h("span", { class: "tree-count" }, String(kids)));
+      row.appendChild(h("span", { class: "tree-arrow", "aria-hidden": "true" }, open || kids ? "›" : ""));
+      row.addEventListener("click", () => { if (open) openTrail(depth, item.id, false); else if (kids) openTrail(depth, item.id, true); else { state.treeFocus = item.id; select(treeSelection(item)); } });
+      row.addEventListener("focus", () => { state.treeFocus = item.id; });
+      row.addEventListener("keydown", ev => {
+        const rows = [...col.querySelectorAll(".tree-row")], at = rows.indexOf(row);
+        if (ev.key === "ArrowDown" || ev.key === "ArrowUp") { ev.preventDefault(); const next = rows[at + (ev.key === "ArrowDown" ? 1 : -1)]; if (next) next.focus(); }
+        else if (ev.key === "ArrowRight") { ev.preventDefault(); if (kids) openTrail(depth, item.id, true); else if (open) { const first = col.nextElementSibling && col.nextElementSibling.querySelector(".tree-row"); if (first) first.focus(); } }
+        else if (ev.key === "ArrowLeft") { ev.preventDefault(); if (open) openTrail(depth, item.id, false); else if (depth > 0) openTrail(depth - 1, state.trail[depth - 1], false); }
+      });
+      col.appendChild(row);
+    }
+    box.appendChild(col);
+    return col;
+  };
+  state.trail.forEach((id, depth) => column(treeCaption(state.trail[depth - 1]), [treeItem(id)], depth, true));
+  const last = column(treeCaption(state.trail[state.trail.length - 1]), treeChildren(state.trail[state.trail.length - 1]), state.trail.length, false);
+  box.scrollLeft = Math.max(0, last.offsetLeft + last.offsetWidth - box.clientWidth);
+  if (hadFocus && state.treeFocus) { const row = box.querySelector(`[data-tree="${CSS.escape(state.treeFocus)}"]`); if (row) row.focus(); }
+}
+
 // ---- Panels and docking ----
 // The workspace is a layout of tab stacks: drawers on the left, right and
 // bottom, the center around the map, and floating windows above it. Every
 // panel is in exactly one stack. Dragging a tab moves its panel: onto a
 // stack's middle merges it there, onto a drawer stack's near edge splits the
 // drawer, onto the workspace's edge docks it in that drawer, and anywhere
-// else floats it. The map stays in the center. The layout is remembered per
-// browser.
-const PANELS = { map: { title: "Map", pinned: true }, queue: { title: "Review queue" }, inspector: { title: "Inspector" } };
+// else floats it. The map moves like any other panel, and the center may be
+// left empty. The layout, with the map view shown, is remembered per browser.
+const PANELS = { map: { title: "Map", float: { w: 640, h: 480 } }, queue: { title: "Review queue" }, inspector: { title: "Inspector" } };
+const MAP_TABS = { references: "References", files: "Files", symbols: "Symbols" };
 const LAYOUT_KEY = "treaty.layout.v1";
 const DRAWER_MIN = 160, CENTER_MIN = 240, EDGE_ZONE = 28, DRAG_START = 5, SPLIT_ZONE = 0.3, STACK_MIN = 60;
 const SIDES = ["left", "right", "bottom"];
@@ -1477,17 +1869,19 @@ function defaultLayout() {
     bottom: { size: 240, stacks: [] },
     center: { tabs: ["map"], active: "map" },
     floating: [],
+    mapTab: "references",
   };
 }
 // loadLayout reads the remembered layout and repairs it: unknown or repeated
-// panels are dropped, missing ones go back to their default drawer, and the
-// map returns to the center.
+// panels are dropped, missing ones go back to their default drawer, and a
+// missing map returns to the center.
 function storedLayout() { try { return JSON.parse(localStorage.getItem(LAYOUT_KEY)); } catch (err) { return null; } }
 function loadLayout(layout) {
   const fresh = defaultLayout();
   if (!layout || !layout.center || !Array.isArray(layout.floating) || !SIDES.every(side => layout[side] && Array.isArray(layout[side].stacks))) return fresh;
   const seen = new Set();
-  const keep = stack => { stack.tabs = (stack.tabs || []).filter(id => PANELS[id] && !seen.has(id) && (id !== "map" || stack === layout.center) && seen.add(id)); if (!stack.tabs.includes(stack.active)) stack.active = stack.tabs[0]; return stack.tabs.length > 0; };
+  const keep = stack => { stack.tabs = (stack.tabs || []).filter(id => PANELS[id] && !seen.has(id) && seen.add(id)); if (!stack.tabs.includes(stack.active)) stack.active = stack.tabs[0]; return stack.tabs.length > 0; };
+  if (!MAP_TABS[layout.mapTab]) layout.mapTab = "references";
   keep(layout.center);
   for (const side of SIDES) layout[side].stacks = layout[side].stacks.filter(keep);
   layout.floating = layout.floating.filter(keep);
@@ -1538,13 +1932,14 @@ function stackEl(stack, where) {
   const bar = h("div", { class: "tabbar", role: "tablist" });
   for (const id of stack.tabs) {
     const active = id === stack.active;
-    const tab = h("button", { class: "tab" + (active ? " active" : "") + (PANELS[id].pinned ? " pinned" : ""), type: "button", role: "tab", "aria-selected": String(active), "data-tab": id, title: PANELS[id].pinned ? PANELS[id].title : `${PANELS[id].title}: drag to move` }, PANELS[id].title);
+    const tab = h("button", { class: "tab" + (active ? " active" : ""), type: "button", role: "tab", "aria-selected": String(active), "data-tab": id, title: `${PANELS[id].title}: drag to move` }, PANELS[id].title);
     tab.addEventListener("click", () => { if (stack.active !== id) { stack.active = id; renderLayout(); } });
     tab.addEventListener("pointerdown", ev => startTabDrag(ev, id, stack));
     bar.appendChild(tab);
   }
   const body = h("div", { class: "stack-body" + (stack.active === "map" ? " fill" : "") });
-  body.appendChild(panelEl(stack.active));
+  if (stack.active) body.appendChild(panelEl(stack.active));
+  else body.appendChild(h("p", { class: "stack-empty" }, "Drag a tab here."));
   node.append(bar, body);
   return node;
 }
@@ -1581,7 +1976,7 @@ function track(onMove, onDone) {
   window.addEventListener("pointercancel", up);
 }
 function startTabDrag(ev, id, source) {
-  if (ev.button !== 0 || PANELS[id].pinned) return;
+  if (ev.button !== 0) return;
   const start = { x: ev.clientX, y: ev.clientY };
   let ghost = null, target = null;
   track(e => {
@@ -1591,7 +1986,7 @@ function startTabDrag(ev, id, source) {
       document.body.appendChild(ghost);
     }
     Object.assign(ghost.style, { left: e.clientX + 12 + "px", top: e.clientY + 8 + "px" });
-    target = dropTarget(e.clientX, e.clientY, source);
+    target = dropTarget(e.clientX, e.clientY, source, id);
     showHint(target);
   }, () => {
     if (!ghost) return;
@@ -1604,7 +1999,7 @@ function startTabDrag(ev, id, source) {
 }
 // dropTarget decides what releasing a dragged tab at a point would do, and
 // the screen rectangle to preview it with.
-function dropTarget(x, y, source) {
+function dropTarget(x, y, source, id) {
   const ws = workspaceRect();
   const inside = r => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   if (!inside(ws)) return null;
@@ -1628,7 +2023,8 @@ function dropTarget(x, y, source) {
     if (f > 1 - SPLIT_ZONE) return { kind: "split", side: where.side, index: where.index + 1, rect: part(0.5, 1) };
     return node.stackRef === source ? null : { kind: "merge", stack: node.stackRef, rect: r };
   }
-  return { kind: "float", x: x - ws.left - 24, y: y - ws.top - 12, rect: { left: x - 24, top: y - 12, width: 320, height: 360 } };
+  const size = PANELS[id].float || { w: 320, h: 360 };
+  return { kind: "float", x: x - ws.left - 24, y: y - ws.top - 12, rect: { left: x - 24, top: y - 12, width: size.w, height: size.h } };
 }
 function showHint(target) {
   const hint = document.getElementById("drop-hint");
@@ -1644,7 +2040,7 @@ function moveTab(id, source, target) {
   if (target.kind === "merge") { target.stack.tabs.push(id); target.stack.active = id; }
   else if (target.kind === "split") dock[target.side].stacks.splice(target.index, 0, stack);
   else if (target.kind === "dock") dock[target.side].stacks.push(stack);
-  else dock.floating.push({ ...stack, x: target.x, y: target.y, w: 320, h: 360 });
+  else dock.floating.push({ ...stack, x: target.x, y: target.y, w: target.rect.width, h: target.rect.height });
   // The source may now be empty; drop it only after the insert, so the
   // split index above still counted it.
   for (const side of SIDES) dock[side].stacks = dock[side].stacks.filter(s => s.tabs.length);
@@ -1696,9 +2092,19 @@ function layoutChanged() {
   cancelAnimationFrame(refit);
   refit = requestAnimationFrame(() => { if (D && document.getElementById("map").getBoundingClientRect().width > 0) render(); });
 }
-document.getElementById("layout-reset").addEventListener("click", () => { dock = defaultLayout(); renderLayout(); });
+document.getElementById("layout-reset").addEventListener("click", () => { dock = { ...defaultLayout(), mapTab: state.mapTab }; renderLayout(); });
 window.addEventListener("resize", () => { if (dock.floating.length) renderLayout(); });
 renderLayout();
+for (const button of document.querySelectorAll(".map-tab")) {
+  button.addEventListener("click", () => setMapTab(button.dataset.mapTab));
+  button.addEventListener("keydown", ev => {
+    const order = Object.keys(MAP_TABS), step = { ArrowRight: 1, ArrowLeft: -1 }[ev.key]; if (!step) return;
+    ev.preventDefault();
+    const next = order[(order.indexOf(state.mapTab) + step + order.length) % order.length];
+    setMapTab(next); document.querySelector(`[data-map-tab="${next}"]`).focus();
+  });
+}
+setMapTab(dock.mapTab, false);
 
 buildLegend();
 try { if (localStorage.getItem("treaty.legend") === "0") setLegend(false, false); } catch (err) { /* storage unavailable */ }

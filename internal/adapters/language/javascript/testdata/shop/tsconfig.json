@@ -1,0 +1,7 @@
+{
+  // Paths let the app import the domain by alias.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"], },
+  },
+}

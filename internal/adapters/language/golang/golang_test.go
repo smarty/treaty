@@ -141,7 +141,7 @@ func TestSignatureKey(t *testing.T) {
 }
 
 func TestRoundTrip(t *testing.T) {
-	for _, root := range []string{"../../..", "testdata/injection"} {
+	for _, root := range []string{"../../../..", "testdata/injection"} {
 		t.Run(root, func(t *testing.T) {
 			service := newService(t, root)
 			dumped, err := service.Dump("")

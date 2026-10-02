@@ -1,0 +1,7 @@
+architecture: hexagonal
+layers:
+  composition: ["src/library/cli/**"]
+  domain:      ["src/library/domain/**"]
+  application: ["src/library/app/**"]
+  adapter:
+    driven:    ["src/library/adapters/**"]
