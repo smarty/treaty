@@ -86,6 +86,7 @@ function applyTheme(redraw = true) {
   for (const [name, value] of Object.entries(theme.colors)) root.style.setProperty("--" + name, value);
   root.style.colorScheme = theme.base;
   root.dataset.theme = theme.base;
+  tellShell({ type: "theme", colors: theme.colors, base: theme.base });
   if (redraw && modules) render();
 }
 document.getElementById("theme").addEventListener("change", ev => {

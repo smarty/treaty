@@ -9,7 +9,14 @@ let D = /*DATA*/null;
 // With no data embedded, the page is the live map: it loads the view from the
 // server that served it and redraws on every rebuild.
 const LIVE = D === null;
-let modules, symbols, byModule, edges, links, removedLinks, groups, groupOf, parentOf, members;
+// The live map shows in its project's tab on the server's one page. Opened
+// on its own, it moves there, so one browser tab holds every project.
+const FRAMED = window.parent !== window;
+if (LIVE && !FRAMED) { const slug = location.pathname.split("/")[2] || ""; location.replace("../../?p=" + slug + location.hash); }
+document.documentElement.classList.toggle("framed", FRAMED);
+// tellShell passes news to the page holding this map's tab.
+function tellShell(message) { if (FRAMED) try { window.parent.postMessage({ treaty: message.type, ...message }, location.origin); } catch (err) { /* another origin */ } }
+let modules, symbols, byModule, edges, links, addedLinks, removedLinks, groups, groupOf, parentOf, members;
 // ingest indexes one view. Everything drawn is derived from D and these maps.
 function ingest(data) {
   D = data;
@@ -21,6 +28,7 @@ function ingest(data) {
   // An edge made only of imports, such as a blank import, has no references.
   for (const e of D.edges) { e.references = e.references || []; e.imports = e.imports || []; }
   edges = D.edges; links = D.links; removedLinks = D.removed_links || [];
+  addedLinks = new Set((D.added_links || []).map(linkKey));
   const note = document.getElementById("legend-public");
   if (note) note.hidden = D.architecture !== "modular";
   groups = new Map((D.layout.groups || []).map(g => [g.id, g]));
@@ -148,6 +156,8 @@ function symbolOrder(a, b) {
   const ka = KIND_RANK[a.kind] ?? 5, kb = KIND_RANK[b.kind] ?? 5;
   return ka - kb || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 }
+// linkKey names a reference between two symbols by its ends and kind.
+function linkKey(l) { return `${l.from}|${l.to}|${l.kind}`; }
 function shortName(path) { const parts = path.split("/"); return parts.slice(-2).join("/"); }
 function color(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function glyph(change) { return { added: "+", contract: "Δ", breaking: "!", removed: "−", implementation: "~", moved: "→" }[change] || ""; }

@@ -76,13 +76,48 @@ const METRICS = [
   ["abstractness", "Abstractness", "A", "Interfaces ÷ top-level contracts, from 0 to 1. Near 1 the module's contract is mostly interfaces; near 0 it is concrete types, functions and values."],
   ["distance", "Distance from the main sequence", "D", "|A + I − 1|, from 0 to 1. Near 0 the module is balanced: stable modules are abstract and unstable ones concrete. Near 1 it is stable and concrete, so hard to change and hard to extend, or unstable and abstract, interfaces little depends on."],
 ];
+// sliceBlock shows the slice an agent gets, collapsed. It opens only when
+// the person opens it, and stays open while the selection stays the same,
+// so a rebuild does not close it; the choice is not saved.
+let sliceOpenFor = "";
+function selectionKey(sel) { return sel ? `${sel.type}|${sel.id || sel.from + ">" + sel.to}` : ""; }
 function sliceBlock(parent, slice) {
   if (!slice) return;
-  const head = h("div", { class: "slice-head" }); head.appendChild(h("h2", {}, "Agent context slice"));
+  const key = selectionKey(state.selected), box = h("details", { class: "slice" });
+  box.open = sliceOpenFor === key;
+  box.addEventListener("toggle", () => { sliceOpenFor = box.open ? key : ""; });
+  const head = h("summary", { class: "slice-head" }); head.appendChild(h("h2", {}, "Agent context slice"));
   const text = JSON.stringify(slice, null, 2);
   const btn = h("button", { type: "button" }, "Copy");
-  btn.addEventListener("click", () => { navigator.clipboard.writeText(text).then(() => { btn.textContent = "Copied"; setTimeout(() => btn.textContent = "Copy", 1200); }, () => { btn.textContent = "Copy failed"; }); });
-  head.appendChild(btn); parent.appendChild(head); parent.appendChild(h("pre", {}, text));
+  btn.addEventListener("click", ev => { ev.preventDefault(); navigator.clipboard.writeText(text).then(() => { btn.textContent = "Copied"; setTimeout(() => btn.textContent = "Copy", 1200); }, () => { btn.textContent = "Copy failed"; }); });
+  head.appendChild(btn); box.appendChild(head); box.appendChild(h("pre", {}, text)); parent.appendChild(box);
+}
+// referenceTable lists an arrow's references as source, reference and
+// destination, each row colored by how it changed since the base: added,
+// removed, or changed when the destination's signature changed. Clicking a
+// source or destination selects that symbol.
+function referenceTable(e) {
+  const keyOf = id => { const s = symbols.get(id), a = s && anchorOf(s.module); return a ? a.key : ""; };
+  const gone = e.removed ? [] : removedLinks.filter(r => keyOf(r.from) === e.from && keyOf(r.to) === e.to);
+  const rows = [...e.references.map(r => ({ r, change: e.removed ? "removed" : addedLinks.has(linkKey(r)) ? "added" : "" })), ...gone.map(r => ({ r, change: "removed" }))];
+  for (const row of rows) if (!row.change && ["contract", "breaking"].includes((symbols.get(row.r.to) || {}).change)) row.change = "changed";
+  const table = h("table", { class: "refs" }), head = h("tr");
+  for (const label of ["Source", "Reference", "Destination"]) head.appendChild(h("th", {}, label));
+  table.appendChild(h("thead")).appendChild(head);
+  const body = table.appendChild(h("tbody"));
+  const end = id => {
+    const td = h("td"), name = id.split(":").pop();
+    if (!symbols.has(id)) { td.appendChild(h("code", { title: id }, name)); return td; }
+    const b = h("button", { type: "button", class: "link", title: id }, name);
+    b.addEventListener("click", () => select({ type: "symbol", id })); td.appendChild(b); return td;
+  };
+  for (const { r, change } of rows) {
+    const tr = h("tr", change ? { class: "ref-" + change, title: change } : {});
+    tr.appendChild(end(r.from));
+    tr.appendChild(h("td", { class: "ref-at" }, `${r.kind} at ${r.file}:${r.line}`));
+    tr.appendChild(end(r.to)); body.appendChild(tr);
+  }
+  return { table, count: rows.length };
 }
 // diffBlock draws a line diff in full: removed lines red, added lines
 // green, unchanged lines plain.
@@ -217,8 +252,9 @@ function inspect() {
       p.appendChild(document.createTextNode(` ${a.layer} → ${b.layer}: ${e.violation ? e.rule || "breaks the architecture's rules" : "allowed by the architecture's rules"}.`));
     }
     box.appendChild(p);
-    box.appendChild(h("h2", {}, `References (${e.references.length})`));
-    const ul = h("ul"); for (const r of e.references) { const li = h("li"); li.appendChild(h("code", {}, `${r.from.split(":").pop()} → ${r.to.split(":").pop()}`)); li.appendChild(document.createTextNode(` ${r.kind} at ${r.file}:${r.line}`)); ul.appendChild(li); } box.appendChild(ul);
+    const refs = referenceTable(e);
+    box.appendChild(h("h2", {}, `References (${refs.count})`));
+    if (refs.count) box.appendChild(refs.table);
     if (e.imports && e.imports.length) {
       box.appendChild(h("h2", {}, `Imports (${e.imports.length})`));
       const il = h("ul"); for (const i of e.imports) { const li = h("li"); li.appendChild(h("code", {}, i.to)); li.appendChild(document.createTextNode(` imported at ${i.file}:${i.line}`)); il.appendChild(li); } box.appendChild(il);

@@ -154,8 +154,13 @@ between them and the rest of the repository count like any other.
 
 ## The live map
 
-`treaty serve` runs a server that holds the graph in memory, watches the
-working tree, and pushes each rebuild to the browser. The map lays modules
+One treaty server runs on your machine and holds the graph of every
+repository you work in. Its one page, `http://127.0.0.1:7878/`, has a tab for
+each open repository, so a single browser tab follows them all;
+`http://127.0.0.1:7878/?p=<folder>` opens with that repository's tab shown. It
+watches each working tree and pushes
+every rebuild to the browser. `treaty serve` keeps the current directory's map
+open; Claude Code sessions open it too (see below). The map lays modules
 out to match the architecture. Each module holds a ring of cells, one per file,
 darker for files with more symbols, so crowded files stand out. The module's
 contracts stay on its border, each on the stretch facing its file; zoom in and
@@ -163,7 +168,14 @@ each file shows its internals as their kind, and pointing at a file or a contrac
 lights up the other. Changes are shown against a baseline: HEAD for
 uncommitted work, the merge base for a pull request, or any ref. You can
 change the baseline from the map's header while it runs. The server listens
-on `127.0.0.1` only, on port 7878 by default.
+on `127.0.0.1` only, always on port 7878 unless you pass `--port`.
+
+The server starts with the first session that needs it, and it runs apart from
+that session. A repository's map closes 30 seconds after the last session in it
+ends, and the server stops 30 seconds after the last map closes. When
+`treaty` is rebuilt, the server stops, and the open sessions start the new one
+and rejoin it without restarting Claude Code. `treaty restart` does the same
+by hand. The server logs to `~/.treaty/daemon.log`.
 
 The header also has an architecture dropdown. Picking another architecture
 previews your code in it, fitted the way `treaty init` would propose. Checks
@@ -221,9 +233,11 @@ treaty here
 ```
 
 This registers Treaty in the repository's `.mcp.json`. Each Claude Code
-session started in the repository then runs `treaty mcp`, which serves the
-same live graph to the agent as MCP tools, and serves the map to you if no
-map is already running. You and the agent always look at the same graph:
+session started in the repository then runs `treaty mcp`. That process relays
+the session to the treaty server, starting the server when none is running.
+The server serves the repository's live graph to the agent as MCP tools, and
+the map to you. A second session in the same repository shares the same map.
+You and the agent always look at the same graph:
 
 | Tool | Answers |
 | --- | --- |
@@ -266,8 +280,9 @@ a large repository (20,000 files or more, or one slow to walk).
 | `treaty design new <name> [--from <target>]...` | Scaffolds a design in `.treaty/designs/` from current contracts |
 | `treaty design check <name>` | Compares a design with the code |
 | `treaty map [--base <ref>] [--design <name>]...` | Renders a static map to `.treaty/out/map.html` |
-| `treaty serve [--port <n>] [--open]` | Serves the live map until interrupted |
-| `treaty mcp [--port <n>]` | Serves the live graph over MCP on stdio, plus the live map |
+| `treaty serve [--port <n>] [--open]` | Keeps this directory's live map open until interrupted |
+| `treaty mcp [--port <n>]` | Relays an agent session over MCP on stdio to the treaty server, starting it when needed |
+| `treaty restart [--port <n>]` | Stops the treaty server; open sessions start a new one and rejoin |
 | `treaty init [--architecture <name>]` | Creates `.treaty/` and proposes a `treaty.yaml` for `none` (default), `hexagonal`, `clean`, `layered`, `slices` or `modular` |
 | `treaty url` | Prints the live map's address for this directory |
 | `treaty here [--force]` | Registers Treaty in this repository's `.mcp.json` |

@@ -78,7 +78,7 @@ function endCarry() {
 }
 async function reclassify(id, target) {
   try {
-    const response = await fetch("/api/reclassify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ module: id, layer: target.layer, side: target.side || "" }) });
+    const response = await fetch("api/reclassify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ module: id, layer: target.layer, side: target.side || "" }) });
     if (!response.ok) throw new Error((await response.text()).trim());
     setStatus("");
     showState(await response.json());
@@ -95,10 +95,10 @@ function savePosition(id, position) {
   if (position) state.positions[style][id] = position; else delete state.positions[style][id];
   placeMoved(); render(); inspect();
   if (!LIVE) return;
-  fetch("/api/positions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ architecture: style, module: id, position }) }).catch(() => setStatus("could not save the module's position", true));
+  fetch("api/positions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ architecture: style, module: id, position }) }).catch(() => setStatus("could not save the module's position", true));
 }
 async function loadPositions() {
-  try { const response = await fetch("/api/positions", { cache: "no-store" }); if (response.ok) state.positions = await response.json() || {}; } catch (err) { return; }
+  try { const response = await fetch("api/positions", { cache: "no-store" }); if (response.ok) state.positions = await response.json() || {}; } catch (err) { return; }
   if (D) { placeMoved(); render(); inspect(); }
 }
 // placeMoved draws modules where the person put them. A saved position

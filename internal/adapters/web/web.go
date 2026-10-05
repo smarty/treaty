@@ -1,16 +1,23 @@
-// Package web serves the live map to browsers over HTTP on the loopback
-// interface, pushing each rebuild with server-sent events.
+// Package web serves the live maps of every open project to browsers over
+// HTTP on the loopback interface, pushing each rebuild with server-sent
+// events, and carries each agent session's MCP stream from its shim.
 package web
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/smarty/treaty/internal/app"
@@ -18,154 +25,194 @@ import (
 )
 
 const (
+	// Protocol is the version of the attach stream between a shim and the
+	// server; a shim and a server that disagree refuse each other.
+	Protocol = 1
+
+	// Upgrade names the attach stream in the HTTP upgrade.
+	Upgrade = "treaty-mcp"
+
 	heartbeat = 20 * time.Second
 	maxBody   = 64 * 1024
 
 	// maxTestsBody admits a request to run every test of a large repository.
 	maxTestsBody = 4 * 1024 * 1024
+
+	joinedHeader   = "X-Treaty-Joined"
+	mapHeader      = "X-Treaty-Map"
+	protocolHeader = "X-Treaty-Protocol"
 )
 
-var ErrPeer = errors.New("the peer did not answer")
+// shell is the page at the server's root: a tab per open project, each
+// showing that project's live map in a frame.
+//
+//go:embed shell.html
+var shell string
 
-// Peer reads the state of another treaty server over HTTP.
-type Peer struct {
-	url    string
-	client *http.Client
+// Sessions serves one agent session's MCP stream over its attach stream.
+type Sessions interface {
+	// Serve answers the session's requests until in closes.
+	//
+	// Parameters:
+	//   - project: the project the session works in.
+	//   - mapURL: where the person sees the project's live map.
+	//   - joined: the project was already open for another session.
+	//   - in: the session's messages.
+	//   - out: where replies go.
+	//
+	// Returns:
+	//   - err: reading or writing failed.
+	Serve(project *app.Project, mapURL string, joined bool, in io.Reader, out io.Writer) error
 }
 
-// Server serves one live map.
+// Server is the one treaty server: the live map of every open project and
+// the MCP stream of every agent session.
 type Server struct {
-	live     *app.Live
+	projects *app.Projects
+	sessions Sessions
+	version  string
 	listener net.Listener
 	server   *http.Server
 	url      string
+
+	stop     chan struct{}
+	stopOnce sync.Once
+
+	mutex sync.Mutex
+	conns map[net.Conn]bool
 }
 
-// Listen starts serving the live map on 127.0.0.1.
+// hello is how a treaty server identifies itself.
+type hello struct {
+	App      string `json:"app"`
+	Version  string `json:"version"`
+	Protocol int    `json:"protocol"`
+}
+
+// projectInfo is an open project, with where its map is.
+type projectInfo struct {
+	app.ProjectInfo
+	URL string `json:"url"`
+}
+
+// Listen starts serving on 127.0.0.1.
+//
+// Notes:
+//   - The port is never swapped for another, so every session and browser
+//     finds the server at the same address.
 //
 // Parameters:
-//   - live: the live graph to serve.
-//   - port: the port to listen on; if it is taken, any free port is used.
+//   - projects: the open projects.
+//   - sessions: serves each agent session's MCP stream.
+//   - version: the treaty version, as hello reports it.
+//   - port: the port to listen on; 0 picks a free one, for tests.
 //
 // Returns:
 //   - result: the running server.
-//   - err: no port could be opened.
-func Listen(live *app.Live, port int) (result *Server, err error) {
+//   - err: the port could not be opened, such as when it is taken.
+func Listen(projects *app.Projects, sessions Sessions, version string, port int) (result *Server, err error) {
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
-		if listener, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
-	result = &Server{live: live, listener: listener, url: "http://" + listener.Addr().String()}
+	result = &Server{
+		projects: projects,
+		sessions: sessions,
+		version:  version,
+		listener: listener,
+		url:      "http://" + listener.Addr().String(),
+		stop:     make(chan struct{}),
+		conns:    map[net.Conn]bool{},
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", result.page)
-	mux.HandleFunc("GET /api/view", result.view)
-	mux.HandleFunc("GET /api/state", result.state)
-	mux.HandleFunc("GET /api/events", result.events)
-	mux.HandleFunc("POST /api/baseline", result.baseline)
-	mux.HandleFunc("POST /api/selection", result.selection)
-	mux.HandleFunc("POST /api/show", result.show)
-	mux.HandleFunc("GET /api/positions", result.positions)
-	mux.HandleFunc("POST /api/positions", result.setPosition)
-	mux.HandleFunc("GET /api/preferences", result.preferences)
-	mux.HandleFunc("POST /api/reclassify", result.reclassify)
-	mux.HandleFunc("POST /api/preferences", result.savePreferences)
-	mux.HandleFunc("POST /api/view", result.setView)
-	mux.HandleFunc("POST /api/view/adopt", result.adopt)
-	mux.HandleFunc("GET /api/tests", result.tests)
-	mux.HandleFunc("POST /api/tests/run", result.runTests)
-	mux.HandleFunc("POST /api/tests/stop", result.stopTests)
+	mux.HandleFunc("GET /{$}", result.home)
+	mux.HandleFunc("GET /api/hello", result.hello)
+	mux.HandleFunc("GET /api/projects", result.list)
+	mux.HandleFunc("POST /api/attach", result.attach)
+	mux.HandleFunc("POST /api/shutdown", result.shutdown)
+	mux.HandleFunc("GET /p/{project}", result.slash)
+	mux.HandleFunc("GET /p/{project}/{$}", result.page)
+	routes := map[string]func(*app.Live, http.ResponseWriter, *http.Request){
+		"GET /api/view":         result.view,
+		"GET /api/state":        result.state,
+		"GET /api/events":       result.events,
+		"POST /api/baseline":    result.baseline,
+		"POST /api/selection":   result.selection,
+		"POST /api/show":        result.show,
+		"GET /api/positions":    result.positions,
+		"POST /api/positions":   result.setPosition,
+		"GET /api/preferences":  result.preferences,
+		"POST /api/reclassify":  result.reclassify,
+		"POST /api/preferences": result.savePreferences,
+		"POST /api/view":        result.setView,
+		"POST /api/view/adopt":  result.adopt,
+		"GET /api/tests":        result.tests,
+		"POST /api/tests/run":   result.runTests,
+		"POST /api/tests/stop":  result.stopTests,
+	}
+
+	for route, handler := range routes {
+		method, path, _ := strings.Cut(route, " ")
+		mux.HandleFunc(method+" /p/{project}"+path, result.project(handler))
+	}
+
 	result.server = &http.Server{Handler: result.guard(mux), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = result.server.Serve(listener) }()
 	return result, nil
 }
 
-// NewPeer creates a client for another treaty server.
-//
-// Parameters:
-//   - url: the server's base URL.
-//
-// Returns:
-//   - result: the peer.
-func NewPeer(url string) *Peer {
-	return &Peer{url: strings.TrimSuffix(url, "/"), client: &http.Client{Timeout: 2 * time.Second}}
-}
-
-// Alive reports whether a treaty server answers at a URL.
-//
-// Parameters:
-//   - url: the server's base URL.
-//
-// Returns:
-//   - result: true when it answered.
-func (this *Peer) Alive() bool {
-	_, err := this.State()
-	return err == nil
-}
-
-// Show forwards a request for the person to look at something to the peer,
-// which applies its own rate limit.
-//
-// Parameters:
-//   - target: a symbol id or module id.
-//   - reason: why the person should look.
-//
-// Returns:
-//   - err: the peer refused or did not answer; the message is the peer's.
-func (this *Peer) Show(target, reason string) error {
-	body, _ := json.Marshal(map[string]string{"target": target, "reason": reason})
-	response, err := this.client.Post(this.url+"/api/show", "application/json", strings.NewReader(string(body)))
-	if err != nil {
-		return err
-	}
-
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode == http.StatusOK {
-		return nil
-	}
-
-	message, _ := io.ReadAll(io.LimitReader(response.Body, maxBody))
-	if response.StatusCode == http.StatusTooManyRequests {
-		return fmt.Errorf("%w%s", app.ErrTooSoon, strings.TrimPrefix(strings.TrimSpace(string(message)), app.ErrTooSoon.Error()))
-	}
-
-	return fmt.Errorf("%w: %s", ErrPeer, strings.TrimSpace(string(message)))
-}
-
-// State reads the peer's baseline and selection.
-//
-// Returns:
-//   - result: the peer's state.
-//   - err: the peer did not answer.
-//
-// Errors:
-//   - ErrPeer: the peer answered with something other than a state.
-func (this *Peer) State() (result app.LiveState, err error) {
-	response, err := this.client.Get(this.url + "/api/state")
-	if err != nil {
-		return app.LiveState{}, err
-	}
-
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return app.LiveState{}, fmt.Errorf("%w: %s", ErrPeer, response.Status)
-	}
-
-	err = json.NewDecoder(response.Body).Decode(&result)
-	return result, err
-}
-
-// Close stops serving.
+// Close stops serving and ends every session's stream.
 //
 // Returns:
 //   - err: the listener could not be closed.
 func (this *Server) Close() error {
-	return this.server.Close()
+	err := this.server.Close()
+	this.mutex.Lock()
+	defer this.mutex.Unlock()
+	for conn := range this.conns {
+		_ = conn.Close()
+	}
+
+	return err
 }
 
-// URL is where the live map is served.
+// MapURL is where the person sees a project's live map: the server's one
+// page, with that project's tab shown.
+//
+// Parameters:
+//   - slug: the project's URL segment.
+//
+// Returns:
+//   - result: the map's URL.
+func (this *Server) MapURL(slug string) (result string) {
+	return this.url + "/?p=" + url.QueryEscape(slug)
+}
+
+// PageURL is where a project's own map page is served, which the server's
+// page shows in that project's tab and whose API requests are relative to
+// it.
+//
+// Parameters:
+//   - slug: the project's URL segment.
+//
+// Returns:
+//   - result: the page's URL.
+func (this *Server) PageURL(slug string) (result string) {
+	return this.url + "/p/" + url.PathEscape(slug) + "/"
+}
+
+// Stopped closes when someone asks the server to stop, as treaty restart
+// does.
+//
+// Returns:
+//   - result: the channel.
+func (this *Server) Stopped() <-chan struct{} {
+	return this.stop
+}
+
+// URL is where the server listens.
 //
 // Returns:
 //   - result: the base URL.
@@ -174,37 +221,94 @@ func (this *Server) URL() string {
 }
 
 // adopt makes the previewed architecture treaty.yaml's.
-func (this *Server) adopt(writer http.ResponseWriter, request *http.Request) {
+func (this *Server) adopt(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	var ignored struct{}
 	if !decode(writer, request, &ignored) {
 		return
 	}
 
-	if _, err := this.live.AdoptView(); err != nil {
+	if _, err := live.AdoptView(); err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	this.state(writer, request)
+	this.state(live, writer, request)
 }
 
-func (this *Server) baseline(writer http.ResponseWriter, request *http.Request) {
+// attach joins an agent session to its directory's project and carries its
+// MCP stream over the upgraded connection until either side closes it. The
+// session leaves the project when the stream ends, however it ends.
+func (this *Server) attach(writer http.ResponseWriter, request *http.Request) {
+	if !strings.EqualFold(request.Header.Get("Upgrade"), Upgrade) {
+		http.Error(writer, "expected an upgrade to "+Upgrade, http.StatusUpgradeRequired)
+		return
+	}
+
+	if got := request.Header.Get(protocolHeader); got != strconv.Itoa(Protocol) {
+		http.Error(writer, fmt.Sprintf("this server speaks protocol %d, the shim %q", Protocol, got), http.StatusConflict)
+		return
+	}
+
+	root := request.URL.Query().Get("root")
+	if !filepath.IsAbs(root) {
+		http.Error(writer, "root must be an absolute directory", http.StatusBadRequest)
+		return
+	}
+
+	hijacker, ok := writer.(http.Hijacker)
+	if !ok {
+		http.Error(writer, "upgrades unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	project, joined, detach, err := this.projects.Attach(root)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	defer detach()
+	conn, buffered, err := hijacker.Hijack()
+	if err != nil {
+		return
+	}
+
+	this.mutex.Lock()
+	this.conns[conn] = true
+	this.mutex.Unlock()
+	defer func() {
+		this.mutex.Lock()
+		delete(this.conns, conn)
+		this.mutex.Unlock()
+		_ = conn.Close()
+	}()
+
+	mapURL := this.MapURL(project.Slug)
+	_, _ = fmt.Fprintf(buffered, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: %s\r\n%s: %s\r\n%s: %t\r\n\r\n", Upgrade, mapHeader, mapURL, joinedHeader, joined)
+	if err := buffered.Flush(); err != nil {
+		return
+	}
+
+	_ = this.sessions.Serve(project, mapURL, joined, buffered.Reader, conn)
+}
+
+func (this *Server) baseline(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	var baseline app.Baseline
 	if !decode(writer, request, &baseline) {
 		return
 	}
 
-	if err := this.live.SetBaseline(baseline); err != nil {
+	if err := live.SetBaseline(baseline); err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	this.state(writer, request)
+	this.state(live, writer, request)
 }
 
 // events streams the state after every rebuild as server-sent events. The
 // browser fetches the view when the version changes.
-func (this *Server) events(writer http.ResponseWriter, request *http.Request) {
+func (this *Server) events(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	flusher, ok := writer.(http.Flusher)
 	if !ok {
 		http.Error(writer, "streaming unsupported", http.StatusInternalServerError)
@@ -213,7 +317,7 @@ func (this *Server) events(writer http.ResponseWriter, request *http.Request) {
 
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-store")
-	updates, cancel := this.live.Subscribe()
+	updates, cancel := live.Subscribe()
 	defer cancel()
 	send := func(state app.LiveState) bool {
 		data, _ := json.Marshal(state)
@@ -225,7 +329,7 @@ func (this *Server) events(writer http.ResponseWriter, request *http.Request) {
 		return true
 	}
 
-	if !send(this.live.State()) {
+	if !send(live.State()) {
 		return
 	}
 
@@ -264,15 +368,57 @@ func (this *Server) guard(next http.Handler) http.Handler {
 	})
 }
 
-func (this *Server) page(writer http.ResponseWriter, _ *http.Request) {
+// hello tells a shim that a treaty server answers here, and which.
+func (this *Server) hello(writer http.ResponseWriter, _ *http.Request) {
+	respond(writer, hello{App: "treaty", Version: this.version, Protocol: Protocol})
+}
+
+// home serves the page with a tab per open project, showing the one a
+// session joined most recently unless the address names another.
+func (this *Server) home(writer http.ResponseWriter, _ *http.Request) {
+	latest, _ := json.Marshal(this.projects.Latest())
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
-	_, _ = writer.Write(this.live.Page())
+	_, _ = io.WriteString(writer, strings.Replace(shell, `/*LATEST*/""`, string(latest), 1))
+}
+
+// list serves the open projects and where their maps are; with a root
+// query, only the project of that directory.
+func (this *Server) list(writer http.ResponseWriter, request *http.Request) {
+	result := []projectInfo{}
+	root := request.URL.Query().Get("root")
+	if root != "" {
+		if project, err := this.projects.FindRoot(root); err == nil {
+			root = project.Root
+		}
+	}
+
+	for _, info := range this.projects.List() {
+		if root == "" || info.Root == root {
+			result = append(result, projectInfo{ProjectInfo: info, URL: this.MapURL(info.Slug)})
+		}
+	}
+
+	respond(writer, result)
+}
+
+// page serves the live page of one project, titled with its name.
+func (this *Server) page(writer http.ResponseWriter, request *http.Request) {
+	project, err := this.projects.Find(request.PathValue("project"))
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	title := "<title>" + html.EscapeString(project.Name) + " · Treaty</title>"
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(writer, strings.Replace(string(project.Live.Page()), "<title>Treaty</title>", title, 1))
 }
 
 // positions serves where the person put modules on the map.
-func (this *Server) positions(writer http.ResponseWriter, _ *http.Request) {
-	positions, err := this.live.Positions()
+func (this *Server) positions(live *app.Live, writer http.ResponseWriter, _ *http.Request) {
+	positions, err := live.Positions()
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 		return
@@ -282,8 +428,8 @@ func (this *Server) positions(writer http.ResponseWriter, _ *http.Request) {
 }
 
 // preferences serves the person's saved choices on the map.
-func (this *Server) preferences(writer http.ResponseWriter, _ *http.Request) {
-	preferences, err := this.live.Preferences()
+func (this *Server) preferences(live *app.Live, writer http.ResponseWriter, _ *http.Request) {
+	preferences, err := live.Preferences()
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 		return
@@ -292,9 +438,22 @@ func (this *Server) preferences(writer http.ResponseWriter, _ *http.Request) {
 	respond(writer, preferences)
 }
 
+// project routes a request to the live graph of the project in its path.
+func (this *Server) project(handler func(*app.Live, http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		project, err := this.projects.Find(request.PathValue("project"))
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		handler(project.Live, writer, request)
+	}
+}
+
 // runTests starts running the tests named, answering with the report that
 // shows them queued.
-func (this *Server) runTests(writer http.ResponseWriter, request *http.Request) {
+func (this *Server) runTests(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	var body struct {
 		IDs []string `json:"ids"`
 	}
@@ -303,7 +462,7 @@ func (this *Server) runTests(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	switch err := this.live.RunTests(body.IDs); {
+	switch err := live.RunTests(body.IDs); {
 	case errors.Is(err, app.ErrTestsRunning):
 		http.Error(writer, err.Error(), http.StatusConflict)
 	case errors.Is(err, app.ErrUnknownTest):
@@ -315,18 +474,18 @@ func (this *Server) runTests(writer http.ResponseWriter, request *http.Request) 
 	case err != nil:
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 	default:
-		this.tests(writer, request)
+		this.tests(live, writer, request)
 	}
 }
 
 // savePreferences merges the fields sent into the saved choices.
-func (this *Server) savePreferences(writer http.ResponseWriter, request *http.Request) {
+func (this *Server) savePreferences(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	var update app.Preferences
 	if !decode(writer, request, &update) {
 		return
 	}
 
-	preferences, err := this.live.SavePreferences(update)
+	preferences, err := live.SavePreferences(update)
 	if errors.Is(err, app.ErrPreferences) {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
@@ -341,7 +500,7 @@ func (this *Server) savePreferences(writer http.ResponseWriter, request *http.Re
 }
 
 // reclassify moves a module to another layer in treaty.yaml.
-func (this *Server) reclassify(writer http.ResponseWriter, request *http.Request) {
+func (this *Server) reclassify(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	var body struct {
 		Module string `json:"module"`
 		Layer  string `json:"layer"`
@@ -352,29 +511,29 @@ func (this *Server) reclassify(writer http.ResponseWriter, request *http.Request
 		return
 	}
 
-	switch _, err := this.live.Reclassify(body.Module, rules.Placement{Layer: body.Layer, Side: body.Side}); {
+	switch _, err := live.Reclassify(body.Module, rules.Placement{Layer: body.Layer, Side: body.Side}); {
 	case errors.Is(err, app.ErrPreviewing), errors.Is(err, app.ErrPlacement), errors.Is(err, rules.ErrArchitecture):
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 	case err != nil:
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 	default:
-		this.state(writer, request)
+		this.state(live, writer, request)
 	}
 }
 
-func (this *Server) selection(writer http.ResponseWriter, request *http.Request) {
+func (this *Server) selection(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	var selection app.Selection
 	if !decode(writer, request, &selection) {
 		return
 	}
 
-	this.live.SetSelection(selection)
+	live.SetSelection(selection)
 	writer.WriteHeader(http.StatusNoContent)
 }
 
 // setPosition saves where the person put a module, or forgets it when the
 // body has no position.
-func (this *Server) setPosition(writer http.ResponseWriter, request *http.Request) {
+func (this *Server) setPosition(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	var body struct {
 		Architecture string        `json:"architecture"`
 		Module       string        `json:"module"`
@@ -385,7 +544,7 @@ func (this *Server) setPosition(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 
-	positions, err := this.live.SetPosition(body.Architecture, body.Module, body.Position)
+	positions, err := live.SetPosition(body.Architecture, body.Module, body.Position)
 	if errors.Is(err, rules.ErrArchitecture) {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
@@ -400,7 +559,7 @@ func (this *Server) setPosition(writer http.ResponseWriter, request *http.Reques
 }
 
 // setView draws another architecture, or treaty.yaml's again.
-func (this *Server) setView(writer http.ResponseWriter, request *http.Request) {
+func (this *Server) setView(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	var view struct {
 		Architecture string `json:"architecture"`
 	}
@@ -409,15 +568,15 @@ func (this *Server) setView(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if err := this.live.SetView(view.Architecture); err != nil {
+	if err := live.SetView(view.Architecture); err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	this.state(writer, request)
+	this.state(live, writer, request)
 }
 
-func (this *Server) show(writer http.ResponseWriter, request *http.Request) {
+func (this *Server) show(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	var body struct {
 		Target string `json:"target"`
 		Reason string `json:"reason"`
@@ -427,7 +586,7 @@ func (this *Server) show(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	switch err := this.live.Show(body.Target, body.Reason); {
+	switch err := live.Show(body.Target, body.Reason); {
 	case errors.Is(err, app.ErrTooSoon):
 		http.Error(writer, err.Error(), http.StatusTooManyRequests)
 	case errors.Is(err, app.ErrUnknownTarget):
@@ -435,30 +594,47 @@ func (this *Server) show(writer http.ResponseWriter, request *http.Request) {
 	case err != nil:
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 	default:
-		this.state(writer, request)
+		this.state(live, writer, request)
 	}
 }
 
-func (this *Server) state(writer http.ResponseWriter, _ *http.Request) {
-	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(writer).Encode(this.live.State())
-}
-
-// stopTests cancels the test run in progress.
-func (this *Server) stopTests(writer http.ResponseWriter, request *http.Request) {
+// shutdown stops the server; running shims start a new one and rejoin.
+func (this *Server) shutdown(writer http.ResponseWriter, request *http.Request) {
 	var ignored struct{}
 	if !decode(writer, request, &ignored) {
 		return
 	}
 
-	this.live.StopTests()
+	this.stopOnce.Do(func() { close(this.stop) })
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+// slash sends a project's address without its trailing slash to the page,
+// whose requests are relative to it.
+func (this *Server) slash(writer http.ResponseWriter, request *http.Request) {
+	http.Redirect(writer, request, this.PageURL(request.PathValue("project")), http.StatusMovedPermanently)
+}
+
+func (this *Server) state(live *app.Live, writer http.ResponseWriter, _ *http.Request) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(writer).Encode(live.State())
+}
+
+// stopTests cancels the test run in progress.
+func (this *Server) stopTests(live *app.Live, writer http.ResponseWriter, request *http.Request) {
+	var ignored struct{}
+	if !decode(writer, request, &ignored) {
+		return
+	}
+
+	live.StopTests()
 	writer.WriteHeader(http.StatusNoContent)
 }
 
 // tests serves the tests, their latest outcomes and their coverage.
-func (this *Server) tests(writer http.ResponseWriter, _ *http.Request) {
-	report, err := this.live.Tests()
+func (this *Server) tests(live *app.Live, writer http.ResponseWriter, _ *http.Request) {
+	report, err := live.Tests()
 	switch {
 	case errors.Is(err, app.ErrNoTests):
 		http.Error(writer, err.Error(), http.StatusNotFound)
@@ -469,8 +645,8 @@ func (this *Server) tests(writer http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-func (this *Server) view(writer http.ResponseWriter, _ *http.Request) {
-	data, version := this.live.Payload()
+func (this *Server) view(live *app.Live, writer http.ResponseWriter, _ *http.Request) {
+	data, version := live.Payload()
 	if data == nil {
 		http.Error(writer, "the map is still being built", http.StatusServiceUnavailable)
 		return

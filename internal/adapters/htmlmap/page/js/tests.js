@@ -69,7 +69,7 @@ async function refreshTests() {
   if (testState.loading) { testState.pending = true; return; }
   testState.loading = true;
   try {
-    const response = await fetch("/api/tests", { cache: "no-store" });
+    const response = await fetch("api/tests", { cache: "no-store" });
     if (!response.ok) throw new Error((await response.text()).trim());
     testState.error = "";
     applyTests(await response.json());
@@ -96,8 +96,8 @@ async function postTests(path, body) {
     testState.error = err.message; showTests();
   }
 }
-function runTests(ids) { if (ids.length) postTests("/api/tests/run", { ids }); }
-function stopTests() { postTests("/api/tests/stop", {}); }
+function runTests(ids) { if (ids.length) postTests("api/tests/run", { ids }); }
+function stopTests() { postTests("api/tests/stop", {}); }
 
 // ---- The Tests tab ----
 function testStatus(id) { const r = testState.report.results[id]; return r ? r.status : ""; }

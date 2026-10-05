@@ -121,17 +121,6 @@ type MapRenderer interface {
 	Render(view MapView) ([]byte, error)
 }
 
-// Peer is another treaty server already serving this repository's map. A
-// session's MCP server follows its baseline and selection instead of
-// serving a second map.
-type Peer interface {
-	// Show forwards a request for the person to look at something.
-	Show(target, reason string) error
-
-	// State reads the peer's baseline and selection.
-	State() (LiveState, error)
-}
-
 // SourceExtractor builds a graph from a source tree.
 type SourceExtractor interface {
 	// Extract reads every supported source file under root.
@@ -262,17 +251,6 @@ type Watcher interface {
 
 // Workspace is the .treaty directory: designs and rendered output.
 type Workspace interface {
-	// Announce records the URL of the live map served for this repository,
-	// so that later sessions can find it.
-	//
-	// Returns:
-	//   - withdraw: removes the record.
-	//   - err: the record could not be written.
-	Announce(url string) (withdraw func(), err error)
-
-	// Announced reads the recorded URL, or empty when there is none.
-	Announced() (url string, err error)
-
 	// CreateDesign writes a new design, failing if it already exists.
 	CreateDesign(name, text string) (path string, err error)
 

@@ -32,23 +32,17 @@ func TestLiveServer(t *testing.T) {
 
 	workspace := filesystem.NewWorkspace(root)
 	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), workspace, htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
-	live := app.NewLive(service, filesystem.NewWatcher(root), nil)
+	live := app.NewLive(service, filesystem.NewWatcher(root))
 	stop := make(chan struct{})
 	defer close(stop)
 	live.Start(stop)
-	server, err := Listen(live, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() { _ = server.Close() }()
-	peer := NewPeer(server.URL())
-	state, err := peer.State()
-	if err != nil || state.Baseline.Mode != app.BaselineHead || state.Baseline.Commit == "" || state.Error != "" {
+	_, base := listen(t, root, live)
+	var state app.LiveState
+	if err := json.Unmarshal(get(t, base+"/api/state", http.StatusOK), &state); err != nil || state.Baseline.Mode != app.BaselineHead || state.Baseline.Commit == "" || state.Error != "" {
 		t.Fatalf("state: %+v %v", state, err)
 	}
 
-	response := get(t, server.URL()+"/api/view", http.StatusOK)
+	response := get(t, base+"/api/view", http.StatusOK)
 	var view struct {
 		Modules []app.MapModule `json:"modules"`
 	}
@@ -57,13 +51,17 @@ func TestLiveServer(t *testing.T) {
 		t.Fatalf("view: %s %v", response, err)
 	}
 
-	if page := get(t, server.URL()+"/", http.StatusOK); !bytes.Contains(page, []byte("/*DATA*/null")) {
+	if page := get(t, base+"/", http.StatusOK); !bytes.Contains(page, []byte("/*DATA*/null")) {
 		t.Fatal("the live page must load its data from the server")
+	}
+
+	if page := get(t, base+"/", http.StatusOK); !bytes.Contains(page, []byte("<title>"+filepath.Base(root)+" · Treaty</title>")) || !bytes.Contains(page, []byte(`rel="icon"`)) {
+		t.Fatal("the live page must be titled with its project and carry the icon")
 	}
 
 	// Editing a file rebuilds the map, pushes the new version to browsers,
 	// and the change shows against HEAD.
-	stream, err := http.Get(server.URL() + "/api/events")
+	stream, err := http.Get(base + "/api/events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,20 +99,20 @@ func TestLiveServer(t *testing.T) {
 	write(t, root, "core/leak.go", "package core\n\nimport \"example.com/shop/store\"\n\nvar saver = store.Save\n")
 	waitFor(t, func() bool { text, _ := live.Changes(); return strings.Contains(text, "new layer violations") })
 
-	post(t, server.URL()+"/api/baseline", "application/json", `{"mode":"ref","ref":"-x"}`, http.StatusBadRequest)
-	post(t, server.URL()+"/api/baseline", "application/x-www-form-urlencoded", `mode=head`, http.StatusUnsupportedMediaType)
-	post(t, server.URL()+"/api/baseline", "application/json", `{"mode":"ref","ref":"HEAD"}`, http.StatusOK)
-	if next, _ := peer.State(); next.Baseline.Mode != app.BaselineRef || next.Baseline.Ref != "HEAD" {
+	post(t, base+"/api/baseline", "application/json", `{"mode":"ref","ref":"-x"}`, http.StatusBadRequest)
+	post(t, base+"/api/baseline", "application/x-www-form-urlencoded", `mode=head`, http.StatusUnsupportedMediaType)
+	post(t, base+"/api/baseline", "application/json", `{"mode":"ref","ref":"HEAD"}`, http.StatusOK)
+	if next := live.State(); next.Baseline.Mode != app.BaselineRef || next.Baseline.Ref != "HEAD" {
 		t.Fatalf("baseline: %+v", next.Baseline)
 	}
 
-	post(t, server.URL()+"/api/selection", "application/json", `{"type":"module","id":"go:core"}`, http.StatusNoContent)
+	post(t, base+"/api/selection", "application/json", `{"type":"module","id":"go:core"}`, http.StatusNoContent)
 	selection, slice, err := live.Selected()
 	if err != nil || selection.ID != "go:core" || slice == nil {
 		t.Fatalf("selection: %+v %v %v", selection, slice, err)
 	}
 
-	request, _ := http.NewRequest(http.MethodGet, server.URL()+"/api/state", nil)
+	request, _ := http.NewRequest(http.MethodGet, base+"/api/state", nil)
 	request.Host = "attacker.example"
 	if response, err := http.DefaultClient.Do(request); err != nil || response.StatusCode != http.StatusForbidden {
 		t.Fatalf("another host name must be refused: %v %v", response, err)
@@ -130,19 +128,12 @@ func TestLiveServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !bytes.Contains(get(t, server.URL()+"/api/view", http.StatusOK), []byte(`"id":"go:core:Price"`)) {
+	if !bytes.Contains(get(t, base+"/api/view", http.StatusOK), []byte(`"id":"go:core:Price"`)) {
 		t.Fatal("the plan must be overlaid on the map")
 	}
 
-	// A second session follows the first server's baseline and selection.
-	follower := app.NewLive(service, filesystem.NewWatcher(root), peer)
-	follower.Start(stop)
-	if followed, _, _ := follower.Selected(); followed.ID != "go:core" || follower.State().Baseline.Mode != app.BaselineRef {
-		t.Fatalf("follower: %+v %+v", followed, follower.State().Baseline)
-	}
-
 	// Show offers a symbol, even a planned one, and refuses a second request
-	// soon after, including one forwarded by a following session.
+	// soon after.
 	if err := live.Show("go:nowhere:X", "no such thing"); !errors.Is(err, app.ErrUnknownTarget) {
 		t.Fatalf("unknown target: %v", err)
 	}
@@ -157,10 +148,6 @@ func TestLiveServer(t *testing.T) {
 
 	if err := live.Show("go:core:Order", "too soon"); !errors.Is(err, app.ErrTooSoon) {
 		t.Fatalf("second show: %v", err)
-	}
-
-	if err := follower.Show("go:core:Order", "too soon, from another session"); !errors.Is(err, app.ErrTooSoon) {
-		t.Fatalf("forwarded show: %v", err)
 	}
 }
 
@@ -186,6 +173,26 @@ func git(t *testing.T, root string, args ...string) {
 	if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v %s", args, err, output)
 	}
+}
+
+// listen serves one project's live graph, answering at the base URL of its
+// map.
+func listen(t *testing.T, root string, live *app.Live) (server *Server, base string) {
+	t.Helper()
+	projects := app.NewProjects(func(string) (*app.Live, func(), error) { return live, func() {}, nil }, time.Minute)
+	server, err := Listen(projects, nil, "test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = server.Close() })
+	project, _, detach, err := projects.Attach(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(detach)
+	return server, strings.TrimSuffix(server.PageURL(project.Slug), "/")
 }
 
 func post(t *testing.T, url, contentType, body string, status int) {
@@ -233,29 +240,24 @@ func TestArchitectureView(t *testing.T) {
 	git(t, root, "init", "-q")
 
 	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
-	live := app.NewLive(service, filesystem.NewWatcher(root), nil)
+	live := app.NewLive(service, filesystem.NewWatcher(root))
 	stop := make(chan struct{})
 	defer close(stop)
 	live.Start(stop)
-	server, err := Listen(live, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() { _ = server.Close() }()
+	_, base := listen(t, root, live)
 	architecture := func() string {
 		var view struct {
 			Architecture string `json:"architecture"`
 		}
 
-		_ = json.Unmarshal(get(t, server.URL()+"/api/view", http.StatusOK), &view)
+		_ = json.Unmarshal(get(t, base+"/api/view", http.StatusOK), &view)
 		return view.Architecture
 	}
 
 	// Previewing redraws the map, while checks and agents keep following
 	// treaty.yaml.
-	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"onion"}`, http.StatusBadRequest)
-	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"layered"}`, http.StatusOK)
+	post(t, base+"/api/view", "application/json", `{"architecture":"onion"}`, http.StatusBadRequest)
+	post(t, base+"/api/view", "application/json", `{"architecture":"layered"}`, http.StatusOK)
 	state := live.State()
 	if state.View.Architecture != "layered" || state.View.Configured != "hexagonal" || state.View.AdoptAt.IsZero() {
 		t.Fatalf("view: %+v", state.View)
@@ -270,15 +272,15 @@ func TestArchitectureView(t *testing.T) {
 	}
 
 	// Choosing treaty.yaml's architecture again ends the preview.
-	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"hexagonal"}`, http.StatusOK)
+	post(t, base+"/api/view", "application/json", `{"architecture":"hexagonal"}`, http.StatusOK)
 	if view := live.State().View; view.Architecture != "hexagonal" || !view.AdoptAt.IsZero() {
 		t.Fatalf("view: %+v", view)
 	}
 
 	// Adopting replaces treaty.yaml.
-	post(t, server.URL()+"/api/view/adopt", "application/json", `{}`, http.StatusBadRequest)
-	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"clean"}`, http.StatusOK)
-	post(t, server.URL()+"/api/view/adopt", "application/json", `{}`, http.StatusOK)
+	post(t, base+"/api/view/adopt", "application/json", `{}`, http.StatusBadRequest)
+	post(t, base+"/api/view", "application/json", `{"architecture":"clean"}`, http.StatusOK)
+	post(t, base+"/api/view/adopt", "application/json", `{}`, http.StatusOK)
 	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), "architecture: clean") {
 		t.Fatalf("treaty.yaml:\n%s", data)
 	}
@@ -289,7 +291,7 @@ func TestArchitectureView(t *testing.T) {
 
 	// A preview left alone becomes treaty.yaml.
 	live.SetAdoptAfter(200 * time.Millisecond)
-	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"layered"}`, http.StatusOK)
+	post(t, base+"/api/view", "application/json", `{"architecture":"layered"}`, http.StatusOK)
 	waitFor(t, func() bool { return live.State().View.Configured == "layered" })
 	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), "architecture: layered") {
 		t.Fatalf("treaty.yaml:\n%s", data)
@@ -305,37 +307,33 @@ func TestPreferences(t *testing.T) {
 	write(t, root, "go.mod", "module example.com/shop\n")
 	write(t, root, "core/order.go", "package core\n\ntype Order struct{ ID string }\n")
 	settings := filepath.Join(t.TempDir(), "settings.json")
-	start := func() (*Server, func()) {
+	start := func() (string, func()) {
 		service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(settings))
-		live := app.NewLive(service, filesystem.NewWatcher(root), nil)
+		live := app.NewLive(service, filesystem.NewWatcher(root))
 		stop := make(chan struct{})
 		live.Start(stop)
-		server, err := Listen(live, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		return server, func() { _ = server.Close(); close(stop) }
+		server, base := listen(t, root, live)
+		return base, func() { _ = server.Close(); close(stop) }
 	}
 
-	server, stop := start()
-	if got := string(get(t, server.URL()+"/api/preferences", http.StatusOK)); strings.TrimSpace(got) != "{}" {
+	base, stop := start()
+	if got := string(get(t, base+"/api/preferences", http.StatusOK)); strings.TrimSpace(got) != "{}" {
 		t.Fatalf("nothing saved yet: %s", got)
 	}
 
 	// Each save merges into what is kept.
-	post(t, server.URL()+"/api/preferences", "application/json", `{"theme":"vampire","layout":{"center":{"tabs":["map"]}}}`, http.StatusOK)
-	post(t, server.URL()+"/api/preferences", "application/json", `{"follow":true}`, http.StatusOK)
-	post(t, server.URL()+"/api/preferences", "application/json", `{"legend":false}`, http.StatusOK)
-	post(t, server.URL()+"/api/preferences", "application/json", `{"layout":[1,2]}`, http.StatusBadRequest)
-	post(t, server.URL()+"/api/preferences", "application/x-www-form-urlencoded", `theme=x`, http.StatusUnsupportedMediaType)
+	post(t, base+"/api/preferences", "application/json", `{"theme":"vampire","layout":{"center":{"tabs":["map"]}}}`, http.StatusOK)
+	post(t, base+"/api/preferences", "application/json", `{"follow":true}`, http.StatusOK)
+	post(t, base+"/api/preferences", "application/json", `{"legend":false}`, http.StatusOK)
+	post(t, base+"/api/preferences", "application/json", `{"layout":[1,2]}`, http.StatusBadRequest)
+	post(t, base+"/api/preferences", "application/x-www-form-urlencoded", `theme=x`, http.StatusUnsupportedMediaType)
 	stop()
 
 	// Another server, as on another port or in another repository, sees them.
-	server, stop = start()
+	base, stop = start()
 	defer stop()
 	var saved app.Preferences
-	if err := json.Unmarshal(get(t, server.URL()+"/api/preferences", http.StatusOK), &saved); err != nil {
+	if err := json.Unmarshal(get(t, base+"/api/preferences", http.StatusOK), &saved); err != nil {
 		t.Fatal(err)
 	}
 
@@ -354,22 +352,17 @@ func TestMoveModules(t *testing.T) {
 	git(t, root, "init", "-q")
 
 	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
-	live := app.NewLive(service, filesystem.NewWatcher(root), nil)
+	live := app.NewLive(service, filesystem.NewWatcher(root))
 	stop := make(chan struct{})
 	defer close(stop)
 	live.Start(stop)
-	server, err := Listen(live, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() { _ = server.Close() }()
+	_, base := listen(t, root, live)
 	layer := func(id string) string {
 		var view struct {
 			Modules []app.MapModule `json:"modules"`
 		}
 
-		_ = json.Unmarshal(get(t, server.URL()+"/api/view", http.StatusOK), &view)
+		_ = json.Unmarshal(get(t, base+"/api/view", http.StatusOK), &view)
 		for _, module := range view.Modules {
 			if module.ID == id {
 				return module.Layer + "/" + module.Side
@@ -384,7 +377,7 @@ func TestMoveModules(t *testing.T) {
 		t.Fatalf("web starts unclassified, not %s", got)
 	}
 
-	post(t, server.URL()+"/api/reclassify", "application/json", `{"module":"go:web","layer":"adapter","side":"driving"}`, http.StatusOK)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:web","layer":"adapter","side":"driving"}`, http.StatusOK)
 	if got := layer("go:web"); got != "adapter/driving" {
 		t.Fatalf("web should be a driving adapter, not %s", got)
 	}
@@ -393,28 +386,28 @@ func TestMoveModules(t *testing.T) {
 		t.Fatalf("treaty.yaml:\n%s", data)
 	}
 
-	post(t, server.URL()+"/api/reclassify", "application/json", `{"module":"go:web","layer":"adapter"}`, http.StatusBadRequest)
-	post(t, server.URL()+"/api/reclassify", "application/json", `{"module":"go:web","layer":"presentation"}`, http.StatusBadRequest)
-	post(t, server.URL()+"/api/reclassify", "application/json", `{"module":"go:nowhere","layer":"domain"}`, http.StatusBadRequest)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:web","layer":"adapter"}`, http.StatusBadRequest)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:web","layer":"presentation"}`, http.StatusBadRequest)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:nowhere","layer":"domain"}`, http.StatusBadRequest)
 
 	// While another architecture is previewed, layers stay as they are.
-	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"layered"}`, http.StatusOK)
-	post(t, server.URL()+"/api/reclassify", "application/json", `{"module":"go:web","layer":"domain"}`, http.StatusBadRequest)
-	post(t, server.URL()+"/api/view", "application/json", `{"architecture":"hexagonal"}`, http.StatusOK)
+	post(t, base+"/api/view", "application/json", `{"architecture":"layered"}`, http.StatusOK)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:web","layer":"domain"}`, http.StatusBadRequest)
+	post(t, base+"/api/view", "application/json", `{"architecture":"hexagonal"}`, http.StatusOK)
 
 	// Positions are kept per architecture, and forgotten on request.
-	post(t, server.URL()+"/api/positions", "application/json", `{"architecture":"hexagonal","module":"go:web","position":{"x":-120.5,"y":40}}`, http.StatusOK)
-	post(t, server.URL()+"/api/positions", "application/json", `{"architecture":"layered","module":"go:core","position":{"x":10,"y":20}}`, http.StatusOK)
-	post(t, server.URL()+"/api/positions", "application/json", `{"architecture":"onion","module":"go:core","position":{"x":10,"y":20}}`, http.StatusBadRequest)
+	post(t, base+"/api/positions", "application/json", `{"architecture":"hexagonal","module":"go:web","position":{"x":-120.5,"y":40}}`, http.StatusOK)
+	post(t, base+"/api/positions", "application/json", `{"architecture":"layered","module":"go:core","position":{"x":10,"y":20}}`, http.StatusOK)
+	post(t, base+"/api/positions", "application/json", `{"architecture":"onion","module":"go:core","position":{"x":10,"y":20}}`, http.StatusBadRequest)
 	var positions app.Positions
-	_ = json.Unmarshal(get(t, server.URL()+"/api/positions", http.StatusOK), &positions)
+	_ = json.Unmarshal(get(t, base+"/api/positions", http.StatusOK), &positions)
 	if positions["hexagonal"]["go:web"] != (app.Position{X: -120.5, Y: 40}) || positions["layered"]["go:core"] != (app.Position{X: 10, Y: 20}) {
 		t.Fatalf("positions: %+v", positions)
 	}
 
-	post(t, server.URL()+"/api/positions", "application/json", `{"architecture":"layered","module":"go:core"}`, http.StatusOK)
+	post(t, base+"/api/positions", "application/json", `{"architecture":"layered","module":"go:core"}`, http.StatusOK)
 	positions = nil
-	_ = json.Unmarshal(get(t, server.URL()+"/api/positions", http.StatusOK), &positions)
+	_ = json.Unmarshal(get(t, base+"/api/positions", http.StatusOK), &positions)
 	if _, ok := positions["layered"]; ok || len(positions["hexagonal"]) != 1 {
 		t.Fatalf("forgetting a position: %+v", positions)
 	}
@@ -428,18 +421,13 @@ func TestRunTests(t *testing.T) {
 	write(t, root, "calc/calc_test.go", "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"add\")\n\t}\n}\n")
 	extractor := golang.NewExtractor()
 	service := app.NewService(root, filesystem.NewConfig(root), extractor, []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
-	live := app.NewLive(service, filesystem.NewWatcher(root), nil)
+	live := app.NewLive(service, filesystem.NewWatcher(root))
 	live.UseTests(app.NewTests(root, extractor, []app.TestSuite{golang.NewTestSuite()}))
 	if err := live.Refresh(); err != nil {
 		t.Fatal(err)
 	}
 
-	server, err := Listen(live, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() { _ = server.Close() }()
+	_, base := listen(t, root, live)
 	report := func(data []byte) (result app.TestReport) {
 		if err := json.Unmarshal(data, &result); err != nil {
 			t.Fatalf("report: %s %v", data, err)
@@ -448,16 +436,16 @@ func TestRunTests(t *testing.T) {
 		return result
 	}
 
-	if found := report(get(t, server.URL()+"/api/tests", http.StatusOK)); len(found.Tests) != 1 || found.Tests[0].ID != "go:calc#TestAdd" {
+	if found := report(get(t, base+"/api/tests", http.StatusOK)); len(found.Tests) != 1 || found.Tests[0].ID != "go:calc#TestAdd" {
 		t.Fatalf("tests: %+v", found)
 	}
 
-	post(t, server.URL()+"/api/tests/run", "application/json", `{"ids":["go:calc#TestMissing"]}`, http.StatusBadRequest)
-	post(t, server.URL()+"/api/tests/run", "application/json", `{"ids":["go:calc#TestAdd"]}`, http.StatusOK)
+	post(t, base+"/api/tests/run", "application/json", `{"ids":["go:calc#TestMissing"]}`, http.StatusBadRequest)
+	post(t, base+"/api/tests/run", "application/json", `{"ids":["go:calc#TestAdd"]}`, http.StatusOK)
 
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		done := report(get(t, server.URL()+"/api/tests", http.StatusOK))
+		done := report(get(t, base+"/api/tests", http.StatusOK))
 		if !done.Running {
 			if done.Results["go:calc#TestAdd"].Status != app.TestPassed || len(done.Coverage["calc/calc.go"].Covered) == 0 || done.Error != "" {
 				t.Fatalf("done: %+v", done)
@@ -473,7 +461,7 @@ func TestRunTests(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	post(t, server.URL()+"/api/tests/stop", "application/json", `{}`, http.StatusNoContent)
+	post(t, base+"/api/tests/stop", "application/json", `{}`, http.StatusNoContent)
 	if state := live.State(); state.Tests == 0 {
 		t.Fatalf("the state counts test changes: %+v", state)
 	}

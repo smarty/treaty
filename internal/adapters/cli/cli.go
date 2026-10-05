@@ -39,32 +39,42 @@ commands:
   design new <name> [--from <target>]...      scaffold a design in .treaty/designs
   design check <name> [--format json|text]    compare a design with the code
   map [--base <ref>] [--design <name>]...     render a static map to .treaty/out/map.html
-  serve [--port <n>] [--open]                 serve the live map until interrupted
+  serve [--port <n>] [--open]                 keep this directory's live map open until
+                                              interrupted
   mcp [--port <n>]                            serve the live graph to an agent over MCP on
                                               stdio, and the live map to the person
+  restart [--port <n>]                        stop the treaty server; open sessions start
+                                              a new one, such as a newly built treaty
   init [--architecture <name>]                create .treaty and propose treaty.yaml for an
                                               architecture: none (default), hexagonal,
                                               clean, layered, slices or modular
-  url                                         print the live map's address for this directory
+  url [--port <n>]                            print the live map's address for this directory
   here [--force]                              register treaty in this repository's .mcp.json,
                                               so Claude Code sessions here start it
 `
 
 var ErrUsage = errors.New("usage")
 
-// Launcher starts the long-running servers; the composition root wires
-// them, since they need adapters the CLI may not import.
+// Launcher reaches the one treaty server on this machine, which serves
+// every open project's live map and every agent session; the composition
+// root wires it, since it needs adapters the CLI may not import.
 type Launcher interface {
-	// MCP serves the live graph over MCP on in and out until in closes,
-	// and serves the live map unless another server already does.
+	// Daemon is the treaty server itself, which runs until no session has
+	// been open for a while, it is asked to stop, or treaty is rebuilt.
+	Daemon(port int, stderr io.Writer) error
+
+	// MCP relays the live graph over MCP on in and out until in closes,
+	// starting the treaty server when none runs.
 	MCP(port int, in io.Reader, out, stderr io.Writer) error
 
-	// Serve serves the live map until interrupted.
+	// Restart stops the treaty server, so its sessions start a new one.
+	Restart(port int, stderr io.Writer) error
+
+	// Serve keeps this directory's live map open until interrupted.
 	Serve(port int, open bool, stderr io.Writer) error
 
-	// URL finds the live map served for this directory, empty when no
-	// treaty server is running here.
-	URL() (url string, err error)
+	// URL finds the live map of this directory, empty when it is not open.
+	URL(port int) (url string, err error)
 }
 
 // repeated collects a flag given more than once.
@@ -178,7 +188,7 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 	base := flags.String("base", "", "git ref to diff against")
 	at := flags.String("at", "", "git ref to read instead of the working tree")
 	format := flags.String("format", "json", "json or text")
-	port := flags.Int("port", 7878, "port for the live map; any free port if it is taken")
+	port := flags.Int("port", 7878, "port of the treaty server, the same for every session")
 	open := flags.Bool("open", false, "open the live map in a browser")
 	force := flags.Bool("force", false, "replace a different treaty entry in .mcp.json")
 	all := flags.Bool("all", false, "print a whole file or long range from source, not its outline")
@@ -316,13 +326,13 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 		fmt.Fprintf(stdout, "created .treaty/ and wrote %s\n", path)
 		return nil
 	case "url":
-		url, err := launcher.URL()
+		url, err := launcher.URL(*port)
 		if err != nil {
 			return err
 		}
 
 		if url == "" {
-			message := "no treaty server is running in this directory; start one with treaty serve, or open Claude Code here after treaty here"
+			message := "this directory's live map is not open; open it with treaty serve, or open Claude Code here after treaty here"
 			fmt.Fprintln(stderr, message)
 			return failure{message}
 		}
@@ -341,6 +351,10 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 		return launcher.Serve(*port, *open, stderr)
 	case "mcp":
 		return launcher.MCP(*port, stdin, stdout, stderr)
+	case "restart":
+		return launcher.Restart(*port, stderr)
+	case "daemon":
+		return launcher.Daemon(*port, stderr)
 	default:
 		return ErrUsage
 	}

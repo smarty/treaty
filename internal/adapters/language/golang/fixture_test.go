@@ -298,7 +298,10 @@ func TestMapShowsCodeChangesAndRemovals(t *testing.T) {
 
 	write(map[string]string{
 		"go.mod":      "module example.com/m\n",
-		"a/a.go":      "package a\n\nimport \"example.com/m/b\"\n\nfunc Run() int {\n\treturn b.Help()\n}\n",
+		"a/a.go":      "package a\n\nimport (\n\t\"example.com/m/b\"\n\t\"example.com/m/c\"\n\t\"example.com/m/d\"\n\t\"example.com/m/e\"\n)\n\nfunc Do() int {\n\te.Same()\n\treturn d.Work()\n}\n\nfunc Run() int {\n\treturn b.Help()\n}\n\nfunc Use() {\n\tc.One()\n}\n",
+		"d/d.go":      "package d\n\nfunc Work() int {\n\treturn 1\n}\n",
+		"e/e.go":      "package e\n\nfunc Same() {}\n",
+		"c/c.go":      "package c\n\nfunc One() {}\n\nfunc Two() {}\n",
 		"b/b.go":      "package b\n\nfunc Help() int {\n\treturn 1\n}\n",
 		"b/extra.go":  "package b\n\nfunc Extra() {}\n",
 		"gone/old.go": "package gone\n\nfunc Old() {}\n",
@@ -313,7 +316,9 @@ func TestMapShowsCodeChangesAndRemovals(t *testing.T) {
 	}
 
 	write(map[string]string{
-		"a/a.go": "package a\n\nfunc Run() int {\n\treturn 2\n}\n",
+		"a/a.go": "package a\n\nimport (\n\t\"example.com/m/c\"\n\t\"example.com/m/d\"\n\t\"example.com/m/e\"\n)\n\nfunc Do() int {\n\te.Same()\n\treturn d.Work()\n}\n\nfunc Run() int {\n\treturn 2\n}\n\nfunc Use() {\n\tc.One()\n\tc.Two()\n}\n",
+		"d/d.go": "package d\n\nfunc Work(values ...int) int {\n\treturn len(values)\n}\n",
+		"e/e.go": "package e\n\nfunc Same() {\n\tprintln()\n}\n",
 		"b/b.go": "package b\n\nfunc Help() int {\n\tvalue := 1\n\treturn value\n}\n",
 	})
 
@@ -363,13 +368,32 @@ func TestMapShowsCodeChangesAndRemovals(t *testing.T) {
 		t.Error("the deleted package must show as a removed module")
 	}
 
-	var removedEdge bool
+	if work, same := symbols["go:d:Work"], symbols["go:e:Same"]; work.Change != rules.ChangeContract && work.Change != rules.ChangeBreaking || same.Change != rules.ChangeImplementation {
+		t.Fatalf("the fixture needs Work's signature and only Same's code to change: %s, %s", work.Change, same.Change)
+	}
+
+	var removedEdge, changedEdge, contractEdge, implementationEdge bool
 	for _, edge := range view.Edges {
 		removedEdge = removedEdge || edge.From == "go:a" && edge.To == "go:b" && edge.Removed
+		changedEdge = changedEdge || edge.From == "go:a" && edge.To == "go:c" && edge.Changed && !edge.New
+		contractEdge = contractEdge || edge.From == "go:a" && edge.To == "go:d" && edge.Changed && !edge.New
+		implementationEdge = implementationEdge || edge.From == "go:a" && edge.To == "go:e" && !edge.Changed && !edge.New
+	}
+
+	if !contractEdge {
+		t.Error("the signature a's reference to d relies on changed, so a's dependency on d must show as changed")
+	}
+
+	if !implementationEdge {
+		t.Error("only e's code changed, not its signature, so a's dependency on e must not show as changed")
 	}
 
 	if !removedEdge {
 		t.Error("a's dropped dependency on b must show as a removed edge")
+	}
+
+	if !changedEdge {
+		t.Error("a's dependency on c gained a reference, so it must show as changed")
 	}
 
 	if got := diffText(view.FileDiffs["b/b.go"]); got != " package b\n \n func Help() int {\n-\treturn 1\n+\tvalue := 1\n+\treturn value\n }" {

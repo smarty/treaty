@@ -2,7 +2,6 @@
 package filesystem
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -29,8 +28,6 @@ const (
 	// before the language was renamed end in legacyExtension and still load.
 	DesignExtension = ".pen"
 	legacyExtension = ".cml"
-
-	serverFile = "server.json"
 )
 
 var (
@@ -54,12 +51,6 @@ type Watcher struct {
 // Workspace is the .treaty directory at the repository root.
 type Workspace struct {
 	root string
-}
-
-// serverInfo is the shape of .treaty/server.json.
-type serverInfo struct {
-	URL string `json:"url"`
-	PID int    `json:"pid"`
 }
 
 // configFile is the YAML shape of treaty.yaml. Layers stays a node because
@@ -195,55 +186,6 @@ func (this *Watcher) Fingerprint() (result string, files int, err error) {
 	})
 
 	return fmt.Sprintf("%016x", hasher.Sum64()), files, err
-}
-
-// Announce writes .treaty/server.json with the live map's URL.
-//
-// Parameters:
-//   - url: where the live map is served.
-//
-// Returns:
-//   - withdraw: removes the file if it still names this URL.
-//   - err: the file could not be written.
-func (this *Workspace) Announce(url string) (withdraw func(), err error) {
-	if err := this.Init(); err != nil {
-		return nil, err
-	}
-
-	path := filepath.Join(this.root, Directory, serverFile)
-	data, _ := json.Marshal(serverInfo{URL: url, PID: os.Getpid()})
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return nil, err
-	}
-
-	return func() {
-		if announced, _ := this.Announced(); announced == url {
-			_ = os.Remove(path)
-		}
-	}, nil
-}
-
-// Announced reads the URL in .treaty/server.json.
-//
-// Returns:
-//   - url: the announced URL, or empty when none is recorded.
-//   - err: the file exists but could not be read.
-func (this *Workspace) Announced() (url string, err error) {
-	data, err := os.ReadFile(filepath.Join(this.root, Directory, serverFile))
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
-	}
-
-	if err != nil {
-		return "", err
-	}
-
-	var info serverInfo
-	if err := json.Unmarshal(data, &info); err != nil {
-		return "", nil
-	}
-
-	return info.URL, nil
 }
 
 // Designs lists the names of the designs in .treaty/designs.

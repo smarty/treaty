@@ -72,7 +72,7 @@ type Selection struct {
 	To   string `json:"to,omitempty"`
 }
 
-// LiveState is the live map's state, as the browser and a peer see it.
+// LiveState is the live map's state, as the browser sees it.
 type LiveState struct {
 	Version   int       `json:"version"`
 	Baseline  Baseline  `json:"baseline"`
@@ -122,7 +122,6 @@ type Pointer struct {
 type Live struct {
 	service *Service
 	watcher Watcher
-	peer    Peer
 	tests   *Tests
 
 	building sync.Mutex
@@ -155,16 +154,13 @@ type Live struct {
 // Parameters:
 //   - service: the use cases and adapters.
 //   - watcher: notices changes to the working tree.
-//   - peer: another server already serving this repository's map, whose
-//     baseline and selection this one follows; nil when there is none.
 //
 // Returns:
 //   - result: the live graph.
-func NewLive(service *Service, watcher Watcher, peer Peer) *Live {
+func NewLive(service *Service, watcher Watcher) *Live {
 	return &Live{
 		service:     service,
 		watcher:     watcher,
-		peer:        peer,
 		baseline:    Baseline{Mode: BaselineHead},
 		bases:       map[string]baseRevision{},
 		subscribers: map[chan LiveState]bool{},
@@ -380,10 +376,6 @@ func (this *Live) SetSelection(selection Selection) {
 //   - ErrAmbiguousTarget: several symbols or modules match it.
 //   - ErrTooSoon: another request came less than ShowEvery ago.
 func (this *Live) Show(target, reason string) error {
-	if this.peer != nil {
-		return this.peer.Show(target, reason)
-	}
-
 	current, err := this.current()
 	if err != nil {
 		return err
@@ -426,7 +418,6 @@ func (this *Live) Start(stop <-chan struct{}) {
 	// Starting a server refreshes the default themes; a failure only means
 	// the map uses the built-in copies.
 	_ = this.service.themes.Install()
-	this.sync()
 	_ = this.Refresh()
 	go this.poll(stop)
 }
@@ -586,9 +577,8 @@ func (this *Live) build(baseline Baseline, preview string) (*analysis, []byte, e
 	return result, payload, err
 }
 
-// current returns the latest analysis, after following the peer.
+// current returns the latest analysis.
 func (this *Live) current() (*analysis, error) {
-	this.sync()
 	this.mutex.Lock()
 	defer this.mutex.Unlock()
 	if this.analysis == nil {
@@ -620,7 +610,6 @@ func (this *Live) poll(stop <-chan struct{}) {
 		baseline := this.baseline
 		this.mutex.Unlock()
 		if !changed && tick%baselineEvery == 0 {
-			this.sync()
 			if resolved, err := this.resolve(baseline); err == nil && resolved.Commit != baseline.Commit {
 				changed = true
 			}
@@ -739,26 +728,6 @@ func (this *Live) stateLocked() LiveState {
 	}
 
 	return result
-}
-
-// sync follows the peer's baseline and selection, when there is a peer.
-func (this *Live) sync() {
-	if this.peer == nil {
-		return
-	}
-
-	state, err := this.peer.State()
-	if err != nil {
-		return
-	}
-
-	this.mutex.Lock()
-	this.selection = state.Selection
-	same := state.Baseline.Mode == this.baseline.Mode && state.Baseline.Ref == this.baseline.Ref && state.Baseline.Target == this.baseline.Target
-	this.mutex.Unlock()
-	if !same {
-		_ = this.SetBaseline(state.Baseline)
-	}
 }
 
 // PollEvery says how long to wait between checks of the tree for changes:

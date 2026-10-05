@@ -121,7 +121,7 @@ func serve(t *testing.T, root string) (*Server, *app.Service) {
 	}
 
 	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
-	live := app.NewLive(service, filesystem.NewWatcher(root), nil)
+	live := app.NewLive(service, filesystem.NewWatcher(root))
 	if err := live.Refresh(); err != nil {
 		t.Fatal(err)
 	}

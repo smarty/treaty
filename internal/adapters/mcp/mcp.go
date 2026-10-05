@@ -1,5 +1,6 @@
 // Package mcp serves the live graph to coding agents over the Model Context
-// Protocol, on stdio.
+// Protocol. The shared treaty server answers each session's requests; a shim
+// on the agent's stdio relays them and outlives restarts of that server.
 package mcp
 
 import (
@@ -62,9 +63,9 @@ type tool struct {
 // Parameters:
 //   - live: the live graph.
 //   - version: the treaty version reported to clients.
-//   - mapURL: where the person can watch the live map.
-//   - shared: the map belongs to a treaty server that was already running
-//     in this directory, rather than to this one.
+//   - mapURL: where the person can watch the project's live map.
+//   - shared: the project was already open for another session, so the
+//     person may already have its map open.
 //
 // Returns:
 //   - result: the server.
@@ -234,7 +235,7 @@ func (this *Server) handle(message request) (any, *rpcError) {
 
 		return map[string]any{
 			"protocolVersion": version,
-			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
 			"serverInfo":      map[string]string{"name": "treaty", "version": this.version},
 			"instructions":    instructions(this.mapURL, this.shared),
 		}, nil
@@ -264,13 +265,14 @@ func schema(properties map[string]string, required ...string) map[string]any {
 }
 
 func instructions(mapURL string, shared bool) string {
-	where := "This session started treaty's live map at " + mapURL + "."
+	where := "This session opened this repository's live map at " + mapURL + "."
 	if shared {
-		where = "A treaty server was already running in this directory, so this session shares its live map at " + mapURL + "."
+		where = "Another session already has this repository's live map open, at " + mapURL + "."
 	}
 
-	return where + " The person cannot see this server's output, so in your first reply of the session give them that link, " +
-		"saying whether it is a new map or the one already running, so they can open it in a browser. " +
+	return where + " One treaty server on this machine serves every repository Claude Code works in, each in its own map, at the same address every time. " +
+		"The person cannot see this server's output, so in your first reply of the session give them that link, " +
+		"saying whether the map is new or was already open, so they can open it in a browser. " +
 		"Treaty keeps a live graph of this repository's contracts, placed by the architecture treaty.yaml declares (hexagonal, clean, layered, vertical slices or modular monolith), and rebuilds it as files change. " +
 		"Use it to decide where to work without reading the whole codebase: call overview first, find to locate symbols, " +
 		"slice before editing a symbol, file or module, source to read just the lines you need, impact before changing a contract, and allowed before adding an import. " +

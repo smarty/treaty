@@ -15,13 +15,15 @@ const maxSourceBytes = 1 << 20
 
 // MapEdge is one module-level dependency on the map. Rule is the rule a
 // violation breaks. Removed marks a dependency the base had and the working
-// tree no longer has.
+// tree no longer has; Changed marks one both have whose references differ or
+// whose references rely on a contract that changed.
 type MapEdge struct {
 	From       string         `json:"from"`
 	To         string         `json:"to"`
 	Count      int            `json:"count"`
 	New        bool           `json:"new"`
 	Removed    bool           `json:"removed,omitempty"`
+	Changed    bool           `json:"changed,omitempty"`
 	Violation  bool           `json:"violation"`
 	Rule       string         `json:"rule,omitempty"`
 	References []graph.Edge   `json:"references"`
@@ -97,6 +99,10 @@ type MapView struct {
 	Symbols      []MapSymbol  `json:"symbols"`
 	Edges        []MapEdge    `json:"edges"`
 	Links        []graph.Edge `json:"links"`
+
+	// AddedLinks are references between symbols that the working tree has
+	// and the base did not.
+	AddedLinks []graph.Edge `json:"added_links,omitempty"`
 
 	// RemovedLinks are references between symbols that the base had and the
 	// working tree no longer has.
@@ -389,7 +395,7 @@ func fileDiffs(analysis *analysis, sources map[string]string) map[string][]DiffL
 
 // removed adds what the base had and the working tree does not, so the map
 // can draw it where it was: modules, symbols, module dependencies and
-// references. A symbol that moved is shown where it went, not as removed.
+// references. It also lists the references the base did not have. A symbol that moved is shown where it went, not as removed.
 func removed(analysis *analysis, view *MapView, changes map[string]rules.Change) {
 	base, head := analysis.base, analysis.head
 	moved := map[string]bool{}
@@ -453,15 +459,72 @@ func removed(analysis *analysis, view *MapView, changes map[string]rules.Change)
 		view.Edges = append(view.Edges, MapEdge{From: edge.From, To: edge.To, Count: count, References: edge.References, Imports: edge.Imports, Removed: true})
 	}
 
-	links := map[[3]string]bool{}
+	links, baseLinks := map[[3]string]bool{}, map[[3]string]bool{}
 	for _, edge := range head.Edges {
 		links[[3]string{edge.From, edge.To, edge.Kind}] = true
 	}
 
 	for _, edge := range base.Edges {
+		baseLinks[[3]string{edge.From, edge.To, edge.Kind}] = true
 		if !links[[3]string{edge.From, edge.To, edge.Kind}] {
 			view.RemovedLinks = append(view.RemovedLinks, edge)
 			links[[3]string{edge.From, edge.To, edge.Kind}] = true
+		}
+	}
+
+	for _, edge := range head.Edges {
+		if !baseLinks[[3]string{edge.From, edge.To, edge.Kind}] {
+			view.AddedLinks = append(view.AddedLinks, edge)
+			baseLinks[[3]string{edge.From, edge.To, edge.Kind}] = true
+		}
+	}
+
+	changed(view, base)
+}
+
+// changed marks the module dependencies that both the base and the working
+// tree have but whose reliance on contracts changed: one gained a reference or
+// lost one, or the signature of a symbol one of its references points to
+// changed. A change to code alone, at either end, does not count.
+func changed(view *MapView, base *graph.Graph) {
+	relied := map[string]bool{}
+	for _, symbol := range view.Symbols {
+		if symbol.Change == rules.ChangeContract || symbol.Change == rules.ChangeBreaking {
+			relied[symbol.ID] = true
+		}
+	}
+
+	added, gone := map[[3]string]bool{}, map[[3]string]bool{}
+	for _, link := range view.AddedLinks {
+		added[[3]string{link.From, link.To, link.Kind}] = true
+	}
+
+	for _, link := range view.RemovedLinks {
+		gone[[3]string{link.From, link.To, link.Kind}] = true
+	}
+
+	lost := map[[2]string]bool{}
+	for _, edge := range base.ModuleEdges() {
+		for _, reference := range edge.References {
+			if gone[[3]string{reference.From, reference.To, reference.Kind}] {
+				lost[[2]string{edge.From, edge.To}] = true
+				break
+			}
+		}
+	}
+
+	for i := range view.Edges {
+		edge := &view.Edges[i]
+		if edge.New || edge.Removed {
+			continue
+		}
+
+		edge.Changed = lost[[2]string{edge.From, edge.To}]
+		for _, reference := range edge.References {
+			if added[[3]string{reference.From, reference.To, reference.Kind}] || relied[reference.To] {
+				edge.Changed = true
+				break
+			}
 		}
 	}
 }

@@ -11,6 +11,7 @@
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; height: 100vh; }
 header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
 header h1 { font-size: 16px; margin: 0; }
+.framed header h1 { display: none; }
 header .meta { color: var(--muted); font-size: 12px; }
 header .spacer { flex: 1; }
 header .live { display: flex; align-items: center; gap: 6px; font-size: 12px; }
@@ -173,6 +174,19 @@ table.metrics td.metric-name { overflow: hidden; text-overflow: ellipsis; white-
 .pill.fail { background: var(--high); color: #fff; } .pill.pass { background: var(--accent); color: #fff; }
 .empty { color: var(--muted); }
 .slice-head { display: flex; justify-content: space-between; align-items: center; }
+details.slice > summary { cursor: pointer; list-style: none; } details.slice > summary::-webkit-details-marker { display: none; }
+details.slice > summary h2::before { content: "▸ "; } details.slice[open] > summary h2::before { content: "▾ "; }
+details.slice:not([open]) > summary button { visibility: hidden; }
+table.refs { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
+table.refs th { text-align: left; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--line); padding: 3px 6px; }
+table.refs td { padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+table.refs td.ref-at { color: var(--muted); }
+table.refs button.link { font: 12px ui-monospace, Menlo, monospace; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; text-align: left; text-decoration: underline dotted; }
+table.refs button.link:hover { text-decoration: underline; }
+table.refs tr.ref-added td { color: var(--added); }
+table.refs tr.ref-removed td { color: var(--removed); }
+table.refs tr.ref-changed td { color: var(--changed); }
+table.refs tr.ref-added { box-shadow: inset 3px 0 var(--added); } table.refs tr.ref-removed { box-shadow: inset 3px 0 var(--removed); } table.refs tr.ref-changed { box-shadow: inset 3px 0 var(--changed); }
 @media (max-width: 900px) {
   body { height: auto; }
   main#workspace { display: flex; flex-direction: column; }

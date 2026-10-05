@@ -41,6 +41,7 @@ function offer(pointer) {
   const moved = follow && idle;
   if (moved) goTo(pointer.target);
   offered = pointer.target;
+  tellShell({ type: "offer" });
   document.getElementById("offer-who").textContent = moved ? "Claude moved the view to" : "Claude points at";
   document.getElementById("offer-what").textContent = name;
   document.getElementById("offer-why").textContent = pointer.reason || "";
@@ -85,7 +86,7 @@ async function refreshView() {
   if (live.loading) { live.pending = true; return; }
   live.loading = true;
   try {
-    const response = await fetch("/api/view", { cache: "no-store" });
+    const response = await fetch("api/view", { cache: "no-store" });
     if (!response.ok) throw new Error(await response.text());
     const version = Number(response.headers.get("X-Treaty-Version"));
     const data = await response.json();
@@ -158,7 +159,7 @@ async function applyBaseline() {
   const body = mode === "pr" ? { mode, target: arg } : mode === "ref" ? { mode, ref: arg } : { mode };
   setStatus("switching baseline…");
   try {
-    const response = await fetch("/api/baseline", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const response = await fetch("api/baseline", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!response.ok) throw new Error((await response.text()).trim());
     document.getElementById("baseline-apply").blur();
     showState(await response.json());
@@ -169,7 +170,7 @@ async function applyBaseline() {
 function postSelection(sel) {
   if (!LIVE) return;
   const body = sel ? { type: sel.type, id: sel.id || "", from: sel.from || "", to: sel.to || "" } : {};
-  fetch("/api/selection", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
+  fetch("api/selection", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
 }
 // A person's theme, layout and "Follow Claude" choice are kept by the server
 // in ~/.treaty/settings.json, so they follow them across repositories,
@@ -184,14 +185,14 @@ function savePreferences(update) {
   clearTimeout(preferencesTimer);
   preferencesTimer = setTimeout(() => {
     const body = JSON.stringify(pendingPreferences); pendingPreferences = null;
-    fetch("/api/preferences", { method: "POST", headers: { "Content-Type": "application/json" }, body }).catch(() => {});
+    fetch("api/preferences", { method: "POST", headers: { "Content-Type": "application/json" }, body }).catch(() => {});
   }, 400);
 }
 // loadPreferences applies what the server keeps. When it keeps nothing yet,
 // this browser's choices become the saved ones.
 async function loadPreferences() {
   let saved = {};
-  try { const response = await fetch("/api/preferences", { cache: "no-store" }); if (!response.ok) return; saved = await response.json(); } catch (err) { return; }
+  try { const response = await fetch("api/preferences", { cache: "no-store" }); if (!response.ok) return; saved = await response.json(); } catch (err) { return; }
   preferencesLoaded = true;
   const follow = document.getElementById("follow");
   if (saved.theme) { themeChoice = saved.theme; fillThemeMenu(); applyTheme(); }
@@ -219,11 +220,21 @@ function startLive() {
   document.getElementById("baseline-mode").addEventListener("change", syncBaselineInput);
   document.getElementById("baseline-apply").addEventListener("click", applyBaseline);
   document.getElementById("baseline-arg").addEventListener("keydown", ev => { if (ev.key === "Enter") applyBaseline(); });
-  document.getElementById("architecture").addEventListener("change", ev => { setStatus("switching architecture…"); postView("/api/view", { architecture: ev.target.value }, "architecture not changed"); });
-  document.getElementById("adopt").addEventListener("click", () => postView("/api/view/adopt", {}, "treaty.yaml not switched"));
-  document.getElementById("adopt-cancel").addEventListener("click", () => postView("/api/view", { architecture: live.state.view.configured }, "architecture not changed"));
+  document.getElementById("architecture").addEventListener("change", ev => { setStatus("switching architecture…"); postView("api/view", { architecture: ev.target.value }, "architecture not changed"); });
+  document.getElementById("adopt").addEventListener("click", () => postView("api/view/adopt", {}, "treaty.yaml not switched"));
+  document.getElementById("adopt-cancel").addEventListener("click", () => postView("api/view", { architecture: live.state.view.configured }, "architecture not changed"));
   setInterval(tickAdopt, 1000);
-  const events = new EventSource("/api/events");
+  followEvents();
+}
+
+// followEvents streams the state. A restarted treaty server answers 404 until
+// it has rebuilt this project, which makes EventSource give up, so a closed
+// stream is opened again.
+function followEvents() {
+  const events = new EventSource("api/events");
   events.onmessage = ev => { const st = JSON.parse(ev.data); showState(st); if (st.version !== live.shown) refreshView(); };
-  events.onerror = () => { const dot = document.getElementById("live-dot"); dot.classList.remove("on"); dot.title = "disconnected"; setStatus("disconnected from treaty; retrying…", true); };
+  events.onerror = () => {
+    const dot = document.getElementById("live-dot"); dot.classList.remove("on"); dot.title = "disconnected"; setStatus("disconnected from treaty; retrying…", true);
+    if (events.readyState === EventSource.CLOSED) setTimeout(followEvents, 2000);
+  };
 }
