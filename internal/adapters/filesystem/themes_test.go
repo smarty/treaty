@@ -16,7 +16,7 @@ func TestThemesInstallAndDetect(t *testing.T) {
 
 	// Before any server has started, the built-in defaults are there.
 	list, err := themes.Themes()
-	if err != nil || len(list) != 18 || !list[0].Default {
+	if err != nil || len(list) != 21 || !list[0].Default {
 		t.Fatalf("built-in themes: %d %v", len(list), err)
 	}
 
@@ -56,7 +56,7 @@ func TestThemesInstallAndDetect(t *testing.T) {
 
 	var manifest themeManifest
 	data, _ := os.ReadFile(filepath.Join(dir, ThemeManifest))
-	if json.Unmarshal(data, &manifest) != nil || len(manifest.Defaults) != 18 || !slices.Contains(manifest.Defaults, "light.json") || slices.Contains(manifest.Defaults, "retired.json") {
+	if json.Unmarshal(data, &manifest) != nil || len(manifest.Defaults) != 21 || !slices.Contains(manifest.Defaults, "light.json") || slices.Contains(manifest.Defaults, "retired.json") {
 		t.Errorf("manifest: %s", data)
 	}
 
@@ -71,12 +71,12 @@ func TestThemesInstallAndDetect(t *testing.T) {
 	// Any name that is not a default's is the person's own, listed last.
 	writeTheme(t, dir, "sunrise.json", `{"name": "Sunrise", "group": "style", "colors": {"bg": "#fff7e6"}}`)
 	list, _ = themes.Themes()
-	if len(list) != 20 {
+	if len(list) != 23 {
 		t.Fatalf("themes: %d", len(list))
 	}
 
 	var yours []string
-	for _, theme := range list[18:] {
+	for _, theme := range list[21:] {
 		if theme.Default || theme.Group != "yours" {
 			t.Errorf("a person's theme must be theirs, whatever group it claims: %+v", theme)
 		}

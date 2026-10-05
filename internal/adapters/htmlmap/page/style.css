@@ -77,9 +77,9 @@ main#workspace { position: relative; display: grid; grid-template-columns: var(-
 .map-panel .map-wrap { flex: 1; min-height: 0; }
 .map-wrap[hidden], .symbol-tree[hidden] { display: none; }
 /* The map's own views. They belong to the map panel and go wherever it goes,
-   so they stay put and can't be dragged like the workspace's tabs. */
+   so dragging one only reorders them; it can't dock like the workspace's tabs. */
 .map-tabs { display: flex; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
-.map-tab { font-size: 12px; padding: 2px 12px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--muted); }
+.map-tab { font-size: 12px; padding: 2px 12px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--muted); -webkit-user-select: none; user-select: none; touch-action: none; }
 .map-tab[aria-selected="true"] { background: var(--bg); border-color: var(--line); color: var(--ink); font-weight: 600; }
 .stack-empty { color: var(--muted); font-size: 12px; padding: 16px; }
 /* The symbols view: a column per level, the chosen item alone in its column
@@ -107,6 +107,8 @@ main#workspace { position: relative; display: grid; grid-template-columns: var(-
 .float-resize { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--line) 50%); }
 .drop-hint { position: absolute; z-index: 7; pointer-events: none; background: color-mix(in srgb, var(--focus) 16%, transparent); border: 2px solid var(--focus); border-radius: 6px; }
 .drop-hint[hidden] { display: none; }
+/* Dropping a tab among other tabs previews as a line where it lands. */
+.drop-hint.line { background: var(--focus); border: 0; border-radius: 2px; }
 .tab-ghost { position: fixed; z-index: 20; pointer-events: none; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: var(--panel); color: var(--ink); border: 1px solid var(--focus); box-shadow: 0 4px 12px rgba(0,0,0,.3); }
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 0 10px; }
 .queue-item { display: grid; grid-template-columns: 22px 1fr; gap: 6px; padding: 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }

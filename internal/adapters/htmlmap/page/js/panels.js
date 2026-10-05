@@ -7,11 +7,13 @@
 // ---- Panels and docking ----
 // The workspace is a layout of tab stacks: drawers on the left, right and
 // bottom, the center around the map, and floating windows above it. Every
-// panel is in exactly one stack. Dragging a tab moves its panel: onto a
-// stack's middle merges it there, onto a drawer stack's near edge splits the
-// drawer, onto the workspace's edge docks it in that drawer, and anywhere
-// else floats it. The map moves like any other panel, and the center may be
-// left empty. The layout, with the map view shown, is remembered per browser.
+// panel is in exactly one stack. Dragging a tab moves its panel: onto a tab
+// bar puts it there among the tabs, at the insertion line, which reorders a
+// stack's own tabs; onto a stack's middle merges it there, onto a drawer
+// stack's near edge splits the drawer, onto the workspace's edge docks it in
+// that drawer, and anywhere else floats it. The map moves like any other
+// panel, and the center may be left empty. The layout, with the map view
+// shown and the order of the map's views, is remembered per browser.
 const PANELS = { map: { title: "Map", float: { w: 640, h: 480 } }, queue: { title: "Review queue" }, inspector: { title: "Inspector" }, code: { title: "Code" }, tests: { title: "Tests" } };
 const MAP_TABS = { references: "References", files: "Files", symbols: "Symbols" };
 const LAYOUT_KEY = "treaty.layout.v1";
@@ -25,6 +27,7 @@ function defaultLayout() {
     center: { tabs: ["map"], active: "map" },
     floating: [],
     mapTab: "references",
+    mapOrder: Object.keys(MAP_TABS),
   };
 }
 // loadLayout reads the remembered layout and repairs it: unknown or repeated
@@ -37,6 +40,8 @@ function loadLayout(layout) {
   const seen = new Set();
   const keep = stack => { stack.tabs = (stack.tabs || []).filter(id => PANELS[id] && !seen.has(id) && seen.add(id)); if (!stack.tabs.includes(stack.active)) stack.active = stack.tabs[0]; return stack.tabs.length > 0; };
   if (!MAP_TABS[layout.mapTab]) layout.mapTab = "references";
+  const order = Array.isArray(layout.mapOrder) ? layout.mapOrder.filter((tab, i, all) => MAP_TABS[tab] && all.indexOf(tab) === i) : [];
+  layout.mapOrder = [...order, ...Object.keys(MAP_TABS).filter(tab => !order.includes(tab))];
   keep(layout.center);
   for (const side of SIDES) layout[side].stacks = layout[side].stacks.filter(keep);
   layout.floating = layout.floating.filter(keep);
@@ -77,6 +82,7 @@ function renderLayout() {
   center.innerHTML = "";
   center.appendChild(stackEl(dock.center, { side: "center" }));
   for (const float of dock.floating) ws.appendChild(floatEl(float));
+  orderMapTabs();
   saveLayout();
   layoutChanged();
 }
@@ -87,7 +93,7 @@ function stackEl(stack, where) {
   const bar = h("div", { class: "tabbar", role: "tablist" });
   for (const id of stack.tabs) {
     const active = id === stack.active;
-    const tab = h("button", { class: "tab" + (active ? " active" : ""), type: "button", role: "tab", "aria-selected": String(active), "data-tab": id, title: `${PANELS[id].title}: drag to move` }, PANELS[id].title);
+    const tab = h("button", { class: "tab" + (active ? " active" : ""), type: "button", role: "tab", "aria-selected": String(active), "data-tab": id, title: `${PANELS[id].title}: drag to reorder or move` }, PANELS[id].title);
     tab.addEventListener("click", () => { if (stack.active !== id) { stack.active = id; renderLayout(); } });
     tab.addEventListener("pointerdown", ev => startTabDrag(ev, id, stack));
     bar.appendChild(tab);
@@ -145,12 +151,59 @@ function startTabDrag(ev, id, source) {
     showHint(target);
   }, () => {
     if (!ghost) return;
-    ghost.remove(); showHint(null);
-    // The click that ends a drag must not also activate a tab.
-    const swallow = e => { e.stopPropagation(); window.removeEventListener("click", swallow, true); };
-    window.addEventListener("click", swallow, true); setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+    ghost.remove(); showHint(null); swallowClick();
     if (target) moveTab(id, source, target);
   });
+}
+// swallowClick keeps the click that ends a drag from also activating a tab.
+function swallowClick() {
+  const swallow = e => { e.stopPropagation(); window.removeEventListener("click", swallow, true); };
+  window.addEventListener("click", swallow, true); setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+}
+// insertionAt finds where a tab dropped at x lands among a bar's other tabs,
+// before the first whose middle is right of x, and the line that previews it.
+function insertionAt(bar, others, x) {
+  let index = others.findIndex(tab => { const r = tab.getBoundingClientRect(); return x < r.left + r.width / 2; });
+  if (index < 0) index = others.length;
+  const b = bar.getBoundingClientRect();
+  const at = index < others.length ? others[index].getBoundingClientRect().left - 1 : others.length ? others[others.length - 1].getBoundingClientRect().right + 1 : b.left + 6;
+  return { index, rect: { left: at - 1.5, top: b.top + 2, width: 3, height: b.height - 4 }, line: true };
+}
+// dragToReorder lets the tabs in a bar be dragged into a new order, with the
+// same ghost and insertion line as panel tabs, for tabs that cannot dock.
+// onOrder gets the tabs in their new order.
+function dragToReorder(bar, selector, onOrder) {
+  bar.addEventListener("pointerdown", ev => {
+    const tab = ev.target.closest(selector);
+    if (!tab || ev.button !== 0 || tab.parentElement !== bar) return;
+    const start = { x: ev.clientX, y: ev.clientY };
+    const others = () => [...bar.querySelectorAll(":scope > " + selector)].filter(other => other !== tab);
+    let ghost = null, target = null;
+    track(e => {
+      if (!ghost) {
+        if (Math.hypot(e.clientX - start.x, e.clientY - start.y) < DRAG_START) return;
+        ghost = h("div", { class: "tab-ghost" }, tab.textContent);
+        document.body.appendChild(ghost);
+      }
+      Object.assign(ghost.style, { left: e.clientX + 12 + "px", top: e.clientY + 8 + "px" });
+      const r = bar.getBoundingClientRect(), rest = others();
+      target = e.clientY >= r.top - 12 && e.clientY <= r.bottom + 12 ? insertionAt(bar, rest, e.clientX) : null;
+      if (target && [...bar.querySelectorAll(":scope > " + selector)].indexOf(tab) === target.index) target = null;
+      showHint(target);
+    }, () => {
+      if (!ghost) return;
+      ghost.remove(); showHint(null); swallowClick();
+      if (!target) return;
+      const rest = others();
+      rest.splice(target.index, 0, tab);
+      onOrder(rest);
+    });
+  });
+}
+// orderMapTabs puts the map's view tabs in the remembered order.
+function orderMapTabs() {
+  const bar = document.querySelector(".map-tabs");
+  for (const tab of dock.mapOrder) bar.appendChild(bar.querySelector(`[data-map-tab="${tab}"]`));
 }
 // dropTarget decides what releasing a dragged tab at a point would do, and
 // the screen rectangle to preview it with.
@@ -158,6 +211,15 @@ function dropTarget(x, y, source, id) {
   const ws = workspaceRect();
   const inside = r => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   if (!inside(ws)) return null;
+  // A tab bar takes the tab among its tabs, even at the workspace's edge.
+  const under = document.elementFromPoint(x, y), bar = under && under.closest("#workspace .tabbar");
+  if (bar) {
+    const stack = bar.closest(".stack").stackRef, others = [...bar.querySelectorAll(".tab")].filter(tab => tab.dataset.tab !== id);
+    const slot = insertionAt(bar, others, x);
+    // Back where it was is no move.
+    if (stack === source && source.tabs.indexOf(id) === slot.index) return null;
+    return { kind: "insert", stack, ...slot };
+  }
   for (const node of [...document.querySelectorAll("#workspace .float")].reverse()) {
     const r = node.getBoundingClientRect();
     if (inside(r)) return node.stackRef === source ? null : { kind: "merge", stack: node.stackRef, rect: r };
@@ -185,6 +247,7 @@ function showHint(target) {
   const hint = document.getElementById("drop-hint");
   hint.hidden = !target;
   if (!target) return;
+  hint.classList.toggle("line", !!target.line);
   const ws = workspaceRect(), r = target.rect;
   Object.assign(hint.style, { left: r.left - ws.left + "px", top: r.top - ws.top + "px", width: r.width + "px", height: r.height + "px" });
 }
@@ -193,6 +256,7 @@ function moveTab(id, source, target) {
   if (source.active === id) source.active = source.tabs[0];
   const stack = { tabs: [id], active: id, weight: 1 };
   if (target.kind === "merge") { target.stack.tabs.push(id); target.stack.active = id; }
+  else if (target.kind === "insert") { target.stack.tabs.splice(target.index, 0, id); target.stack.active = id; }
   else if (target.kind === "split") dock[target.side].stacks.splice(target.index, 0, stack);
   else if (target.kind === "dock") dock[target.side].stacks.push(stack);
   else dock.floating.push({ ...stack, x: target.x, y: target.y, w: target.rect.width, h: target.rect.height });
@@ -253,12 +317,13 @@ renderLayout();
 for (const button of document.querySelectorAll(".map-tab")) {
   button.addEventListener("click", () => setMapTab(button.dataset.mapTab));
   button.addEventListener("keydown", ev => {
-    const order = Object.keys(MAP_TABS), step = { ArrowRight: 1, ArrowLeft: -1 }[ev.key]; if (!step) return;
+    const order = dock.mapOrder, step = { ArrowRight: 1, ArrowLeft: -1 }[ev.key]; if (!step) return;
     ev.preventDefault();
     const next = order[(order.indexOf(state.mapTab) + step + order.length) % order.length];
     setMapTab(next); document.querySelector(`[data-map-tab="${next}"]`).focus();
   });
 }
+dragToReorder(document.querySelector(".map-tabs"), ".map-tab", tabs => { dock.mapOrder = tabs.map(tab => tab.dataset.mapTab); orderMapTabs(); saveLayout(); });
 setMapTab(dock.mapTab, false);
 
 buildLegend();

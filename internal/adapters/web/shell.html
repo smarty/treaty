@@ -17,13 +17,17 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 syst
 nav { display: flex; align-items: stretch; gap: 2px; padding: 0 12px; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; flex: none; }
 nav h1 { font-size: 15px; margin: 0 12px 0 0; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 nav h1 svg { width: 18px; height: 18px; }
-.tab { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px 6px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.tab { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px 6px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; -webkit-user-select: none; user-select: none; touch-action: none; }
 .tab:hover { color: var(--ink); }
 .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
 .tab:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .tab .mark { width: 7px; height: 7px; border-radius: 50%; background: var(--claude); }
 .tab .mark.new { background: var(--accent); }
 .tab .mark[hidden] { display: none; }
+/* Dragging a tab shows it under the pointer and a line where it would land. */
+.ghost { position: fixed; z-index: 20; pointer-events: none; font-size: 13px; padding: 4px 10px; border-radius: 6px; background: var(--panel); color: var(--ink); border: 1px solid var(--focus); box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+.insert { position: fixed; z-index: 20; pointer-events: none; width: 3px; border-radius: 2px; background: var(--focus); }
+.insert[hidden] { display: none; }
 .status { margin-left: auto; align-self: center; font-size: 12px; color: var(--high); white-space: nowrap; padding-left: 12px; }
 main { flex: 1; position: relative; min-height: 0; }
 iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); }
@@ -39,20 +43,24 @@ iframe[hidden] { display: block; visibility: hidden; }
   <div id="tabs" role="tablist" aria-label="Open projects" style="display: contents"></div>
   <span class="status" id="status" role="status"></span>
 </nav>
+<div class="insert" id="insert" hidden></div>
 <main id="frames">
   <p class="empty" id="empty">No project is open. Start Claude Code in a repository where treaty here has run, or run treaty serve there.</p>
 </main>
 <script>
-// A tab per open project, in the order they opened. A project's frame loads
+// A tab per open project, in the order they opened until the person drags
+// them into another, which this browser remembers. A project's frame loads
 // the first time its tab is shown and stays loaded while the project is
 // open, so switching back keeps where the person was. A project opened
 // since the page loaded is marked until it is shown, and a hidden project
 // whose agent points at something is marked the same way in Claude's color.
 const LATEST = /*LATEST*/"";
-const POLL_MS = 2000;
+const POLL_MS = 2000, DRAG_START = 5, ORDER_KEY = "treaty.projects.order";
 const tabs = document.getElementById("tabs"), frames = document.getElementById("frames");
 const open = new Map();
 let active = "", firstList = true, wanted = new URLSearchParams(location.search).get("p") || "", hash = location.hash;
+let order = [];
+try { order = JSON.parse(localStorage.getItem(ORDER_KEY)) || []; } catch (err) { /* storage unavailable */ }
 
 function frameURL(slug) { return "p/" + encodeURIComponent(slug) + "/"; }
 
@@ -88,6 +96,7 @@ function add(info) {
   label.textContent = info.name;
   tab.append(mark, label);
   tab.addEventListener("click", ev => { show(info.slug); if (ev.detail > 0) open.get(info.slug).frame.focus(); });
+  tab.addEventListener("pointerdown", ev => drag(ev, info.slug));
   tabs.appendChild(tab);
   open.set(info.slug, { info, tab, mark, frame: null, theme: null });
 }
@@ -105,6 +114,7 @@ function sync(list) {
   const slugs = new Set(list.map(p => p.slug));
   for (const slug of [...open.keys()]) if (!slugs.has(slug)) remove(slug);
   for (const info of list) if (!open.has(info.slug)) add(info);
+  arrange();
   firstList = false;
   document.getElementById("empty").hidden = open.size > 0;
   if (!open.size) { active = ""; document.title = "Treaty"; return; }
@@ -112,6 +122,65 @@ function sync(list) {
   const choice = [wanted, LATEST].find(slug => open.has(slug)) || list[list.length - 1].slug;
   wanted = "";
   show(choice);
+}
+
+// arrange puts the tabs in the remembered order. Projects it has no place
+// for keep the order they opened in, after the rest. Tabs already in order
+// stay put, since moving a tab would take its focus.
+function arrange() {
+  const rank = slug => { const at = order.indexOf(slug); return at < 0 ? order.length : at; };
+  const sorted = [...open].sort(([a], [b]) => rank(a) - rank(b));
+  if (sorted.every(([, project], i) => tabs.children[i] === project.tab)) return;
+  const focused = document.activeElement;
+  open.clear();
+  for (const [slug, project] of sorted) { open.set(slug, project); tabs.appendChild(project.tab); }
+  if (focused && focused !== document.activeElement && tabs.contains(focused)) focused.focus();
+}
+
+// drag moves a project's tab to where it is dropped among the others. The
+// new order goes first in the remembered one, ahead of closed projects.
+function drag(ev, slug) {
+  if (ev.button !== 0) return;
+  const start = { x: ev.clientX, y: ev.clientY }, tab = open.get(slug).tab, line = document.getElementById("insert");
+  const others = () => [...open.keys()].filter(key => key !== slug);
+  let ghost = null, index = -1;
+  const move = e => {
+    if (!ghost) {
+      if (Math.hypot(e.clientX - start.x, e.clientY - start.y) < DRAG_START) return;
+      ghost = document.createElement("div");
+      ghost.className = "ghost"; ghost.textContent = open.get(slug).info.name;
+      document.body.appendChild(ghost);
+    }
+    Object.assign(ghost.style, { left: e.clientX + 12 + "px", top: e.clientY + 8 + "px" });
+    const bar = tabs.parentElement.getBoundingClientRect(), rest = others().map(key => open.get(key).tab.getBoundingClientRect());
+    index = -1;
+    if (e.clientY >= bar.top - 12 && e.clientY <= bar.bottom + 12) {
+      index = rest.findIndex(r => e.clientX < r.left + r.width / 2);
+      if (index < 0) index = rest.length;
+      if ([...open.keys()].indexOf(slug) === index) index = -1;
+    }
+    line.hidden = index < 0;
+    if (index < 0) return;
+    const at = index < rest.length ? rest[index].left - 1 : rest.length ? rest[rest.length - 1].right + 1 : tab.getBoundingClientRect().left;
+    Object.assign(line.style, { left: at - 1.5 + "px", top: bar.top + 4 + "px", height: bar.height - 8 + "px" });
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
+    if (!ghost) return;
+    ghost.remove(); line.hidden = true;
+    // The click that ends a drag must not also show the tab.
+    const swallow = e => { e.stopPropagation(); window.removeEventListener("click", swallow, true); };
+    window.addEventListener("click", swallow, true); setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+    if (index < 0) return;
+    const slugs = others();
+    slugs.splice(index, 0, slug);
+    order = [...slugs, ...order.filter(key => !open.has(key))];
+    try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)); } catch (err) { /* storage unavailable */ }
+    arrange();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
 }
 
 async function poll() {

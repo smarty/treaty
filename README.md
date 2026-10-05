@@ -185,7 +185,9 @@ Then `treaty.yaml` is replaced with the proposal.
 
 The review queue and the inspector are tabs in drawers beside the map. Drag
 a divider to resize a drawer. Drag a tab to move its panel into another
-drawer, split a drawer, join the map as a tab, or float it over the map.
+drawer, split a drawer, join the map as a tab, or float it over the map;
+drop it on a tab bar to put it among those tabs, which also reorders them.
+The map's views and the project tabs reorder the same way, but don't dock.
 *Reset layout* restores the default.
 Click a file's cell to select it, just like a module or symbol: the
 inspector shows the file's code and its agent context slice, and a symbol
@@ -214,10 +216,11 @@ up, and the tip says what a drop will do. Escape puts the module back.
   classifies it. Moves between layers wait while another architecture is
   previewed.
 
-The Theme menu offers System (following your OS) and 18 themes: Light and
+The Theme menu offers System (following your OS) and 21 themes: Light and
 Dark in the style of VS Code's defaults; High Contrast and Color-blind Safe
 versions of each for accessibility; and Dawn, Dusk, Fjord, Vampire, Harvest,
-Blossom, Great Wave, Gumdrop, Gumdrop Light, Neon Rain, Comic and Midnight.
+Blossom, Great Wave, Gumdrop, Gumdrop Light, Neon Rain, Comic, Midnight, DOS
+(dark), DOS (light) and Windows 3.x.
 Themes are JSON files in `~/.treaty/themes/`. Treaty rewrites its own there
 every time a server starts, so copy one to a new name to make your own; any
 other `.json` file there shows up in the menu under Yours.
