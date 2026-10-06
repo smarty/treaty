@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/smarty/treaty/internal/graph"
 	"github.com/smarty/treaty/internal/rules"
 )
 
@@ -135,7 +134,7 @@ type Live struct {
 	version     int
 	failure     string
 	fingerprint string
-	bases       map[string]baseRevision
+	bases       map[string]revision
 	baseOrder   []string
 	subscribers map[chan LiveState]bool
 	pointer     *Pointer
@@ -162,7 +161,7 @@ func NewLive(service *Service, watcher Watcher) *Live {
 		service:     service,
 		watcher:     watcher,
 		baseline:    Baseline{Mode: BaselineHead},
-		bases:       map[string]baseRevision{},
+		bases:       map[string]revision{},
 		subscribers: map[chan LiveState]bool{},
 		showEvery:   ShowEvery,
 		adoptAfter:  AdoptAfter,
@@ -494,28 +493,24 @@ func (this *Live) UseTests(tests *Tests) {
 	})
 }
 
-// baseRevision is a cached baseline: its graph and the text of its files,
-// which are only read.
-type baseRevision struct {
-	graph   *graph.Graph
-	sources map[string]string
-}
-
-func (this *Live) baseGraph(commit string) (*graph.Graph, map[string]string, error) {
+// baseGraph returns a baseline's revision, cached by commit. The graph is a
+// copy, since an analysis assigns its layers; its sources and tests are
+// only read.
+func (this *Live) baseGraph(commit string) (revision, error) {
 	this.mutex.Lock()
 	cached, ok := this.bases[commit]
 	this.mutex.Unlock()
 	if ok {
-		return cached.graph.Clone(), cached.sources, nil
+		return revision{graph: cached.graph.Clone(), sources: cached.sources, tests: cached.tests}, nil
 	}
 
-	built, sources, err := this.service.graphAt(commit)
+	built, err := this.service.graphAt(commit)
 	if err != nil {
-		return nil, nil, err
+		return revision{}, err
 	}
 
 	this.mutex.Lock()
-	this.bases[commit] = baseRevision{graph: built, sources: sources}
+	this.bases[commit] = built
 	this.baseOrder = append(this.baseOrder, commit)
 	if len(this.baseOrder) > cachedBases {
 		delete(this.bases, this.baseOrder[0])
@@ -523,7 +518,7 @@ func (this *Live) baseGraph(commit string) (*graph.Graph, map[string]string, err
 	}
 
 	this.mutex.Unlock()
-	return built.Clone(), sources, nil
+	return revision{graph: built.graph.Clone(), sources: built.sources, tests: built.tests}, nil
 }
 
 // build analyzes the working tree against a baseline. The analysis follows
@@ -540,27 +535,27 @@ func (this *Live) build(baseline Baseline, preview string) (*analysis, []byte, e
 		return nil, nil, err
 	}
 
-	var base *graph.Graph
-	var baseSources map[string]string
+	var base revision
 	if baseline.Commit != "" {
-		if base, baseSources, err = this.baseGraph(baseline.Commit); err != nil {
+		if base, err = this.baseGraph(baseline.Commit); err != nil {
 			return nil, nil, err
 		}
 	}
 
-	result := this.service.analyzeGraphs(config, head, base, baseline.Label)
-	result.baseSources = baseSources
+	current := revision{graph: head, tests: this.service.discover(this.service.root, head)}
+	result := this.service.analyzeGraphs(config, current, base, baseline.Label)
+	result.baseSources = base.sources
 	shown := result
 	if preview != "" && preview != config.Architecture.Style {
 		fitted := config
 		fitted.Architecture, _ = propose(head, preview)
-		var previewBase *graph.Graph
-		if base != nil {
-			previewBase = base.Clone()
+		previewBase := base
+		if base.graph != nil {
+			previewBase.graph = base.graph.Clone()
 		}
 
-		shown = this.service.analyzeGraphs(fitted, head.Clone(), previewBase, baseline.Label)
-		shown.baseSources = baseSources
+		shown = this.service.analyzeGraphs(fitted, revision{graph: head.Clone(), tests: current.tests}, previewBase, baseline.Label)
+		shown.baseSources = base.sources
 	}
 
 	designs, err := this.service.workspace.Designs()

@@ -21,6 +21,7 @@ type Service struct {
 	extractor   SourceExtractor
 	renderer    MapRenderer
 	preferences PreferenceStore
+	suites      []TestSuite
 	themes      ThemeSource
 	vcs         VersionControl
 	workspace   Workspace
@@ -38,9 +39,20 @@ type analysis struct {
 	baseMetrics map[string]rules.Metric
 	findings    []rules.Finding
 
+	// proofs is what the head tree's tests show about each contract.
+	proofs map[string]rules.ContractProof
+
 	// baseSources holds the text of the base tree's files, keyed by path,
 	// so the map can show how a symbol's code changed.
 	baseSources map[string]string
+}
+
+// revision is one tree's graph with what is read beside it: the text of its
+// files and its tests.
+type revision struct {
+	graph   *graph.Graph
+	sources map[string]string
+	tests   []rules.TestUse
 }
 
 // NewService wires the use cases to their adapters.
@@ -79,6 +91,15 @@ func NewService(root string, config ConfigSource, extractor SourceExtractor, dia
 	}
 }
 
+// UseTestSuites sets the test suites whose tests show what each contract
+// proves. Without any, no module is measured.
+//
+// Parameters:
+//   - suites: one suite per language whose tests can be found.
+func (this *Service) UseTestSuites(suites ...TestSuite) {
+	this.suites = suites
+}
+
 func (this *Service) analyze(baseRef string) (*analysis, error) {
 	config, _, err := this.config.Load()
 	if err != nil {
@@ -90,33 +111,39 @@ func (this *Service) analyze(baseRef string) (*analysis, error) {
 		return nil, err
 	}
 
-	var base *graph.Graph
-	var baseSources map[string]string
+	var base revision
 	if baseRef != "" {
-		if base, baseSources, err = this.graphAt(baseRef); err != nil {
+		if base, err = this.graphAt(baseRef); err != nil {
 			return nil, err
 		}
 	}
 
-	result := this.analyzeGraphs(config, head, base, baseRef)
-	result.baseSources = baseSources
+	result := this.analyzeGraphs(config, revision{graph: head, tests: this.discover(this.root, head)}, base, baseRef)
+	result.baseSources = base.sources
 	return result, nil
 }
 
-// analyzeGraphs scores a head graph, and its diff from base when base is
-// not nil. It assigns layers to both graphs.
-func (this *Service) analyzeGraphs(config Config, head, base *graph.Graph, baseRef string) *analysis {
-	result := &analysis{config: config, head: head, base: base, baseRef: baseRef}
-	config.Architecture.Assign(head)
-	result.violations = config.Architecture.Violations(head)
-	result.metrics = rules.Metrics(head)
-	if base != nil {
-		config.Architecture.Assign(base)
-		result.baseMetrics = rules.Metrics(base)
-		result.changes = rules.Classify(base, head, this.compatible)
+// analyzeGraphs scores a head graph, and its diff from base when base has a
+// graph. It assigns layers to both graphs.
+func (this *Service) analyzeGraphs(config Config, head, base revision, baseRef string) *analysis {
+	result := &analysis{config: config, head: head.graph, base: base.graph, baseRef: baseRef}
+	measured := map[string]bool{}
+	for _, suite := range this.suites {
+		measured[suite.Language()] = true
 	}
 
-	result.findings = rules.Rank(head, base, result.changes, result.violations)
+	config.Architecture.Assign(head.graph)
+	result.violations = config.Architecture.Violations(head.graph)
+	result.metrics = rules.Metrics(head.graph)
+	result.proofs = rules.Proof(head.graph, head.tests, measured, result.metrics)
+	if base.graph != nil {
+		config.Architecture.Assign(base.graph)
+		result.baseMetrics = rules.Metrics(base.graph)
+		rules.Proof(base.graph, base.tests, measured, result.baseMetrics)
+		result.changes = rules.Classify(base.graph, head.graph, this.compatible)
+	}
+
+	result.findings = rules.Rank(head.graph, base.graph, result.changes, result.violations)
 	return result
 }
 
@@ -139,26 +166,16 @@ func (this *Service) dialect(language string) (Dialect, error) {
 	return dialect, nil
 }
 
-// graphAt builds the graph of the tree at a ref, with the text of its
-// files, which are gone once the materialized tree is cleaned up. The
-// working tree, at an empty ref, needs no copy of its text.
-func (this *Service) graphAt(ref string) (result *graph.Graph, sources map[string]string, err error) {
-	if ref == "" {
-		result, err = this.extractor.Extract(this.root)
-		return result, nil, err
+// discover finds the tests of the tree at root with every test suite. A
+// suite that cannot read the tree finds nothing, which leaves its
+// contracts without examples rather than failing the analysis.
+func (this *Service) discover(root string, g *graph.Graph) (result []rules.TestUse) {
+	for _, suite := range this.suites {
+		cases, _ := suite.Discover(root, g)
+		result = append(result, testUses(cases)...)
 	}
 
-	dir, cleanup, err := this.vcs.Materialize(ref)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	defer cleanup()
-	if result, err = this.extractor.Extract(dir); err != nil {
-		return nil, nil, err
-	}
-
-	return result, this.sourcesAt(dir, result), nil
+	return result
 }
 
 // fromEntry reports whether a change moved a symbol out of an entry module,
@@ -209,4 +226,26 @@ func (this *analysis) failures() []string {
 	}
 
 	return result
+}
+
+// graphAt builds the graph of the tree at a ref, with its tests and the
+// text of its files, which are gone once the materialized tree is cleaned
+// up. The working tree, at an empty ref, needs neither.
+func (this *Service) graphAt(ref string) (result revision, err error) {
+	if ref == "" {
+		result.graph, err = this.extractor.Extract(this.root)
+		return result, err
+	}
+
+	dir, cleanup, err := this.vcs.Materialize(ref)
+	if err != nil {
+		return revision{}, err
+	}
+
+	defer cleanup()
+	if result.graph, err = this.extractor.Extract(dir); err != nil {
+		return revision{}, err
+	}
+
+	return revision{graph: result.graph, sources: this.sourcesAt(dir, result.graph), tests: this.discover(dir, result.graph)}, nil
 }

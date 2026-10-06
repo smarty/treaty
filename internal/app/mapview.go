@@ -64,7 +64,8 @@ type MapModule struct {
 
 // MapSymbol is one symbol node on the map. Diff is how its code changed
 // since the base, line by line; Removed marks a symbol only the base has,
-// drawn where it was.
+// drawn where it was. Proof is what the tests show about a contract in a
+// module whose tests Treaty can find.
 type MapSymbol struct {
 	ID        string `json:"id"`
 	Module    string `json:"module"`
@@ -82,7 +83,8 @@ type MapSymbol struct {
 	Removed   bool   `json:"removed,omitempty"`
 	Slice     *Slice `json:"slice,omitempty"`
 
-	Diff []DiffLine `json:"diff,omitempty"`
+	Diff  []DiffLine           `json:"diff,omitempty"`
+	Proof *rules.ContractProof `json:"proof,omitempty"`
 }
 
 // MapView is everything the renderer draws, built in the same run.
@@ -257,6 +259,10 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 		}
 
 		entry.Diff = codeDiff(analysis, changes[symbol.ID], symbol, view.Sources)
+		if proof, ok := analysis.proofs[symbol.ID]; ok {
+			entry.Proof = &proof
+		}
+
 		view.Symbols = append(view.Symbols, entry)
 	}
 

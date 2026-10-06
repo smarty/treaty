@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/smarty/treaty/internal/graph"
+	"github.com/smarty/treaty/internal/rules"
 )
 
 const (
@@ -39,13 +40,26 @@ type LineCoverage struct {
 	Uncovered []int `json:"uncovered"`
 }
 
+// RunCoverage is what one run measured. Lines are the lines it covered and
+// missed, by file. Probes are what instrumentation counted in each file it
+// instrumented; Hits are, by test id, the probes of each file the test
+// reached; and Shared marks a test whose run overlapped another's. A run
+// that could not be instrumented has only Lines.
+type RunCoverage struct {
+	Lines  map[string]LineCoverage
+	Probes map[string][]rules.Probe
+	Hits   map[string]map[string][]int
+	Shared map[string]bool
+}
+
 // TestCase is one test a suite found. ID is its module's id and its name,
-// joined by "#". Targets are the symbols the test uses, directly or through
-// helpers in its own test files.
+// joined by "#". Kind is test, fuzz or example. Targets are the symbols the
+// test uses, directly or through helpers in its own test files.
 type TestCase struct {
 	ID      string   `json:"id"`
 	Module  string   `json:"module"`
 	Name    string   `json:"name"`
+	Kind    string   `json:"kind"`
 	File    string   `json:"file"`
 	Line    int      `json:"line"`
 	Targets []string `json:"targets,omitempty"`
@@ -65,13 +79,23 @@ type TestOutcome struct {
 // TestReport is everything the map shows about tests: what exists, how the
 // latest runs went and which lines they covered. Coverage is left out for a
 // file that changed since it was covered, since its lines no longer match.
+//
+// Measures are what the runs reached of each module and contract, counting
+// only files whose probes still match their text.
 type TestReport struct {
 	Version  int                     `json:"version"`
 	Running  bool                    `json:"running"`
 	Tests    []TestCase              `json:"tests"`
 	Results  map[string]TestOutcome  `json:"results"`
 	Coverage map[string]LineCoverage `json:"coverage"`
+	Measures *Measures               `json:"measures,omitempty"`
 	Error    string                  `json:"error,omitempty"`
+}
+
+// Measures are what test runs reached, by module id and by contract id.
+type Measures struct {
+	Modules   map[string]rules.Exercised `json:"modules"`
+	Contracts map[string]rules.Exercised `json:"contracts"`
 }
 
 // TestRequest asks a suite to run tests in one module: the named ones, or
@@ -97,6 +121,7 @@ type Tests struct {
 	mutex    sync.Mutex
 	results  map[string]TestOutcome
 	coverage map[string]coveredFile
+	shared   map[string]bool
 	running  bool
 	cancel   context.CancelFunc
 	runError string
@@ -106,10 +131,13 @@ type Tests struct {
 }
 
 // coveredFile is the coverage of one file's text, identified by its hash:
-// for every line holding a statement, whether some run executed it.
+// for every line holding a statement, whether some run executed it, and,
+// when a run instrumented it, its probes and those each test reached.
 type coveredFile struct {
-	hash  string
-	lines map[int]bool
+	hash   string
+	lines  map[int]bool
+	probes []rules.Probe
+	hits   map[string][]int
 }
 
 // NewTests creates the test bench for a repository.
@@ -127,7 +155,7 @@ func NewTests(root string, sources SourceExtractor, suites []TestSuite) *Tests {
 		byLanguage[suite.Language()] = suite
 	}
 
-	return &Tests{root: root, sources: sources, suites: byLanguage, results: map[string]TestOutcome{}, coverage: map[string]coveredFile{}}
+	return &Tests{root: root, sources: sources, suites: byLanguage, results: map[string]TestOutcome{}, coverage: map[string]coveredFile{}, shared: map[string]bool{}}
 }
 
 // OnChange registers a function called, at most every notifyEvery, after
@@ -158,8 +186,10 @@ func (this *Tests) Report(g *graph.Graph) (result TestReport) {
 	}
 
 	type snapshot struct {
-		hash  string
-		lines LineCoverage
+		hash   string
+		lines  LineCoverage
+		probes []rules.Probe
+		hits   map[string][]int
 	}
 
 	covered := make(map[string]snapshot, len(this.coverage))
@@ -173,7 +203,12 @@ func (this *Tests) Report(g *graph.Graph) (result TestReport) {
 			}
 		}
 
-		covered[file] = snapshot{hash: each.hash, lines: lines}
+		covered[file] = snapshot{hash: each.hash, lines: lines, probes: each.probes, hits: each.hits}
+	}
+
+	shared := make(map[string]bool, len(this.shared))
+	for id, overlapped := range this.shared {
+		shared[id] = overlapped
 	}
 
 	this.mutex.Unlock()
@@ -181,6 +216,7 @@ func (this *Tests) Report(g *graph.Graph) (result TestReport) {
 		result.Error = failure
 	}
 
+	probes, hits := map[string][]rules.Probe{}, map[string]map[string][]int{}
 	for file, each := range covered {
 		if this.hash(file) != each.hash {
 			continue
@@ -189,6 +225,23 @@ func (this *Tests) Report(g *graph.Graph) (result TestReport) {
 		slices.Sort(each.lines.Covered)
 		slices.Sort(each.lines.Uncovered)
 		result.Coverage[file] = each.lines
+		if len(each.probes) == 0 {
+			continue
+		}
+
+		probes[file] = each.probes
+		for test, indexes := range each.hits {
+			if hits[test] == nil {
+				hits[test] = map[string][]int{}
+			}
+
+			hits[test][file] = indexes
+		}
+	}
+
+	if len(probes) > 0 && g != nil {
+		modules, contracts := rules.Exercise(g, testUses(cases), probes, hits, shared)
+		result.Measures = &Measures{Modules: modules, Contracts: contracts}
 	}
 
 	return result
@@ -327,16 +380,47 @@ func (this *Tests) hash(file string) string {
 }
 
 // merge adds a run's coverage to what earlier runs covered of the same text,
-// and replaces what they covered of text that has since changed.
-func (this *Tests) merge(coverage map[string]LineCoverage) {
-	hashes := make(map[string]string, len(coverage))
-	for file := range coverage {
+// and replaces what they covered of text that has since changed. A test's
+// hits in a file replace its earlier hits there, since it ran again.
+func (this *Tests) merge(coverage RunCoverage) {
+	hashes := make(map[string]string, len(coverage.Lines))
+	for file := range coverage.Lines {
 		hashes[file] = this.hash(file)
+	}
+
+	for file := range coverage.Probes {
+		if _, ok := hashes[file]; !ok {
+			hashes[file] = this.hash(file)
+		}
 	}
 
 	this.mutex.Lock()
 	defer this.mutex.Unlock()
-	for file, lines := range coverage {
+	for id, overlapped := range coverage.Shared {
+		this.shared[id] = overlapped
+	}
+
+	for file, probes := range coverage.Probes {
+		each, ok := this.coverage[file]
+		if !ok || each.hash != hashes[file] || len(each.probes) != len(probes) {
+			each = coveredFile{hash: hashes[file], lines: map[int]bool{}}
+		}
+
+		each.probes = probes
+		if each.hits == nil {
+			each.hits = map[string][]int{}
+		}
+
+		for test, files := range coverage.Hits {
+			if indexes, ok := files[file]; ok {
+				each.hits[test] = indexes
+			}
+		}
+
+		this.coverage[file] = each
+	}
+
+	for file, lines := range coverage.Lines {
 		each, ok := this.coverage[file]
 		if !ok || each.hash != hashes[file] {
 			each = coveredFile{hash: hashes[file], lines: map[int]bool{}}
@@ -499,4 +583,18 @@ func (this *Tests) touchLocked() {
 		this.mutex.Unlock()
 		changed()
 	})
+}
+
+// testUses gives the tests' ids, kinds and targets to the rules.
+func testUses(cases []TestCase) (result []rules.TestUse) {
+	for _, each := range cases {
+		id := each.ID
+		if id == "" {
+			id = each.Module + "#" + each.Name
+		}
+
+		result = append(result, rules.TestUse{ID: id, Kind: each.Kind, Targets: each.Targets})
+	}
+
+	return result
 }

@@ -46,8 +46,8 @@ document.getElementById("internals").addEventListener("change", ev => { state.in
 // Themes come with the map data: Treaty's defaults, grouped as standard,
 // accessibility and style, and any a person keeps in ~/.treaty/themes. The
 // menu offers System, which follows the operating system between the Light
-// and Dark themes, and every theme by group. Each browser remembers the
-// choice.
+// and Dark themes, and every theme by group. The choice applies to every
+// project's map, and the server and each browser remember it.
 let themeChoice = "system";
 try { themeChoice = localStorage.getItem("treaty.theme") || "system"; } catch (err) { /* storage unavailable */ }
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
@@ -96,6 +96,15 @@ document.getElementById("theme").addEventListener("change", ev => {
   applyTheme();
 });
 darkQuery.addEventListener("change", () => { if (themeChoice === "system") applyTheme(); });
+// A theme picked in another project's tab, or another window of the map,
+// reaches every open map: they share this browser's storage, which tells
+// the others when it changes.
+window.addEventListener("storage", ev => {
+  if (ev.key !== "treaty.theme") return;
+  themeChoice = ev.newValue || "system";
+  fillThemeMenu();
+  applyTheme();
+});
 const mapEl = document.getElementById("map");
 let drag = null;
 mapEl.addEventListener("wheel", ev => {

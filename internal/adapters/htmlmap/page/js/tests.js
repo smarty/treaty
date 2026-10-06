@@ -83,8 +83,11 @@ async function refreshTests() {
 // applyTests shows a report, redrawing the map only when coverage changed.
 function applyTests(report) {
   testState.shown = report.version;
+  const measures = JSON.stringify(report.measures || null), reinspect = measures !== testState.measuresKey;
+  testState.measuresKey = measures;
   if (ingestTests(report) && D) render();
-  showTests();
+  // What runs reached shows in the inspector, so it follows them.
+  if (reinspect && D && state.selected) inspect(); else showTests();
 }
 async function postTests(path, body) {
   try {
@@ -223,7 +226,7 @@ function showTests() {
   for (const text of [testState.error, report.error]) if (text) box.appendChild(h("p", { class: "tests-error" }, text));
   if (scope.header) scope.header(box);
   if (!scope.all) box.appendChild(h("h2", {}, `Tests for ${scope.title}`));
-  if (!visible.length) return note(scope.all ? "No tests found. Treaty runs Go tests: the Test and Fuzz functions of _test.go files." : `No test uses ${scope.title}.`);
+  if (!visible.length) return note(scope.all ? "No tests found. Treaty runs Go tests: the Test, Fuzz and Example functions of _test.go files." : `No test uses ${scope.title}.`);
   box.appendChild(testTree(visible, !scope.all));
 }
 // testTree lays the tests out like a file tree: directories, then each

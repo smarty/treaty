@@ -142,11 +142,14 @@ function bandOf(id) {
 function bandAt(x, y) {
   const rings = D.layout.rings || [];
   if (rings.length) {
-    const outer = rings[rings.length - 1], inner = rings[rings.length - 2];
-    if (inHex(x, y, outer.radius) && !(inner && inHex(x, y, inner.radius)) && inComposition(x, y)) return { key: "composition", layer: "composition", side: "", label: "composition", backdrop: "ring:" + outer.layer };
+    // Hexagonal draws composition as its own ring; clean shares the outer
+    // ring with it, so there a composition module's arc is the target.
+    const own = rings.some(ring => ring.layer === "composition"), sided = rings.filter(ring => ring.layer !== "composition");
+    const outer = sided[sided.length - 1], inner = sided[sided.length - 2];
+    if (!own && inHex(x, y, outer.radius) && !(inner && inHex(x, y, inner.radius)) && inComposition(x, y)) return { key: "composition", layer: "composition", side: "", label: "composition", backdrop: "ring:" + outer.layer };
     for (const ring of rings) {
-      if (!inHex(x, y, ring.radius)) continue;
-      const side = D.architecture === "hexagonal" && ring === outer ? (x < 0 ? "driving" : "driven") : "";
+      if (!inHex(x, y, ring.radius) || ring.left && x > 0) continue;
+      const side = D.architecture === "hexagonal" && ring.layer === "adapter" ? (x < 0 ? "driving" : "driven") : "";
       return { key: ring.layer + (side ? "/" + side : ""), layer: ring.layer, side, label: ring.layer.replace(/_/g, " ") + (side ? ` (${side})` : ""), backdrop: "ring:" + ring.layer };
     }
     return { key: "unclassified", layer: "unclassified", side: "", label: "unclassified", backdrop: "" };
@@ -160,7 +163,7 @@ function bandAt(x, y) {
   return { key: "region:" + hit, layer: "", side: "", label: r.label, backdrop: "region:" + hit };
 }
 // inComposition reports whether a point on the outer ring lies within the
-// arc its composition modules span; composition shares that ring.
+// arc its composition modules span, where composition shares that ring.
 function inComposition(x, y) {
   const angle = Math.atan2(y, x);
   for (const m of D.modules) {

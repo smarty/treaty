@@ -52,14 +52,20 @@ func TestLayoutHasNoOverlaps(t *testing.T) {
 	}
 
 	layout := ComputeLayout(view)
+	rings := map[string]float64{}
+	for _, ring := range layout.Rings {
+		rings[ring.Layer] = ring.Radius
+	}
+
+	inscribed := math.Cos(math.Pi / 6)
 	for _, module := range view.Modules {
 		p, placed := layout.Modules[module.ID]
 		if !placed {
 			t.Errorf("%s (%s) was not placed", module.ID, module.Layer)
 		}
 
-		if module.Layer == graph.LayerComposition && p.X >= 0 {
-			t.Errorf("composition %s is not on the left: %+v", module.ID, p)
+		if distance := math.Hypot(p.X, p.Y); module.Layer == graph.LayerComposition && (p.X >= 0 || distance < rings[graph.LayerAdapter]*inscribed || distance > rings[graph.LayerComposition]) {
+			t.Errorf("composition %s is not in its half ring, left of the adapters: %+v", module.ID, p)
 		}
 	}
 
@@ -86,6 +92,20 @@ func TestRenderEmptyView(t *testing.T) {
 
 	if !strings.Contains(string(html), `D[key] = D[key] || []`) {
 		t.Fatal("the page must default missing lists, or an empty queue blanks the map")
+	}
+}
+
+func TestHexagonalDrawsAnEmptyCompositionRing(t *testing.T) {
+	layout := ComputeLayout(app.MapView{Architecture: rules.StyleHexagonal, Modules: []app.MapModule{{ID: "go:core", Path: "core", Layer: graph.LayerDomain, Files: []string{"core/core.go"}}}})
+	if len(layout.Rings) != 4 || layout.Rings[3].Layer != graph.LayerComposition || !layout.Rings[3].Left || layout.Rings[3].Radius <= layout.Rings[2].Radius {
+		t.Fatalf("hexagonal draws a composition half ring left of the adapters even when it is empty, so a module can move there: %+v", layout.Rings)
+	}
+
+	clean := ComputeLayout(app.MapView{Architecture: rules.StyleClean, Modules: []app.MapModule{{ID: "go:core", Path: "core", Layer: graph.LayerDomain}}})
+	for _, ring := range clean.Rings {
+		if ring.Layer == graph.LayerComposition {
+			t.Errorf("clean keeps composition on its outer ring: %+v", clean.Rings)
+		}
 	}
 }
 
@@ -127,11 +147,11 @@ func TestNestedGroups(t *testing.T) {
 		}
 	}
 
-	if p, placed := layout.Modules["go:cmd/tool"]; !placed || p.X >= 0 || math.Hypot(p.X, p.Y) < layout.Rings[1].Radius {
-		t.Errorf("composition must sit on the left of the adapter ring: %+v", p)
-	}
-
 	inscribed := math.Cos(math.Pi / 6)
+	last := layout.Rings[len(layout.Rings)-1]
+	if p, placed := layout.Modules["go:cmd/tool"]; !placed || last.Layer != graph.LayerComposition || !last.Left || p.X >= 0 || math.Hypot(p.X, p.Y) < layout.Rings[len(layout.Rings)-2].Radius*inscribed {
+		t.Errorf("composition must sit in its own half ring left of the adapters: %+v, rings %+v", p, layout.Rings)
+	}
 	for _, group := range layout.Groups {
 		for _, id := range group.Modules {
 			p := layout.Modules[id]

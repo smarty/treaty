@@ -247,7 +247,9 @@ func build(root string) (*app.Service, *app.Tests) {
 		filesystem.NewPreferences(treatyHome("settings.json")),
 	)
 
-	return service, app.NewTests(root, extractors, []app.TestSuite{golang.NewTestSuite()})
+	suites := []app.TestSuite{golang.NewTestSuite()}
+	service.UseTestSuites(suites...)
+	return service, app.NewTests(root, extractors, suites)
 }
 
 // open builds and starts the live graph of the repository at root, for the

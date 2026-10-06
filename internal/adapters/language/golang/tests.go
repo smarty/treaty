@@ -20,6 +20,7 @@ import (
 
 	"github.com/smarty/treaty/internal/app"
 	"github.com/smarty/treaty/internal/graph"
+	"github.com/smarty/treaty/internal/rules"
 )
 
 const (
@@ -36,7 +37,12 @@ const (
 	stopGrace = 5 * time.Second
 )
 
-var ErrGoTest = errors.New("go test failed")
+var (
+	ErrGoTest = errors.New("go test failed")
+
+	// exampleOutput finds the comment that makes go test check an example.
+	exampleOutput = regexp.MustCompile(`^\s*//\s*(Unordered output|Output):`)
+)
 
 // TestSuite finds Go tests by reading _test.go files and runs them with the
 // go command.
@@ -52,6 +58,23 @@ type event struct {
 	Test       string
 	Elapsed    float64
 	Output     string
+}
+
+// followed is what reading one go test's events found: the package
+// directories they named, and whether a package failed to build.
+type followed struct {
+	dirs        map[string]bool
+	buildFailed bool
+}
+
+// instrumented is one Go module instrumented for a run: the overlay that
+// builds it, the temporary directory holding its files, and its
+// instrumented files with their probes, in counter order.
+type instrumented struct {
+	overlay string
+	dir     string
+	files   []string
+	probes  [][]rules.Probe
 }
 
 // invocation is one go test command: packages run whole, or one package's
@@ -79,15 +102,16 @@ func NewTestSuite() *TestSuite {
 	return &TestSuite{command: "go"}
 }
 
-// Discover finds every Test and Fuzz function in the tree's _test.go files
-// and the symbols each one uses.
+// Discover finds every Test, Fuzz and Example function in the tree's
+// _test.go files and the symbols each one uses. An Example counts only when
+// go test checks it: when its body has an Output comment.
 //
 // Notes:
 //   - A test uses what it names and what the helpers it calls in its own
 //     test package name, transitively. Naming a type declared in a test
 //     file, such as a fixture, reaches that type's methods too.
-//   - A test named for a symbol, such as TestService_Map for Service.Map,
-//     targets it even when it never names it.
+//   - A test named for a symbol, such as TestService_Map for Service.Map or
+//     ExampleService_Map_second, targets it even when it never names it.
 //
 // Parameters:
 //   - root: the repository root.
@@ -151,7 +175,7 @@ func (this *TestSuite) Discover(root string, g *graph.Graph) (result []app.TestC
 	uses := map[string][]string{}
 	for _, each := range declared {
 		from := each.symbol.ID
-		each.state.resolve(scratch, each.symbol.Parent, each.declaration, methods, func(target string, _ token, _ string) {
+		each.state.resolve(scratch, each.symbol.Parent, each.declaration, methods, func(target string, _ token, _ string, _ usage) {
 			if target != from && scratch.Symbol(target) != nil && !slices.Contains(uses[from], target) {
 				uses[from] = append(uses[from], target)
 			}
@@ -159,7 +183,8 @@ func (this *TestSuite) Discover(root string, g *graph.Graph) (result []app.TestC
 	}
 
 	for _, each := range declared {
-		if !isTest(each.declaration) {
+		kind := testKind(each.declaration, each.state.lines)
+		if kind == "" {
 			continue
 		}
 
@@ -170,7 +195,7 @@ func (this *TestSuite) Discover(root string, g *graph.Graph) (result []app.TestC
 		}
 
 		slices.Sort(targets)
-		result = append(result, app.TestCase{Module: module, Name: each.declaration.name, File: each.symbol.File, Line: each.symbol.Line, Targets: targets})
+		result = append(result, app.TestCase{Module: module, Name: each.declaration.name, Kind: kind, File: each.symbol.File, Line: each.symbol.Line, Targets: targets})
 	}
 
 	return result, nil
@@ -184,12 +209,16 @@ func (this *TestSuite) Language() string {
 	return "go"
 }
 
-// Run runs Go tests with go test -json, collecting coverage.
+// Run runs Go tests with go test -json, measuring what each test reaches.
 //
 // Notes:
 //   - Modules run whole share one go test per Go module, so the go command
 //     runs their packages in parallel. Named tests run one go test per
 //     package, and one per test that names a subtest.
+//   - Each Go module's files are instrumented once per run and built in
+//     through -overlay, so the working tree is never touched; see
+//     instrument. A run whose instrumented build fails runs again plainly
+//     with -coverprofile, measuring lines only.
 //   - Tests that fail are not an error: they are outcomes.
 //
 // Parameters:
@@ -199,30 +228,45 @@ func (this *TestSuite) Language() string {
 //   - report: receives every outcome.
 //
 // Returns:
-//   - coverage: the lines covered and missed, by file.
+//   - coverage: the lines covered and missed, and what each test reached,
+//     by file.
 //   - err: go test could not run, such as when the go command is missing.
 //
 // Errors:
 //   - ErrGoTest: go test exited without running anything.
-func (this *TestSuite) Run(ctx context.Context, root string, requests []app.TestRequest, report func(app.TestOutcome)) (coverage map[string]app.LineCoverage, err error) {
+func (this *TestSuite) Run(ctx context.Context, root string, requests []app.TestRequest, report func(app.TestOutcome)) (coverage app.RunCoverage, err error) {
 	_, roots, err := goFiles(root, false)
 	if err != nil {
-		return nil, err
+		return app.RunCoverage{}, err
 	}
 
+	coverage = app.RunCoverage{Probes: map[string][]rules.Probe{}, Hits: map[string]map[string][]int{}, Shared: map[string]bool{}}
 	lines := map[string]map[int]bool{}
+	modules := map[string]*instrumented{}
+	defer func() {
+		for _, each := range modules {
+			if each != nil {
+				_ = os.RemoveAll(each.dir)
+			}
+		}
+	}()
+
 	var failures []string
 	for _, each := range plan(roots, requests) {
 		if ctx.Err() != nil {
 			break
 		}
 
-		if err := this.invoke(ctx, root, roots, each, report, lines); err != nil {
+		if _, ok := modules[each.dir]; !ok {
+			modules[each.dir], _ = this.instrumentModule(root, roots, roots.owner(each.dir))
+		}
+
+		if err := this.invoke(ctx, root, roots, each, report, lines, modules[each.dir], &coverage); err != nil {
 			failures = append(failures, err.Error())
 		}
 	}
 
-	coverage = map[string]app.LineCoverage{}
+	coverage.Lines = map[string]app.LineCoverage{}
 	for file, hits := range lines {
 		var each app.LineCoverage
 		for line, hit := range hits {
@@ -235,7 +279,7 @@ func (this *TestSuite) Run(ctx context.Context, root string, requests []app.Test
 
 		slices.Sort(each.Covered)
 		slices.Sort(each.Uncovered)
-		coverage[file] = each
+		coverage.Lines[file] = each
 	}
 
 	if len(failures) > 0 {
@@ -245,9 +289,240 @@ func (this *TestSuite) Run(ctx context.Context, root string, requests []app.Test
 	return coverage, nil
 }
 
-// invoke runs one go test, reporting its events and adding its coverage
-// profile to lines.
-func (this *TestSuite) invoke(ctx context.Context, root string, roots moduleRoots, each invocation, report func(app.TestOutcome), lines map[string]map[int]bool) error {
+// instrumentModule instruments every file of a Go module into a temporary
+// directory and writes the overlay that builds them in place of the
+// originals, with the coverPackage runtime beside the module's go.mod.
+//
+// Returns:
+//   - result: the module's instrumentation, or nil when it cannot be made.
+//   - err: a file could not be read or written.
+func (this *TestSuite) instrumentModule(root string, roots moduleRoots, module moduleRoot) (result *instrumented, err error) {
+	g, err := NewExtractor().Extract(root)
+	if err != nil {
+		return nil, err
+	}
+
+	sources, _, err := goFiles(root, false)
+	if err != nil {
+		return nil, err
+	}
+
+	tests, _, err := goFiles(root, true)
+	if err != nil {
+		return nil, err
+	}
+
+	dir, err := os.MkdirTemp("", "treaty-instrument-*")
+	if err != nil {
+		return nil, err
+	}
+
+	result = &instrumented{dir: dir}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(dir)
+			result = nil
+		}
+	}()
+
+	packages, constants := map[string]string{}, map[string][]*graph.Symbol{}
+	for _, each := range g.Modules {
+		if each.Language == "go" {
+			packages[each.Path] = each.Name
+		}
+	}
+
+	for _, symbol := range g.Symbols {
+		if symbol.Kind == graph.KindValue && symbol.Contract && symbol.Parent == "" && orderedConstant(symbol.Signature) {
+			constants[symbol.Module] = append(constants[symbol.Module], symbol)
+		}
+	}
+
+	// The go command matches overlay paths against the directories it
+	// resolves, so they name the tree without symbolic links, such as
+	// /private/var rather than /var on macOS.
+	base, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+
+	if base, err = filepath.EvalSymlinks(base); err != nil {
+		return nil, err
+	}
+
+	importPath := module.path + "/" + coverPackage
+	replace := map[string]string{}
+	inModule := func(file string) bool { return roots.owner(path.Dir(file)).dir == module.dir }
+	write := func(file string, data []byte) error {
+		target := filepath.Join(dir, strconv.Itoa(len(replace))+".go")
+		if err := os.WriteFile(target, data, 0o644); err != nil {
+			return err
+		}
+
+		replace[filepath.Join(base, filepath.FromSlash(file))] = target
+		return nil
+	}
+
+	var sizes []string
+	for _, file := range sources {
+		if !inModule(file) {
+			continue
+		}
+
+		src, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file)))
+		if err != nil {
+			return nil, err
+		}
+
+		state := &fileState{sourceFile: parseFile(src), path: file, module: graph.ModuleID("go", path.Dir(file)), imports: map[string]string{}, aliases: map[string]bool{}}
+		state.resolveImports(graph.New(), roots, packages, map[string]bool{})
+		named := map[string]string{}
+		for _, symbol := range constants[state.module] {
+			named[symbol.Name] = symbol.ID
+		}
+
+		for alias, target := range state.imports {
+			for _, symbol := range constants[target] {
+				named[alias+"."+symbol.Name] = symbol.ID
+			}
+		}
+
+		out, probes := instrument(src, len(result.files), importPath, named)
+		if err := write(file, out); err != nil {
+			return nil, err
+		}
+
+		result.files = append(result.files, file)
+		result.probes = append(result.probes, probes)
+		sizes = append(sizes, strconv.Itoa(len(probes)))
+	}
+
+	for _, file := range tests {
+		if !inModule(file) {
+			continue
+		}
+
+		src, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file)))
+		if err != nil {
+			return nil, err
+		}
+
+		if out, changed := instrumentTests(src, graph.ModuleID("go", path.Dir(file)), importPath); changed {
+			if err := write(file, out); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	runtime := filepath.Join(dir, coverPackage+".go")
+	if err := os.WriteFile(runtime, fmt.Appendf(nil, coverRuntime, strings.Join(sizes, ", ")), 0o644); err != nil {
+		return nil, err
+	}
+
+	replace[filepath.Join(base, filepath.FromSlash(module.dir), coverPackage, coverPackage+".go")] = runtime
+	overlay, err := json.Marshal(map[string]map[string]string{"Replace": replace})
+	if err != nil {
+		return nil, err
+	}
+
+	result.overlay = filepath.Join(dir, "overlay.json")
+	return result, os.WriteFile(result.overlay, overlay, 0o644)
+}
+
+// read takes what an instrumented run's tests recorded in a directory: each
+// test's hits and whether it overlapped another, into coverage, and the
+// lines of the blocks any test reached, into lines. It reports the files of
+// the packages the run named and the files any test reached.
+func (this *instrumented) read(out string, dirs map[string]bool, lines map[string]map[int]bool, coverage *app.RunCoverage) {
+	names, _ := filepath.Glob(filepath.Join(out, "*.jsonl"))
+	reached := map[int]map[int]bool{}
+	for _, name := range names {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			continue
+		}
+
+		for line := range bytes.SplitSeq(data, []byte("\n")) {
+			var each struct {
+				Module string   `json:"m"`
+				Test   string   `json:"t"`
+				Shared bool     `json:"s"`
+				Hits   [][2]int `json:"h"`
+			}
+
+			if json.Unmarshal(line, &each) != nil {
+				continue
+			}
+
+			id := each.Module + "#" + each.Test
+			coverage.Shared[id] = coverage.Shared[id] || each.Shared
+			if coverage.Hits[id] == nil {
+				coverage.Hits[id] = map[string][]int{}
+			}
+
+			for _, hit := range each.Hits {
+				file, probe := hit[0], hit[1]
+				if file < 0 || file >= len(this.files) {
+					continue
+				}
+
+				if reached[file] == nil {
+					reached[file] = map[int]bool{}
+				}
+
+				reached[file][probe] = true
+				if path := this.files[file]; !slices.Contains(coverage.Hits[id][path], probe) {
+					coverage.Hits[id][path] = append(coverage.Hits[id][path], probe)
+				}
+			}
+		}
+	}
+
+	for index, file := range this.files {
+		if !dirs[path.Dir(file)] && len(reached[index]) == 0 {
+			continue
+		}
+
+		coverage.Probes[file] = this.probes[index]
+		if lines[file] == nil {
+			lines[file] = map[int]bool{}
+		}
+
+		for probe, each := range this.probes[index] {
+			if each.Kind != rules.ProbeBlock {
+				continue
+			}
+
+			for _, line := range each.Lines {
+				if reached[index][probe] {
+					lines[file][line] = true
+				} else if _, seen := lines[file][line]; !seen {
+					lines[file][line] = false
+				}
+			}
+		}
+	}
+}
+
+// invoke runs one go test, reporting its events and adding what it covered
+// to lines and coverage: instrumented when cover is not nil and its build
+// succeeds, and plainly with a coverage profile otherwise.
+func (this *TestSuite) invoke(ctx context.Context, root string, roots moduleRoots, each invocation, report func(app.TestOutcome), lines map[string]map[int]bool, cover *instrumented, coverage *app.RunCoverage) error {
+	if cover != nil {
+		out, err := os.MkdirTemp("", "treaty-cover-*")
+		if err != nil {
+			return err
+		}
+
+		defer func() { _ = os.RemoveAll(out) }()
+		args := []string{"test", "-json", "-count=1", "-vet=off", "-overlay=" + cover.overlay}
+		result, err := this.goTest(ctx, root, roots, each, args, report, []string{"TREATY_COVER_DIR=" + out})
+		if err == nil && !result.buildFailed {
+			cover.read(out, result.dirs, lines, coverage)
+			return nil
+		}
+	}
+
 	profile, err := os.CreateTemp("", "treaty-cover-*.out")
 	if err != nil {
 		return err
@@ -255,39 +530,58 @@ func (this *TestSuite) invoke(ctx context.Context, root string, roots moduleRoot
 
 	_ = profile.Close()
 	defer func() { _ = os.Remove(profile.Name()) }()
-	args := []string{"test", "-json", "-coverprofile=" + profile.Name()}
+	_, err = this.goTest(ctx, root, roots, each, []string{"test", "-json", "-coverprofile=" + profile.Name()}, report, nil)
+	readProfile(profile.Name(), roots, lines)
+	return err
+}
+
+// goTest runs one go test command with some arguments and environment,
+// reporting its events.
+//
+// Returns:
+//   - result: the package directories it ran and whether a build failed.
+//   - err: it could not start, or it ran nothing.
+func (this *TestSuite) goTest(ctx context.Context, root string, roots moduleRoots, each invocation, args []string, report func(app.TestOutcome), env []string) (result followed, err error) {
 	if each.run != "" {
 		args = append(args, "-run", each.run)
 	}
 
 	command := exec.CommandContext(ctx, this.command, append(args, each.packages...)...)
 	command.Dir = filepath.Join(root, filepath.FromSlash(each.dir))
+	if absolute, err := filepath.Abs(command.Dir); err == nil {
+		command.Dir = absolute
+	}
+
+	if resolved, err := filepath.EvalSymlinks(command.Dir); err == nil {
+		command.Dir = resolved
+	}
+
+	command.Env = append(append(os.Environ(), "PWD="+command.Dir), env...)
 	command.Cancel = func() error { return command.Process.Signal(os.Interrupt) }
 	command.WaitDelay = stopGrace
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	stdout, err := command.StdoutPipe()
 	if err != nil {
-		return err
+		return result, err
 	}
 
 	if err := command.Start(); err != nil {
-		return err
+		return result, err
 	}
 
-	seen := follow(stdout, roots, report)
+	result = follow(stdout, roots, report)
 	waitErr := command.Wait()
-	readProfile(profile.Name(), roots, lines)
-	if waitErr != nil && !seen && ctx.Err() == nil {
+	if waitErr != nil && len(result.dirs) == 0 && ctx.Err() == nil {
 		message := strings.TrimSpace(stderr.String())
 		if message == "" {
 			message = waitErr.Error()
 		}
 
-		return errors.New(message)
+		return result, errors.New(message)
 	}
 
-	return nil
+	return result, nil
 }
 
 // owner finds the Go module holding a directory: the one whose directory is
@@ -335,8 +629,10 @@ func blockLines(span string) (start, end int, ok bool) {
 // each test's output for its final outcome.
 //
 // Returns:
-//   - seen: some event named a package.
-func follow(stdout io.Reader, roots moduleRoots, report func(app.TestOutcome)) (seen bool) {
+//   - result: the package directories the events named, and whether one
+//     failed to build.
+func follow(stdout io.Reader, roots moduleRoots, report func(app.TestOutcome)) (result followed) {
+	result.dirs = map[string]bool{}
 	outputs := map[string]*strings.Builder{}
 	write := func(key, text string) {
 		if outputs[key] == nil {
@@ -376,7 +672,11 @@ func follow(stdout io.Reader, roots moduleRoots, report func(app.TestOutcome)) (
 			continue
 		}
 
-		seen = true
+		result.dirs[dir] = true
+		if current.Action == "build-fail" {
+			result.buildFailed = true
+		}
+
 		module := graph.ModuleID("go", dir)
 		key := module + "#" + current.Test
 		switch current.Action {
@@ -389,24 +689,36 @@ func follow(stdout io.Reader, roots moduleRoots, report func(app.TestOutcome)) (
 		}
 	}
 
-	return seen
+	return result
 }
 
-// isTest reports whether a declaration is a function go test runs by name:
-// TestXxx(t *testing.T) or FuzzXxx(f *testing.F).
-func isTest(each *declaration) bool {
+// testKind says which kind of function go test runs by name a declaration
+// is: test for TestXxx(t *testing.T), fuzz for FuzzXxx(f *testing.F), and
+// example for ExampleXxx() with an Output or Unordered output comment in its
+// body, which lines holds. It is empty for anything else.
+func testKind(each *declaration, lines []string) string {
 	if each.kind != graph.KindFunction || each.parent != "" {
-		return false
+		return ""
 	}
 
-	for prefix, parameter := range map[string]string{"Test": "*testing.T)", "Fuzz": "*testing.F)"} {
+	for prefix, parameter := range map[string]string{"Test": "*testing.T)", "Fuzz": "*testing.F)", "Example": "()"} {
 		rest, ok := strings.CutPrefix(each.name, prefix)
-		if ok && (rest == "" || !strings.ContainsAny(rest[:1], "abcdefghijklmnopqrstuvwxyz")) && strings.HasSuffix(strings.TrimSpace(each.signature), parameter) {
-			return true
+		if !ok || rest != "" && strings.ContainsAny(rest[:1], "abcdefghijklmnopqrstuvwxyz") || !strings.HasSuffix(strings.TrimSpace(each.signature), parameter) {
+			continue
+		}
+
+		if prefix != "Example" {
+			return strings.ToLower(prefix)
+		}
+
+		for index := each.line; index < each.endLine && index < len(lines); index++ {
+			if exampleOutput.MatchString(lines[index]) {
+				return "example"
+			}
 		}
 	}
 
-	return false
+	return ""
 }
 
 // moduleDir is the directory a Go module id names.
@@ -420,6 +732,15 @@ func namedTarget(g *graph.Graph, module, name string) string {
 	rest, ok := strings.CutPrefix(name, "Test")
 	if !ok {
 		rest = strings.TrimPrefix(name, "Fuzz")
+	}
+
+	// An example may end in a lowercase suffix that tells examples of one
+	// symbol apart, such as ExampleParse_second.
+	if after, ok := strings.CutPrefix(name, "Example"); ok {
+		rest = after
+		if at := strings.LastIndex(rest, "_"); at >= 0 && at+1 < len(rest) && strings.ContainsAny(rest[at+1:at+2], "abcdefghijklmnopqrstuvwxyz") {
+			rest = rest[:at]
+		}
 	}
 
 	if rest == "" {
@@ -564,4 +885,10 @@ func runPattern(levels []string) string {
 	}
 
 	return strings.Join(levels, "/")
+}
+
+// orderedConstant reports whether a value's signature declares a constant
+// that cmp.Compare can order: any constant but true and false.
+func orderedConstant(signature string) bool {
+	return strings.HasPrefix(signature, "const ") && !strings.HasSuffix(signature, "= true") && !strings.HasSuffix(signature, "= false")
 }

@@ -34,13 +34,22 @@ const (
 	SideDriving = "driving"
 )
 
-// Edge is one reference from a symbol to another symbol.
+// Edge is one reference from a symbol to another symbol. Compare marks a
+// reference that only compares the target, such as an operand of == or a
+// case value; Literal one that builds it, such as T{...}; and Handled a
+// reference to a function whose results never reach a return of the
+// caller: a call whose error is checked and dropped, or a mention that does
+// not call it. A language that cannot tell leaves them
+// false.
 type Edge struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-	Kind string `json:"kind"`
-	File string `json:"file"`
-	Line int    `json:"line"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Kind    string `json:"kind"`
+	File    string `json:"file"`
+	Line    int    `json:"line"`
+	Compare bool   `json:"compare,omitempty"`
+	Literal bool   `json:"literal,omitempty"`
+	Handled bool   `json:"handled,omitempty"`
 }
 
 // Field is one field of a struct-like type, kept as its declaration text.

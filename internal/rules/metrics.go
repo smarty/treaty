@@ -13,6 +13,22 @@ type Metric struct {
 	Instability  float64 `json:"instability"`
 	Abstractness float64 `json:"abstractness"`
 	Distance     float64 `json:"distance"`
+
+	// Measured marks a module whose language has tests Treaty can find;
+	// the counts below are only meaningful when it is set. Contracts are
+	// its top-level contracts and ExampleContracts those with an example;
+	// Examples counts the distinct tests and examples that use them.
+	// Errors counts each (contract, error) pair declared or returned,
+	// ErrorsProven those a test names, Undeclared those returned but not
+	// declared, and Unreturned those declared but not returned. See Proof.
+	Measured         bool `json:"measured"`
+	Contracts        int  `json:"contracts"`
+	ExampleContracts int  `json:"example_contracts"`
+	Examples         int  `json:"examples"`
+	Errors           int  `json:"errors"`
+	ErrorsProven     int  `json:"errors_proven"`
+	Undeclared       int  `json:"undeclared"`
+	Unreturned       int  `json:"unreturned"`
 }
 
 // Metrics computes stability metrics for every module, counting afferent and

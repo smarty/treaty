@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/smarty/treaty/internal/graph"
+	"github.com/smarty/treaty/internal/rules"
 )
 
 // fakeSuite finds two tests in go:core and passes one, fails the other,
-// covering line 3 and missing line 4 of core/core.go.
+// covering line 3 and missing line 4 of core/core.go, where TestA reached
+// the first of two blocks.
 type fakeSuite struct {
 	mutex    sync.Mutex
 	requests [][]TestRequest
@@ -34,7 +36,7 @@ func (this *fakeSuite) Language() string {
 	return "go"
 }
 
-func (this *fakeSuite) Run(ctx context.Context, _ string, requests []TestRequest, report func(TestOutcome)) (map[string]LineCoverage, error) {
+func (this *fakeSuite) Run(ctx context.Context, _ string, requests []TestRequest, report func(TestOutcome)) (RunCoverage, error) {
 	this.mutex.Lock()
 	this.requests = append(this.requests, requests)
 	this.mutex.Unlock()
@@ -42,7 +44,7 @@ func (this *fakeSuite) Run(ctx context.Context, _ string, requests []TestRequest
 		select {
 		case <-this.release:
 		case <-ctx.Done():
-			return nil, nil
+			return RunCoverage{}, nil
 		}
 	}
 
@@ -53,7 +55,11 @@ func (this *fakeSuite) Run(ctx context.Context, _ string, requests []TestRequest
 		report(TestOutcome{Module: "go:core", Name: "TestB", Status: TestFailed, Output: "boom"})
 	}
 
-	return map[string]LineCoverage{"core/core.go": {Covered: []int{3}, Uncovered: []int{4}}}, nil
+	return RunCoverage{
+		Lines:  map[string]LineCoverage{"core/core.go": {Covered: []int{3}, Uncovered: []int{4}}},
+		Probes: map[string][]rules.Probe{"core/core.go": {{Kind: rules.ProbeBlock, Line: 3, Lines: []int{3}}, {Kind: rules.ProbeBlock, Line: 4, Lines: []int{4}}}},
+		Hits:   map[string]map[string][]int{"go:core#TestA": {"core/core.go": {0}}},
+	}, nil
 }
 
 func (this fakeSources) Extract(string) (*graph.Graph, error) {
@@ -122,6 +128,35 @@ func TestTestsRunRecordsOutcomesAndCoverage(t *testing.T) {
 	sources["core/core.go"] = "v2"
 	if report := tests.Report(g); len(report.Coverage) != 0 {
 		t.Errorf("coverage of a changed file is out of date: %+v", report.Coverage)
+	}
+}
+
+func TestTestsReportMeasuresWhatRunsReached(t *testing.T) {
+	suite, sources, g := &fakeSuite{}, fakeSources{"core/core.go": "v1"}, graph.New()
+	g.AddModule(&graph.Module{ID: "go:core", Language: "go", Path: "core", Files: []string{"core/core.go"}})
+	g.AddSymbol(&graph.Symbol{ID: "go:core:A", Module: "go:core", Name: "A", Kind: graph.KindFunction, File: "core/core.go", Line: 2, EndLine: 5, Contract: true})
+	tests := NewTests("/repo", sources, []TestSuite{suite})
+	if report := tests.Report(g); report.Measures != nil {
+		t.Fatalf("nothing has run: %+v", report.Measures)
+	}
+
+	if err := tests.Run(g, []string{"go:core#TestA", "go:core#TestB"}); err != nil {
+		t.Fatal(err)
+	}
+
+	report := settle(t, tests, g)
+	if report.Measures == nil {
+		t.Fatal("a run with probes is measured")
+	}
+
+	module, contract := report.Measures.Modules["go:core"], report.Measures.Contracts["go:core:A"]
+	if module.Blocks != 2 || module.BlocksRun != 1 || contract.Blocks != 2 || contract.BlocksRun != 1 {
+		t.Errorf("TestA uses A and reached one of its two blocks: module %+v, contract %+v", module, contract)
+	}
+
+	sources["core/core.go"] = "v2"
+	if report := tests.Report(g); report.Measures != nil {
+		t.Errorf("what runs reached of a changed file is out of date: %+v", report.Measures)
 	}
 }
 

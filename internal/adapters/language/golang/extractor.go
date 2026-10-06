@@ -47,6 +47,17 @@ type moduleRoot struct {
 // most specific module claims an import.
 type moduleRoots []moduleRoot
 
+// usage is how a reference uses what it names: compare when it only
+// compares it, literal when it builds it as a composite literal, call when
+// it calls it, and handled when it calls it and the results never reach a
+// return.
+type usage struct {
+	compare bool
+	literal bool
+	call    bool
+	handled bool
+}
+
 // NewExtractor creates a Go extractor.
 //
 // Returns:
@@ -186,33 +197,38 @@ func (this *Extractor) Source(root, file string) (result []byte, err error) {
 //   - x.Method(...) with an unknown x resolves only when exactly one method of
 //     that name exists in this module or the modules it imports.
 func (this *fileState) references(g *graph.Graph, symbol *graph.Symbol, declaration *declaration, methods map[string][]*graph.Symbol) {
-	this.resolve(g, symbol.Parent, declaration, methods, func(target string, at token, kind string) {
+	this.resolve(g, symbol.Parent, declaration, methods, func(target string, at token, kind string, use usage) {
 		other := g.Symbol(target)
 		if other == nil || other.ID == symbol.ID || (symbol.Parent != "" && other.Name == symbol.Parent) {
 			return
 		}
 
+		callable := other.Kind == graph.KindFunction || other.Kind == graph.KindMethod
 		if kind == "" {
 			kind = graph.EdgeTypeUse
-			if other.Kind == graph.KindFunction || other.Kind == graph.KindMethod {
+			if callable {
 				kind = graph.EdgeCall
 			}
 		}
 
-		g.AddEdge(graph.Edge{From: symbol.ID, To: target, Kind: kind, File: this.path, Line: at.line})
+		// A function named but not called, such as one passed as a value,
+		// gives the caller no results to return.
+		handled := use.handled || callable && !use.call
+		g.AddEdge(graph.Edge{From: symbol.ID, To: target, Kind: kind, File: this.path, Line: at.line, Compare: use.compare, Literal: use.literal, Handled: handled})
 	})
 }
 
 // resolve finds every identifier in a declaration that may name another
 // symbol in the graph and hands its id to edge, with the reference's kind
-// when the syntax decides it. The id may name nothing; edge checks.
+// when the syntax decides it and how the reference uses it. The id may name
+// nothing; edge checks.
 //
 // Notes:
 //   - parent is the type a method belongs to, so recv.Name resolves.
-func (this *fileState) resolve(g *graph.Graph, parent string, declaration *declaration, methods map[string][]*graph.Symbol, edge func(target string, at token, kind string)) {
+func (this *fileState) resolve(g *graph.Graph, parent string, declaration *declaration, methods map[string][]*graph.Symbol, edge func(target string, at token, kind string, use usage)) {
 	for _, embedded := range declaration.embedded {
 		if target := this.typeTarget(g, embedded); target != "" {
-			edge(target, embedded[0], graph.EdgeEmbeds)
+			edge(target, embedded[0], graph.EdgeEmbeds, usage{})
 		}
 	}
 
@@ -237,20 +253,20 @@ func (this *fileState) resolve(g *graph.Graph, parent string, declaration *decla
 		case afterDot:
 			if index+1 < len(tokens) && tokens[index+1].is("(") {
 				if target := this.uniqueMethod(methods[current.text]); target != "" {
-					edge(target, current, graph.EdgeCall)
+					edge(target, current, graph.EdgeCall, usageOf(tokens, index, index, inCase))
 				}
 			}
 		case selects && this.imports[current.text] != "":
-			edge(graph.SymbolID(this.imports[current.text], tokens[index+2].text), current, "")
+			edge(graph.SymbolID(this.imports[current.text], tokens[index+2].text), current, "", usageOf(tokens, index, index+2, inCase))
 			index += 2
 		case selects && this.aliases[current.text]:
 			index += 2
 		case selects && declaration.receiver != "" && current.text == declaration.receiver && g.Symbol(graph.SymbolID(this.module, parent+"."+tokens[index+2].text)) != nil:
-			edge(graph.SymbolID(this.module, parent+"."+tokens[index+2].text), current, "")
+			edge(graph.SymbolID(this.module, parent+"."+tokens[index+2].text), current, "", usageOf(tokens, index, index+2, inCase))
 			index += 2
 		case !inCase && index+1 < len(tokens) && tokens[index+1].is(":"):
 		default:
-			edge(this.local(g, current.text), current, "")
+			edge(this.local(g, current.text), current, "", usageOf(tokens, index, index, inCase))
 		}
 	}
 }
@@ -581,4 +597,169 @@ func signatureKey(signature string) string {
 	}
 
 	return parsed.key(src)
+}
+
+// usageOf reads how the reference spanning tokens[first] to tokens[last]
+// is used. It compares when it is an operand of == or !=, a case value, or
+// an argument of errors.Is or errors.As; it is a literal when { follows it;
+// and a call, when ( follows it, is handled unless dropped reports it
+// passes its results on.
+func usageOf(tokens []token, first, last int, inCase bool) usage {
+	result := usage{compare: inCase, literal: last+1 < len(tokens) && tokens[last+1].is("{")}
+	result.call = last+1 < len(tokens) && tokens[last+1].is("(")
+	result.handled = result.call && dropped(tokens, first)
+	if first > 0 && (tokens[first-1].is("==") || tokens[first-1].is("!=")) || last+1 < len(tokens) && (tokens[last+1].is("==") || tokens[last+1].is("!=")) {
+		result.compare = true
+	}
+
+	depth := 0
+	for index := first - 1; index >= 0 && !result.compare; index-- {
+		current := tokens[index]
+		switch {
+		case current.is(")"):
+			depth++
+		case current.is("(") && depth > 0:
+			depth--
+		case current.is("("):
+			result.compare = index >= 3 && (tokens[index-1].is("Is") || tokens[index-1].is("As")) && tokens[index-2].is(".") && tokens[index-3].is("errors")
+			return result
+		case current.is("{") || current.is("}") || current.kind == tokenSemicolon:
+			return result
+		}
+	}
+
+	return result
+}
+
+// dropped reports whether the results of the call starting at
+// tokens[first] never reach a return of the function holding it. A call
+// passes its results on when it is part of a return statement, or when it
+// is assigned to a name a later return in its scope mentions: the if, for
+// or switch statement that declares it, or else the rest of the enclosing
+// block. Only the last name assigned is followed, since an error is the
+// last result by convention. Anything else drops them: a bare call, an
+// assignment to _, or a result that is checked and not returned.
+//
+// Notes:
+//   - A return inside a function literal counts as the caller's, and a
+//     call inside a composite literal is read as its own statement.
+func dropped(tokens []token, first int) bool {
+	start, depth := first, 0
+	for ; start > 0; start-- {
+		previous := tokens[start-1]
+		switch {
+		case previous.is(")") || previous.is("]"):
+			depth++
+		case previous.is("(") || previous.is("["):
+			depth--
+		}
+
+		// A case or label's colon ends what comes before it too.
+		if depth <= 0 && (previous.is("{") || previous.is("}") || previous.is(":") || previous.kind == tokenSemicolon) {
+			break
+		}
+	}
+
+	statement := tokens[start:first]
+	if len(statement) > 0 && statement[0].is("return") {
+		return false
+	}
+
+	assign := -1
+	for index, current := range statement {
+		if current.is(":=") || current.is("=") {
+			assign = index
+			break
+		}
+	}
+
+	if assign < 0 {
+		return true
+	}
+
+	name := ""
+	for _, current := range statement[:assign] {
+		if current.kind == tokenIdent && !isKeyword(current.text) {
+			name = current.text
+		}
+	}
+
+	if name == "" || name == "_" {
+		return true
+	}
+
+	end := blockEnd(tokens, first)
+	if header := statement[0]; header.is("if") || header.is("for") || header.is("switch") {
+		end = statementEnd(tokens, first)
+	}
+
+	for index := first; index < end; index++ {
+		if !tokens[index].is("return") {
+			continue
+		}
+
+		// The return ends at its semicolon or the block's closing brace,
+		// past composite literals such as T{} among its results.
+		braces := 0
+		for after := index + 1; after < end && (braces > 0 || tokens[after].kind != tokenSemicolon && !tokens[after].is("}")); after++ {
+			switch {
+			case tokens[after].is("{"):
+				braces++
+			case tokens[after].is("}"):
+				braces--
+			case tokens[after].kind == tokenIdent && tokens[after].text == name:
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// blockEnd finds the closing brace of the block holding tokens[from], or
+// the end of the tokens.
+func blockEnd(tokens []token, from int) int {
+	depth := 0
+	for index := from; index < len(tokens); index++ {
+		switch {
+		case tokens[index].is("{"):
+			depth++
+		case tokens[index].is("}"):
+			if depth == 0 {
+				return index
+			}
+
+			depth--
+		}
+	}
+
+	return len(tokens)
+}
+
+// statementEnd finds the end of the if, for or switch statement whose
+// header holds tokens[from]: past its block and every else that follows.
+func statementEnd(tokens []token, from int) int {
+	index := from
+	for {
+		depth := 0
+		for index < len(tokens) && !(tokens[index].is("{") && depth == 0) {
+			switch {
+			case tokens[index].is("(") || tokens[index].is("["):
+				depth++
+			case tokens[index].is(")") || tokens[index].is("]"):
+				depth--
+			}
+
+			index++
+		}
+
+		if index >= len(tokens) {
+			return index
+		}
+
+		index = blockEnd(tokens, index+1) + 1
+		if index >= len(tokens) || !tokens[index].is("else") {
+			return index
+		}
+	}
 }

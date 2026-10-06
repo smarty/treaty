@@ -101,11 +101,12 @@ type Region struct {
 }
 
 // Ring is one layer's hexagon, from the center outward. Tone picks its
-// shade.
+// shade, and Left marks a ring drawn only on the left half.
 type Ring struct {
 	Layer  string  `json:"layer"`
 	Tone   int     `json:"tone"`
 	Radius float64 `json:"radius"`
+	Left   bool    `json:"left,omitempty"`
 }
 
 // box is a labeled rectangle of items flowed into rows.
@@ -315,8 +316,11 @@ func ComputeLayout(view app.MapView) (result Layout) {
 // ringLayout places modules in concentric rings, innermost first, with
 // unclassified modules along the bottom outside them. The outer ring is
 // split in two: for hexagonal, driving adapters on the left and driven on
-// the right; otherwise, its modules divided in half. Composition shares the
-// left of the outer ring, at its far left.
+// the right; otherwise, its modules divided in half. For hexagonal,
+// composition has a half ring of its own around the left of the adapters,
+// beside the driving side it starts, drawn even when empty so a module can
+// be moved there; otherwise it shares the left of the outer ring, at its far
+// left.
 func ringLayout(modules []app.MapModule, rings []string, sided bool) (result Layout) {
 	outer := rings[len(rings)-1]
 	buckets := map[string][]app.MapModule{}
@@ -364,7 +368,11 @@ func ringLayout(modules []app.MapModule, rings []string, sided bool) (result Lay
 
 	driving, driven := top[leftKey], top[rightKey]
 	half := len(driving) / 2
-	left := append(append(append([]*item{}, driving[:half]...), top[graph.LayerComposition]...), driving[half:]...)
+	left := append(append([]*item{}, driving[:half]...), driving[half:]...)
+	if !sided {
+		left = append(append(append([]*item{}, driving[:half]...), top[graph.LayerComposition]...), driving[half:]...)
+	}
+
 	arc := math.Pi * 0.75
 	biggest := math.Max(largest(left), largest(driven))
 	radius = math.Max(boundary+biggest+ringGap, math.Max(arcRadius(left, math.Pi-arc/2, arc, false), arcRadius(driven, -arc/2, arc, false)))
@@ -373,7 +381,20 @@ func ringLayout(modules []app.MapModule, rings []string, sided bool) (result Lay
 	boundary = hexRadius(math.Max(radius+biggest, boundary) + ringGap)
 	result.Rings = append(result.Rings, Ring{Layer: outer, Tone: len(rings) - 1, Radius: boundary})
 	if sided {
-		result.Labels = append(result.Labels, Label{Text: graph.SideDriving, X: round(-boundary * 0.72), Y: round(boundary * 0.95)}, Label{Text: graph.SideDriven, X: round(boundary * 0.72), Y: round(boundary * 0.95)})
+		// The side labels sit inside the adapter ring's bottom edge, where
+		// neither side's arc reaches.
+		edge := boundary*math.Sin(math.Pi/3) - 20
+		result.Labels = append(result.Labels, Label{Text: graph.SideDriving, X: round(-boundary * 0.25), Y: round(edge)}, Label{Text: graph.SideDriven, X: round(boundary * 0.25), Y: round(edge)})
+		composition := top[graph.LayerComposition]
+		if len(composition) > 0 {
+			radius = math.Max(boundary+largest(composition)+ringGap, arcRadius(composition, math.Pi-arc/2, arc, false))
+			arrange(composition, radius, math.Pi-arc/2, arc, false)
+			boundary = hexRadius(math.Max(radius+largest(composition), boundary) + ringGap)
+		} else {
+			boundary = hexRadius(boundary/hexRadius(1) + moduleSize + 2*ringGap)
+		}
+
+		result.Rings = append(result.Rings, Ring{Layer: graph.LayerComposition, Tone: len(rings), Radius: boundary, Left: true})
 	}
 
 	result.Extent = boundary + moduleSize

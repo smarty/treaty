@@ -167,6 +167,11 @@ table.metrics { border-collapse: collapse; width: 100%; font-size: 12px; margin-
 table.metrics td, table.metrics th { border-bottom: 1px solid var(--line); padding: 3px 4px; text-align: right; }
 table.metrics td:first-child, table.metrics th:first-child { text-align: left; }
 table.metrics th:not(:first-child) { width: 4.5em; }
+table.metrics td:not(:first-child) { white-space: nowrap; }
+table.metrics.proof th:not(:first-child) { width: 5em; }
+/* A group of metrics heads its rows, which sit indented beneath it. */
+table.metrics tr.metric-group td { text-align: left; font-weight: 600; color: var(--ink); border-bottom: 0; padding-top: 8px; }
+table.metrics td.metric-child { padding-left: 18px; }
 /* A metric's full name, cut off when the panel is narrow; its tooltip
    always has the whole name and what it measures. */
 table.metrics td.metric-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }

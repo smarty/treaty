@@ -67,15 +67,97 @@ function chip(id, parent) {
 // dl lists label and value rows, skipping empty values; a third entry is
 // the label's tooltip, saying what the value measures.
 function dl(parent, rows) { const d = h("dl"); for (const [k, v, tip] of rows) { if (v === undefined || v === "") continue; d.appendChild(h("dt", tip ? { title: tip } : {}, k)); d.appendChild(h("dd", tip ? { title: tip } : {}, v)); } parent.appendChild(d); }
-// METRICS are a module's stability metrics: the key in the payload, the
-// full name, the abbreviation the literature uses, and what it measures.
+// METRICS are a module's metrics: the key in the payload, the name, the
+// abbreviation the literature uses, if any, what it measures, how to show
+// it when it is not a plain number, and the group it is listed under, if
+// any. The proof rows only mean something for a module whose tests Treaty
+// can find.
+const unmeasured = x => !x.measured, ofOrNone = (part, whole) => x => unmeasured(x) ? "—" : x[whole] ? `${x[part]} of ${x[whole]}` : "none";
 const METRICS = [
-  ["ca", "Afferent coupling", "Ca", "How many other modules depend on this one. The higher it is, the more modules feel a change here."],
-  ["ce", "Efferent coupling", "Ce", "How many other modules this one depends on. The higher it is, the more often changes elsewhere reach this module."],
+  ["ca", "Afferent", "Ca", "How many other modules depend on this one. The higher it is, the more modules feel a change here.", null, "Coupling"],
+  ["ce", "Efferent", "Ce", "How many other modules this one depends on. The higher it is, the more often changes elsewhere reach this module.", null, "Coupling"],
   ["instability", "Instability", "I", "Ce ÷ (Ca + Ce), from 0 to 1. Near 0 the module is stable: others depend on it and it depends on little, so it is hard to change. Near 1 it is unstable: little depends on it, so it is free to change."],
   ["abstractness", "Abstractness", "A", "Interfaces ÷ top-level contracts, from 0 to 1. Near 1 the module's contract is mostly interfaces; near 0 it is concrete types, functions and values."],
   ["distance", "Distance from the main sequence", "D", "|A + I − 1|, from 0 to 1. Near 0 the module is balanced: stable modules are abstract and unstable ones concrete. Near 1 it is stable and concrete, so hard to change and hard to extend, or unstable and abstract, interfaces little depends on."],
+  ["example_contracts", "Contracts covered", "", "Top-level contracts that a test or an example uses, of all of them. A test uses a contract when it names it, reaches it through its own helpers, or is named for it; a type counts its methods' tests. Fuzz tests state properties, not examples, so they do not count.", ofOrNone("example_contracts", "contracts"), "Examples"],
+  ["examples", "Tests and examples", "", "The tests and examples, with an Output comment, that use this module's contracts, each counted once.", x => unmeasured(x) ? "—" : String(x.examples), "Examples"],
+  ["errors_proven", "Proven", "", "Of each function's and method's errors, declared in its doc comment's Errors section or returned, those a test that uses it names. Naming is not checking: errors.Is(err, ErrX) and any other mention count alike.", ofOrNone("errors_proven", "errors"), "Errors"],
+  ["undeclared", "Undeclared", "", "Errors a function or method can return that its Errors section does not list: behavior its contract does not state. Document them, or stop returning them.", x => unmeasured(x) ? "—" : x.errors ? String(x.undeclared) : "none", "Errors"],
+  ["unreturned", "Declared, not returned", "", "Errors an Errors section lists that the code cannot return: a claim it cannot meet. Errors from outside the repository, such as io.EOF, are not checked.", x => unmeasured(x) ? "—" : x.errors ? String(x.unreturned) : "none", "Errors"],
 ];
+const UNMEASURED = "Treaty can't find this language's tests yet, so it is not measured.";
+// RUNS are what test runs reached: the name, what it measures, and the
+// reached and total counts in a measure from the test report.
+const RUNS = [
+  ["Reach", "Blocks of this code that the tests going through its contracts ran, of all its blocks. Coverage reached only from tests that use nothing it offers does not count.", "blocks_run", "blocks"],
+  ["Decisions", "Outcomes, true and false, of every if and for condition and of each operand of && and || in one, that those tests reached.", "outcomes_run", "outcomes"],
+  ["Boundaries", "Comparisons with an exported constant that those tests saw a value below, at and above; at and one side for == and !=.", "boundaries_seen", "boundaries"],
+];
+// runRows adds what test runs reached of a module or contract to a metrics
+// table, in the live map only: Before stays empty, since runs measure the
+// working tree.
+function runRows(t, id, metrics, contract) {
+  if (!LIVE) return;
+  const report = testState.report, measures = report && report.measures, x = measures && (contract ? measures.contracts : measures.modules)[id];
+  const head = h("tr", { class: "metric-group" }); head.appendChild(h("td", { colspan: 3 }, "Tests run")); t.appendChild(head);
+  for (const [name, about, part, whole] of RUNS) {
+    const value = !metrics.measured ? "—" : !x ? "not run" : x[whole] ? `${x[part]} of ${x[whole]}` : "none";
+    const shared = x && x.shared ? ` ${x.shared} of the tests ran alongside others, so their reach may include the others'.` : "";
+    const row = h("tr", { title: `Tests run, ${name.toLowerCase()}: ${about}${metrics.measured ? shared : " " + UNMEASURED} Runs measure the working tree, so Before stays empty.` });
+    row.appendChild(h("td", { class: "metric-name metric-child" }, name)); row.appendChild(h("td", {}, "—")); row.appendChild(h("td", {}, value)); t.appendChild(row);
+  }
+}
+// proofBlock shows what the tests show about a contract: the tests and
+// examples that use it, and for a function or method its errors, declared,
+// returned and tested.
+function proofBlock(box, s) {
+  const m = modules.get(s.module);
+  if (!s.contract || s.removed || s.design || !m) return;
+  if (!s.proof) { if (m.metrics && !m.metrics.measured) box.appendChild(h("p", { class: "hint" }, UNMEASURED)); return; }
+  const examples = s.proof.examples || [];
+  box.appendChild(h("h2", { title: "The tests and examples that use this contract. Fuzz tests are not examples." }, `Examples (${examples.length})`));
+  if (!examples.length) box.appendChild(h("p", { class: "hint" }, "No test or example uses this contract."));
+  else {
+    const ul = h("ul");
+    for (const id of examples) {
+      const li = h("li", { class: "link", tabindex: 0, role: "button", title: "Show it in the Tests tab" }, id.slice(id.indexOf("#") + 1));
+      li.addEventListener("click", () => showPanel("tests")); li.addEventListener("keydown", ev => { if (ev_is(ev)) { ev.preventDefault(); showPanel("tests"); } });
+      ul.appendChild(li);
+    }
+    box.appendChild(ul);
+  }
+  if (LIVE && ["function", "method", "type"].includes(s.kind)) {
+    box.appendChild(h("h2", {}, "Tests run"));
+    const t = h("table", { class: "metrics" }); t.innerHTML = "<tr><th>Metric</th><th>Before</th><th>After</th></tr>";
+    runRows(t, s.id, m.metrics || {}, true);
+    t.querySelector(".metric-group").remove();
+    box.appendChild(t);
+  }
+  if (s.kind !== "function" && s.kind !== "method") return;
+  const declared = s.proof.declared || [], returned = s.proof.reachable || [], tested = s.proof.asserted || [], external = s.proof.external || [];
+  const errors = [...new Set([...declared, ...returned])].sort();
+  if (!errors.length && !external.length) { box.appendChild(h("p", { class: "hint" }, s.proof.documented ? "It declares no errors and returns none." : "It has no Errors section and returns no error Treaty can see.")); return; }
+  box.appendChild(h("h2", {}, "Errors"));
+  const t = h("table", { class: "metrics proof" }); t.innerHTML = "<tr><th>Error</th><th>Declared</th><th>Returned</th><th>Tested</th></tr>";
+  const mark = on => on ? "✓" : "";
+  for (const id of errors) {
+    const row = h("tr"), name = h("td");
+    if (symbols.has(id)) chip(id, name); else name.appendChild(h("code", { title: id }, id.split(":").pop()));
+    row.append(name, h("td", {}, mark(declared.includes(id))), h("td", {}, mark(returned.includes(id))), h("td", {}, mark(tested.includes(id))));
+    if (returned.includes(id) && !declared.includes(id)) row.title = "Returned, but the Errors section does not list it.";
+    else if (declared.includes(id) && !returned.includes(id)) row.title = "Declared, but the code cannot return it.";
+    else if (!tested.includes(id)) row.title = "No test that uses this contract names it.";
+    t.appendChild(row);
+  }
+  for (const name of external) {
+    const row = h("tr", { title: "From outside the repository, so it is not checked." }), cell = h("td");
+    cell.appendChild(h("code", {}, name));
+    row.append(cell, h("td", {}, "✓"), h("td", {}, "—"), h("td", {}, "—"));
+    t.appendChild(row);
+  }
+  box.appendChild(t);
+  box.appendChild(h("p", { class: "hint" }, "Tested means a test that uses this contract names the error; it can't tell errors.Is(err, ErrX) from any other mention."));
+}
 // sliceBlock shows the slice an agent gets, collapsed. It opens only when
 // the person opens it, and stays open while the selection stays the same,
 // so a rebuild does not close it; the choice is not saved.
@@ -185,6 +267,7 @@ function inspect() {
     chipList("Uses", uses); chipList("Callers", callers);
     chipList("No longer uses", usedBefore); chipList("No longer called by", calledBefore);
     if (s.doc) { box.appendChild(h("h2", {}, "Documentation")); box.appendChild(h("pre", { class: "doc" }, s.doc)); }
+    proofBlock(box, s);
     sliceBlock(box, s.slice);
   } else if (sel.type === "file") {
     const f = fileOf(sel.id), cell = fileCell(sel.id), m = modules.get(f.module); if (!cell || !m) return;
@@ -227,10 +310,15 @@ function inspect() {
       moved.appendChild(back); box.appendChild(moved);
     } else if (LIVE && !m.design) box.appendChild(h("p", { class: "hint" }, LAYERED_STYLES.includes(D.architecture) ? "Long-press the module to pick it up: drop it elsewhere in its band to place it, or in another layer to move it there in treaty.yaml." : "Long-press the module to pick it up and place it elsewhere in its area."));
     const t = h("table", { class: "metrics" }); t.innerHTML = "<tr><th>Metric</th><th>Before</th><th>After</th></tr>";
-    for (const [key, name, abbr, about] of METRICS) {
-      const tip = `${name} (${abbr}): ${about}`, row = h("tr", { title: tip });
-      row.appendChild(h("td", { class: "metric-name" }, `${name} (${abbr})`)); row.appendChild(h("td", {}, m.before ? String(m.before[key]) : "—")); row.appendChild(h("td", {}, String(m.metrics[key]))); t.appendChild(row);
+    let group = null;
+    for (const [key, name, abbr, about, format, under] of METRICS) {
+      if (under && under !== group) { const head = h("tr", { class: "metric-group" }), cell = h("td", { colspan: 3 }, under); head.appendChild(cell); t.appendChild(head); }
+      group = under;
+      const label = abbr ? `${name} (${abbr})` : name, show = format || (x => String(x[key]));
+      const tip = `${under ? under + ", " + label.charAt(0).toLowerCase() + label.slice(1) : label}: ${about}${format && unmeasured(m.metrics) ? " " + UNMEASURED : ""}`, row = h("tr", { title: tip });
+      row.appendChild(h("td", { class: "metric-name" + (under ? " metric-child" : "") }, label)); row.appendChild(h("td", {}, m.before ? show(m.before) : "—")); row.appendChild(h("td", {}, show(m.metrics))); t.appendChild(row);
     }
+    runRows(t, m.id, m.metrics || {}, false);
     box.appendChild(t);
     if (m.files && m.files.length) {
       box.appendChild(h("h2", {}, "Files")); const ul = h("ul");

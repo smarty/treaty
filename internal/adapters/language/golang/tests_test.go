@@ -149,9 +149,17 @@ func TestRunReportsOutcomesAndCoverage(t *testing.T) {
 		t.Errorf("outcomes: %+v", outcomes)
 	}
 
-	lines := coverage["math/math.go"]
+	lines := coverage.Lines["math/math.go"]
 	if !slices.Contains(lines.Covered, 4) || !slices.Contains(lines.Uncovered, 9) || slices.Contains(lines.Covered, 9) {
-		t.Fatalf("coverage: %+v", coverage)
+		t.Fatalf("coverage: %+v", coverage.Lines)
+	}
+
+	if len(coverage.Probes["math/math.go"]) == 0 {
+		t.Fatalf("the run must be instrumented, not fall back to a profile: %+v", coverage)
+	}
+
+	if len(coverage.Hits["go:math#TestAdd"]["math/math.go"]) == 0 || coverage.Hits["go:math#TestBroken"] == nil {
+		t.Errorf("each test's hits are its own: %+v", coverage.Hits)
 	}
 }
 

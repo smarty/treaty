@@ -2,7 +2,7 @@
 
 How Treaty can measure how much of a repository's contract surface is behaviorally proven: not only executed by tests, but checked by them, in a way that would fail if the contract stopped holding.
 
-Status: proposal, October 3, 2026. Nothing here is built yet. Contract-scoped mutation testing was deferred on September 29, 2026, and this document says where it would fit when it returns.
+Status: proposal, October 3, 2026. Examples and error congruence, Treaty's own coverage instrumentation, and reach, decisions and boundaries were built on October 6, 2026, for Go; see [Built](#built). The rest is not built yet. Contract-scoped mutation testing was deferred on September 29, 2026, and this document says where it would fit when it returns.
 
 ## The problem
 
@@ -126,7 +126,7 @@ Every measure is a fraction with an explicit denominator, or a list. They are ne
 | Error congruence | Asserted / (declared ∪ reachable), plus the gap lists | Static: call graph, doc comments and test code | Yes |
 | Boundaries | Published-constant comparisons seen below, at and above the constant / all such comparisons | Cheap once instrumented: read from the boundary counters | Yes |
 | Decisions | Decision outcomes and `&&`/`||` operands reached by tests through the contract / all of them reachable from it | Cheap once instrumented | Yes |
-| Port conformance | Implementations run through a shared suite / implementations | Static | Yes |
+| Port conformance | Implementations run through a shared suite / implementations; dropped, see [Build order](#build-order) | Static | Yes |
 | Mutation score | Killed / non-equivalent mutants, counting only tests through the contract | Expensive; deferred | Yes, with fixed operators and seeds |
 
 ### Examples
@@ -179,14 +179,36 @@ For each interface, a matrix of implementations by the shared suites run against
 
 ## Build order
 
-1. **Examples**, static and cheap: it reuses the Tests tab's filter of tests by symbol.
-2. **Error congruence**, purely structural, and it pays off sentinel-error discipline right away.
-3. **Treaty's own instrumentation** for Go, replacing `go test -coverprofile`, with counters attributed per test. Reach, decisions and boundaries depend on it.
-4. **Contract-scoped reach**, then **decisions** and **boundaries**, all read from the same counters.
+1. **Examples**, static and cheap: it reuses the Tests tab's filter of tests by symbol. Built.
+2. **Error congruence**, purely structural, and it pays off sentinel-error discipline right away. Built.
+3. **Treaty's own instrumentation** for Go, replacing `go test -coverprofile`, with counters attributed per test. Reach, decisions and boundaries depend on it. Built.
+4. **Contract-scoped reach**, then **decisions** and **boundaries**, all read from the same counters. Built.
 5. **Pseudo-tested detection**, the cheapest real evidence of sensitivity, and it maps to contracts one to one.
-6. **Port conformance**.
+6. **Port conformance**. Dropped on October 6, 2026: it assumes an architecture built on ports, and Treaty serves five.
 7. **Assertion detection**, which splits examples into asserting and calling. The instrumentation can later record the values that reach assertions, which is the start of checked coverage.
 8. **Contract-scoped mutation testing**, aimed at the contracts the cheaper measures flag.
+
+## Built
+
+Examples and error congruence are built for Go, and show as rows of a module's metrics table, before and after, and as a contract's Examples list and Errors table in the inspector. How the build reads this document:
+
+- **Examples** are `Test` functions and `Example` functions with an `// Output:` comment that use the contract, by the Tests tab's rules. `Fuzz` functions do not count. A type counts its methods' tests. The module rows are contracts with examples, of its top-level contracts, and the number of distinct examples.
+- **Declared** errors are the identifiers on the `- Name:` lines of a function's or method's `Errors:` section. `pkg.Name` resolves to the repository module of that package name, or is external, such as `io.EOF`, and not checked.
+- **Reachable** errors are sentinels, named `Err…` or `err…`, that the code names other than to compare them (`==`, `!=`, `case`, `errors.Is`, `errors.As`), and error types, named `…Error`, it builds as literals. Calls within the contract's module are followed. A call into another module takes the callee's `Errors:` section when it has one, and is followed when it does not.
+- **Asserted** errors are those a test that uses the contract names. It cannot tell `errors.Is(err, ErrX)` from any other mention.
+- The module rows are errors proven (asserted, of each contract's declared and reachable errors), undeclared errors and errors declared but not returned. JavaScript, TypeScript and Python modules show `—` until Treaty finds their tests.
+
+**Handled errors.** A call whose error the caller handles and drops adds nothing to what it returns. A call passes its results on only when it is part of a `return`, or when its last result, the error by convention, is assigned to a name that a later `return` in that name's scope mentions: the `if`, `for` or `switch` that declares it, or else the rest of the block. So `if slice, err := buildSlice(...); err == nil { ... }` drops `buildSlice`'s errors, and `err := f(); if err != nil { return fmt.Errorf("...: %w", err) }` passes them on. A function named without being called, such as one passed as a value, passes nothing on, and nothing inside `errors.Is` or `errors.As` does. On this repository that took `internal/app`'s undeclared errors from 69 to 37 without losing any declared error that was found before. A `return` inside a function literal still counts as its caller's.
+
+**Instrumentation.** Treaty rewrites copies of every non-test file of the Go module being tested and builds them in with `go test -overlay`, `-vet=off` and `-count=1`; the runtime they report to, `treatycover`, exists only in the overlay. Every edit stays on its line. It counts:
+
+- every block: a function body, the blocks of `if`, `else`, `for`, bare blocks and each `case` or `default` clause;
+- both outcomes of every `if` and `for` condition, and of each operand of `&&` and `||` at its top level;
+- for a comparison in a condition with an exported constant, whether the value was below, at or above it, by `cmp.Compare`; bool constants are left out.
+
+Test files get one statement at the top of each `Test` and `Fuzz` function, `t.Cleanup(...)`, so the test's span includes its subtests, and a `defer` in each `Example`. When a test ends, the counters that rose since it started are its hits. A test that ran while another did is marked shared. A run whose instrumented build fails runs again plainly with `-coverprofile`, measuring lines only. The whole of this repository instruments, builds and runs this way: 62 files, about 10,000 probes.
+
+**Reach, decisions and boundaries** show under Tests run in a module's metrics and a contract's inspector, in the live map, with Before empty since runs measure the working tree. A contract's code is its body or its methods' bodies and every function they call within the module; only tests that use the contract count. For a module, only tests that use one of its top-level contracts count. Reach is blocks run of all blocks, decisions are outcomes reached of all outcomes, and boundaries are comparisons seen below, at and above of all comparisons with exported constants (at and one side for `==` and `!=`).
 
 ## Sources
 

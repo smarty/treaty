@@ -18,12 +18,12 @@ import (
 //   - result: the AutoPen text.
 //   - err: the tree could not be read.
 func (this *Service) Dump(at string) (result string, err error) {
-	g, _, err := this.graphAt(at)
+	tree, err := this.graphAt(at)
 	if err != nil {
 		return "", err
 	}
 
-	return autopen.Print(autopen.FromGraph(g)), nil
+	return autopen.Print(autopen.FromGraph(tree.graph)), nil
 }
 
 // Extract builds the graph of the working tree, without layers.

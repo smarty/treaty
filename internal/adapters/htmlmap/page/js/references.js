@@ -50,9 +50,12 @@ function drawReferences(svg, rel) {
   // Rings for hexagonal and clean; bands, slices, cells and contexts as
   // regions for the other architectures.
   const tones = ["--ring-domain", "--ring-app", "--ring-adapter", "--ring-outer"];
+  // A half ring, such as hexagonal composition, covers only the left, and
+  // its label centers on the left half of its top edge.
   for (const ring of [...(D.layout.rings || [])].reverse()) {
-    el("polygon", { class: "backdrop", "data-band": "ring:" + ring.layer, points: hexPoints(0, 0, ring.radius).map(p => p.join(",")).join(" "), fill: color(tones[ring.tone] || tones[3]), stroke: color("--ring-stroke") }, svg);
-    el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, 0, -ring.radius * Math.sin(Math.PI / 3) + 16, {}, true, true)).textContent = ring.layer.replace(/_/g, " ");
+    const top = ring.radius * Math.sin(Math.PI / 3), points = ring.left ? [[0, top], [-ring.radius / 2, top], [-ring.radius, 0], [-ring.radius / 2, -top], [0, -top]] : hexPoints(0, 0, ring.radius);
+    el("polygon", { class: "backdrop", "data-band": "ring:" + ring.layer, points: points.map(p => p.join(",")).join(" "), fill: color(tones[ring.tone] || tones[3]), stroke: color("--ring-stroke") }, svg);
+    el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, ring.left ? -ring.radius / 4 : 0, -top + 16, {}, true, true)).textContent = ring.layer.replace(/_/g, " ");
   }
   for (const [index, r] of (D.layout.regions || []).entries()) {
     el("rect", { class: "backdrop", "data-band": "region:" + index, x: r.x, y: r.y, width: r.w, height: r.h, rx: 8, fill: color(tones[r.tone] || tones[3]), stroke: color("--ring-stroke"), "vector-effect": "non-scaling-stroke" }, svg);

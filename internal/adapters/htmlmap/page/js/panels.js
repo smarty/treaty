@@ -155,6 +155,11 @@ function startTabDrag(ev, id, source) {
     if (target) moveTab(id, source, target);
   });
 }
+// showPanel brings a panel's tab to the front of its stack.
+function showPanel(id) {
+  const stack = [dock.center, ...SIDES.flatMap(side => dock[side].stacks), ...dock.floating].find(s => s.tabs.includes(id));
+  if (stack && stack.active !== id) { stack.active = id; renderLayout(); }
+}
 // swallowClick keeps the click that ends a drag from also activating a tab.
 function swallowClick() {
   const swallow = e => { e.stopPropagation(); window.removeEventListener("click", swallow, true); };

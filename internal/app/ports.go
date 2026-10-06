@@ -190,10 +190,9 @@ type TestSuite interface {
 	//   - report: receives every outcome; it is never called concurrently.
 	//
 	// Returns:
-	//   - coverage: the lines the run covered and missed, by file path
-	//     relative to root.
+	//   - coverage: what the run measured, by file path relative to root.
 	//   - err: the tests could not be started.
-	Run(ctx context.Context, root string, requests []TestRequest, report func(TestOutcome)) (coverage map[string]LineCoverage, err error)
+	Run(ctx context.Context, root string, requests []TestRequest, report func(TestOutcome)) (coverage RunCoverage, err error)
 }
 
 // Theme is a named set of the map's color tokens, such as bg, ink, added
