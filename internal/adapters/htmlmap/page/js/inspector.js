@@ -95,16 +95,32 @@ const RUNS = [
 ];
 // runRows adds what test runs reached of a module or contract to a metrics
 // table, in the live map only: Before stays empty, since runs measure the
-// working tree.
+// working tree. Its Run tests button runs what the Tests tab's Run does for
+// the selection.
 function runRows(t, id, metrics, contract) {
   if (!LIVE) return;
   const report = testState.report, measures = report && report.measures, x = measures && (contract ? measures.contracts : measures.modules)[id];
-  const head = h("tr", { class: "metric-group" }); head.appendChild(h("td", { colspan: 3 }, "Tests run")); t.appendChild(head);
+  const head = h("tr", { class: "metric-group" }), cell = h("td", { colspan: 3 }, "Tests run");
+  if (metrics.measured) {
+    const scoped = scopedRun(), button = h("button", { type: "button", class: "metric-run", title: scoped.title }, `▶ Run tests (${scoped.visible.length})`);
+    button.disabled = scoped.disabled;
+    button.addEventListener("click", () => { button.textContent = "● Starting…"; button.disabled = true; button.classList.add("busy"); scopedRun().run(); });
+    cell.append(h("span", { class: "metric-run-status", role: "status" }), button);
+  }
+
+  head.appendChild(cell); t.appendChild(head);
+  setTimeout(refreshRunControls);
   for (const [name, about, part, whole] of RUNS) {
     const value = !metrics.measured ? "—" : !x ? "not run" : x[whole] ? `${x[part]} of ${x[whole]}` : "none";
     const shared = x && x.shared ? ` ${x.shared} of the tests ran alongside others, so their reach may include the others'.` : "";
-    const row = h("tr", { title: `Tests run, ${name.toLowerCase()}: ${about}${metrics.measured ? shared : " " + UNMEASURED} Runs measure the working tree, so Before stays empty.` });
+    const row = h("tr", { title: `Tests run, ${name.toLowerCase()}: ${about}${metrics.measured ? shared : " " + UNMEASURED} Runs measure the working tree, so Before stays empty.${metrics.measured ? " Click to see the code those tests ran." : ""}` });
     row.appendChild(h("td", { class: "metric-name metric-child" }, name)); row.appendChild(h("td", {}, "—")); row.appendChild(h("td", {}, value)); t.appendChild(row);
+    if (metrics.measured) {
+      const open = () => { const scoped = scopedRun(); openCodeUnderTest(scoped.visible.map(test => test.id), scoped.scope.title || "all tests"); };
+      row.classList.add("link"); row.tabIndex = 0; row.setAttribute("role", "button");
+      row.addEventListener("click", open);
+      row.addEventListener("keydown", ev => { if (ev_is(ev)) { ev.preventDefault(); open(); } });
+    }
   }
 }
 // proofBlock shows what the tests show about a contract: the tests and
@@ -127,10 +143,8 @@ function proofBlock(box, s) {
     box.appendChild(ul);
   }
   if (LIVE && ["function", "method", "type"].includes(s.kind)) {
-    box.appendChild(h("h2", {}, "Tests run"));
     const t = h("table", { class: "metrics" }); t.innerHTML = "<tr><th>Metric</th><th>Before</th><th>After</th></tr>";
     runRows(t, s.id, m.metrics || {}, true);
-    t.querySelector(".metric-group").remove();
     box.appendChild(t);
   }
   if (s.kind !== "function" && s.kind !== "method") return;

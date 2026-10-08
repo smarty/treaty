@@ -21,12 +21,11 @@
     <label title="Preview the code in another architecture; treaty.yaml switches after 5 minutes or when you choose to use it">Architecture <select id="architecture"><option value="none">None</option><option value="hexagonal">Hexagonal</option><option value="clean">Clean</option><option value="layered">Layered</option><option value="slices">Vertical slices</option><option value="modular">Modular monolith</option></select></label>
     <span class="adopt" id="adopt-bar" role="status" hidden>treaty.yaml switches in <span id="adopt-countdown"></span> <button id="adopt" type="button">Use this architecture</button> <button id="adopt-cancel" type="button">Keep treaty.yaml</button></span>
     <span class="status" id="status" role="status"></span>
-    <label title="When on, Claude's show requests move the view, but only while you are not using the map"><input type="checkbox" id="follow"> Follow Claude</label>
   </span>
   <span class="spacer"></span>
-  <label><input type="checkbox" id="internals"> Show internals</label>
-  <button id="layout-reset" type="button" title="Put every panel back in its drawer">Reset layout</button>
-  <label>Theme <select id="theme"><option value="system">System</option></select></label>
+  <!-- In the project tabs, the theme and the layout are chosen above every map. -->
+  <button id="layout-reset" class="unframed" type="button" title="Put every panel back in its drawer">Reset layout</button>
+  <label class="unframed">Theme <select id="theme"><option value="system">System</option></select></label>
 </header>
 <main id="workspace">
   <div class="dock" id="dock-left" data-dock="left"></div>
@@ -44,10 +43,16 @@
 <div id="panels">
   <section class="panel" data-panel="queue" aria-label="Review queue"><div id="queue"></div></section>
   <section class="panel map-panel" data-panel="map" aria-label="Map">
-  <div class="map-tabs" role="tablist" aria-label="Map views">
-    <button type="button" class="map-tab" role="tab" data-map-tab="references" title="Modules and the references between them">References</button>
-    <button type="button" class="map-tab" role="tab" data-map-tab="files" title="Directories and files as they sit on disk">Files</button>
-    <button type="button" class="map-tab" role="tab" data-map-tab="symbols" title="Every namespace and the symbols it offers">Symbols</button>
+  <div class="map-tabs">
+    <div class="tab-strip map-tab-strip" role="tablist" aria-label="Map views">
+      <button type="button" class="map-tab" role="tab" data-map-tab="references" title="Modules and the references between them">References</button>
+      <button type="button" class="map-tab" role="tab" data-map-tab="files" title="Directories and files as they sit on disk">Files</button>
+      <button type="button" class="map-tab" role="tab" data-map-tab="symbols" title="Every namespace and the symbols it offers">Symbols</button>
+    </div>
+    <div class="map-options" role="group" aria-label="Map options">
+      <label title="Show what can't be used from outside its module or repository, too"><input type="checkbox" id="internals"> Show internals</label>
+      <label id="follow-option" title="When on, Claude's show requests move the view, but only while you are not using the map" hidden><input type="checkbox" id="follow"> Follow Claude</label>
+    </div>
   </div>
   <div class="map-wrap">
     <svg id="map" role="application" aria-label="Hexagon map of modules and contracts"></svg>

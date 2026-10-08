@@ -202,7 +202,7 @@ Examples and error congruence are built for Go, and show as rows of a module's m
 
 **Instrumentation.** Treaty rewrites copies of every non-test file of the Go module being tested and builds them in with `go test -overlay`, `-vet=off` and `-count=1`; the runtime they report to, `treatycover`, exists only in the overlay. Every edit stays on its line. It counts:
 
-- every block: a function body, the blocks of `if`, `else`, `for`, bare blocks and each `case` or `default` clause;
+- every block: a function body, the blocks of `if`, `else`, `for`, bare blocks and each `case` or `default` clause, and, as Go's cover tool does, the statements after an `if`, `for`, `switch`, `select` or nested block, which the one before may not let run;
 - both outcomes of every `if` and `for` condition, and of each operand of `&&` and `||` at its top level;
 - for a comparison in a condition with an exported constant, whether the value was below, at or above it, by `cmp.Compare`; bool constants are left out.
 

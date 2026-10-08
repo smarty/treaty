@@ -141,6 +141,17 @@ type Preferences struct {
 	Layout json.RawMessage `json:"layout,omitempty"`
 }
 
+// MapSettings are one person's choices on one repository's map: whether it
+// follows Claude, whether it shows internals, and the names given to its
+// regions. Names maps each architecture to the names given, by the label
+// the region is drawn with otherwise. A nil field means no choice has been
+// made.
+type MapSettings struct {
+	Follow    *bool                        `json:"follow,omitempty"`
+	Internals *bool                        `json:"internals,omitempty"`
+	Names     map[string]map[string]string `json:"names,omitempty"`
+}
+
 // Position is where a person put a module on the map, in map units.
 type Position struct {
 	X float64 `json:"x"`
@@ -259,6 +270,10 @@ type Workspace interface {
 	// Designs lists the design names.
 	Designs() ([]string, error)
 
+	// MapSettings reads the person's choices on the map, empty when none
+	// have been saved.
+	MapSettings() (MapSettings, error)
+
 	// Positions reads where the person put modules on the map, empty when
 	// nothing has been moved.
 	Positions() (Positions, error)
@@ -268,6 +283,9 @@ type Workspace interface {
 
 	// SaveDesign writes a design, replacing one with the same name.
 	SaveDesign(name, text string) (path string, err error)
+
+	// SaveMapSettings replaces the saved choices on the map.
+	SaveMapSettings(settings MapSettings) error
 
 	// SavePositions replaces the saved module positions.
 	SavePositions(positions Positions) error

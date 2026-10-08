@@ -159,8 +159,8 @@ function bandAt(x, y) {
   regions.forEach((r, i) => { if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) hit = i; });
   if (hit < 0) return null;
   const r = regions[hit];
-  if (D.architecture === "layered") return { key: r.layer, layer: r.layer, side: "", label: r.label, backdrop: "region:" + hit };
-  return { key: "region:" + hit, layer: "", side: "", label: r.label, backdrop: "region:" + hit };
+  if (D.architecture === "layered") return { key: r.layer, layer: r.layer, side: "", label: regionName(r), backdrop: "region:" + hit };
+  return { key: "region:" + hit, layer: "", side: "", label: regionName(r), backdrop: "region:" + hit };
 }
 // inComposition reports whether a point on the outer ring lies within the
 // arc its composition modules span, where composition shares that ring.

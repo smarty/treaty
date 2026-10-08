@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	version = "0.2.0"
+	version = "0.1.0"
 
 	// patience is how long a session waits for the treaty server to come
 	// back before failing the requests it sent.

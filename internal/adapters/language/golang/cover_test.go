@@ -97,7 +97,41 @@ func TestParallelB(t *testing.T) {
 		}
 	}
 
-	check("Truncate saw 3, 4 and 5 against MaxLength 4", contracts["go:text:Truncate"], [6]int{2, 2, 2, 2, 1, 1})
-	check("Kind never saw the condition false, and short-circuiting skipped loud", contracts["go:text:Kind"], [6]int{2, 2, 6, 2, 0, 0})
-	check("the module counts only tests that use its contracts", modules["go:text"], [6]int{5, 4, 8, 4, 1, 1})
+	check("Truncate saw 3, 4 and 5 against MaxLength 4", contracts["go:text:Truncate"], [6]int{3, 3, 2, 2, 1, 1})
+	check("Kind never saw the condition false, and short-circuiting skipped loud", contracts["go:text:Kind"], [6]int{3, 2, 6, 2, 0, 0})
+	check("the module counts only tests that use its contracts", modules["go:text"], [6]int{7, 5, 8, 4, 1, 1})
+
+	code := rules.UnderTest(g, tests, []string{"go:text#TestKind"}, coverage.Probes, coverage.Hits)
+	if len(code.Files) != 1 || code.Files[0].File != "text/text.go" || len(code.Ran) != 1 {
+		t.Fatalf("TestKind ran one file: %+v", code)
+	}
+
+	file := code.Files[0]
+	if len(file.Ranges) != 1 || file.Ranges[0] != [2]int{15, 21} {
+		t.Errorf("only Kind is shown, the code TestKind reached and uses: %v", file.Ranges)
+	}
+
+	lines := map[int]rules.LineUnderTest{}
+	for _, line := range file.Lines {
+		lines[line.Line] = line
+	}
+
+	condition := lines[16]
+	if len(condition.Probes) != 7 || condition.Reached != 3 {
+		t.Errorf("the condition's line holds its block, both outcomes and both operands' outcomes, and TestKind reached the block, true and the first operand's true: %d of %d", condition.Reached, len(condition.Probes))
+	}
+
+	for _, probe := range condition.Probes {
+		if probe.Kind != rules.ProbeBlock && probe.Column == 0 {
+			t.Errorf("a condition's probes span their expression: %+v", probe)
+		}
+
+		if probe.Operand && probe.Kind == rules.ProbeTrue && probe.Column == 5 && (probe.EndColumn != 16 || len(probe.Tests) != 1) {
+			t.Errorf("value == \"\" spans columns 5 to 16 and TestKind reached its true: %+v", probe)
+		}
+	}
+
+	if lines[17].Reached != 1 || lines[20].Reached != 0 || len(lines[20].Probes) != 1 {
+		t.Errorf("the special return ran and the plain one did not: %+v, %+v", lines[17], lines[20])
+	}
 }

@@ -17,6 +17,8 @@ function setMapTab(tab, save = true) {
   tip.style.display = "none"; setGlow(null);
   // The data is indexed by ingest; before that there is nothing to draw.
   if (modules && tab === "symbols" && state.selected && !treeShows(state.selected)) state.trail = trailTo(state.selected);
+  const strip = document.querySelector(".map-tab-strip");
+  if (strip.arrows) revealTab(strip);
   dock.mapTab = tab;
   if (save) saveLayout();
   if (modules) { render(); inspect(); }

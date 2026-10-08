@@ -69,7 +69,7 @@ const LABEL_MIN_PX = 9;
 // mapTab is the map view shown: references, files or symbols. Each view
 // keeps its own camera in views while another is shown, and trail is the
 // path open in the symbols view.
-const state = { pointer: null, selected: null, internals: false, symbolPos: new Map(), view: null, groupOpen: {}, signature: undefined, rendering: false, positions: {}, moved: new Set(), mapTab: "references", views: {}, trail: [], treeFocus: null };
+const state = { pointer: null, selected: null, internals: false, symbolPos: new Map(), view: null, groupOpen: {}, signature: undefined, rendering: false, positions: {}, moved: new Set(), mapTab: "references", views: {}, trail: [], treeFocus: null, regionNames: {} };
 const home = () => { const E = (state.mapTab === "files" && filesLayout ? filesLayout.extent : D.layout.extent) + 20; return { x: -E, y: -E, w: 2 * E, h: 2 * E }; };
 function applyView() {
   if (!D) return;

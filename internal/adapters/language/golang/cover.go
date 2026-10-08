@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/smarty/treaty/internal/rules"
 )
@@ -274,14 +275,37 @@ func (this *instrumenter) boundary(start, end int) {
 	text := this.tokens[op].text
 	equality := text == "==" || text == "!="
 	line := this.tokens[op].line
-	first := this.probe(rules.Probe{Kind: rules.ProbeBelow, Line: line, Constant: constant, Equality: equality})
-	this.probe(rules.Probe{Kind: rules.ProbeAt, Line: line, Group: first, Constant: constant, Equality: equality})
-	this.probe(rules.Probe{Kind: rules.ProbeAbove, Line: line, Group: first, Constant: constant, Equality: equality})
+	column, endColumn := this.columns(start, end)
+	if this.tokens[start].line != line {
+		column, endColumn = 0, 0
+	}
+
+	first := this.probe(rules.Probe{Kind: rules.ProbeBelow, Line: line, Constant: constant, Equality: equality, Column: column, EndColumn: endColumn})
+	this.probe(rules.Probe{Kind: rules.ProbeAt, Line: line, Group: first, Constant: constant, Equality: equality, Column: column, EndColumn: endColumn})
+	this.probe(rules.Probe{Kind: rules.ProbeAbove, Line: line, Group: first, Constant: constant, Equality: equality, Column: column, EndColumn: endColumn})
 	this.probes[first].Group = first
 	this.edits = append(this.edits,
 		edit{at: this.tokens[start].start, text: fmt.Sprintf("_tc.%s(%d, %d, ", call, this.file, first), depth: 2},
 		edit{at: this.tokens[op].start, end: this.tokens[op].end, text: ","},
 		edit{at: this.tokens[end-1].end, text: ") " + text + " 0", closer: true, depth: 2})
+}
+
+// columns spans tokens[start:end] on the line it starts on, in characters
+// from 1: where it starts, and where it ends, or 0 when it ends on a later
+// line.
+func (this *instrumenter) columns(start, end int) (column, endColumn int) {
+	from := this.tokens[start].start
+	lineStart := from
+	for lineStart > 0 && this.src[lineStart-1] != '\n' {
+		lineStart--
+	}
+
+	column = utf8.RuneCount(this.src[lineStart:from]) + 1
+	if last := this.tokens[end-1]; last.line == this.tokens[start].line {
+		endColumn = column + utf8.RuneCount(this.src[from:last.end])
+	}
+
+	return column, endColumn
 }
 
 // composite reports whether the brace at tokens[open], in the header of an
@@ -335,8 +359,9 @@ func (this *instrumenter) condition(start, end int) {
 	}
 
 	line := this.tokens[start].line
-	group := this.probe(rules.Probe{Kind: rules.ProbeTrue, Line: line})
-	this.probe(rules.Probe{Kind: rules.ProbeFalse, Line: line, Group: group})
+	column, endColumn := this.columns(start, end)
+	group := this.probe(rules.Probe{Kind: rules.ProbeTrue, Line: line, Column: column, EndColumn: endColumn})
+	this.probe(rules.Probe{Kind: rules.ProbeFalse, Line: line, Group: group, Column: column, EndColumn: endColumn})
 	this.probes[group].Group = group
 	this.edits = append(this.edits,
 		edit{at: this.tokens[start].start, text: fmt.Sprintf("_tc.D(%d, %d, ", this.file, group)},
@@ -346,8 +371,9 @@ func (this *instrumenter) condition(start, end int) {
 	for _, operand := range operands {
 		if len(operands) > 1 {
 			line := this.tokens[operand[0]].line
-			first := this.probe(rules.Probe{Kind: rules.ProbeTrue, Line: line, Operand: true})
-			this.probe(rules.Probe{Kind: rules.ProbeFalse, Line: line, Operand: true, Group: first})
+			column, endColumn := this.columns(operand[0], operand[1])
+			first := this.probe(rules.Probe{Kind: rules.ProbeTrue, Line: line, Operand: true, Column: column, EndColumn: endColumn})
+			this.probe(rules.Probe{Kind: rules.ProbeFalse, Line: line, Operand: true, Group: first, Column: column, EndColumn: endColumn})
 			this.probes[first].Group = first
 			this.edits = append(this.edits,
 				edit{at: this.tokens[operand[0]].start, text: fmt.Sprintf("_tc.D(%d, %d, (", this.file, first), depth: 1},
@@ -558,8 +584,11 @@ func (this *instrumenter) simple(at int) int {
 // statements instruments a statement list from tokens[at] up to the brace
 // that closes its block or, in a clause, the next case or default, and
 // returns where it stopped. Each statement's first line is the block's.
+// As Go's cover tool does, the statements after an if, for, switch, select
+// or nested block start a block of their own, since the one before may not
+// let control reach them, as when an if returns.
 func (this *instrumenter) statements(at, block int, clause bool) int {
-	index := at
+	index, branched := at, false
 	for index < len(this.tokens) {
 		current := this.tokens[index]
 		switch {
@@ -572,6 +601,13 @@ func (this *instrumenter) statements(at, block int, clause bool) int {
 			continue
 		}
 
+		if branched {
+			branched = false
+			block = this.probe(rules.Probe{Kind: rules.ProbeBlock, Line: current.line})
+			this.edits = append(this.edits, edit{at: current.start, text: fmt.Sprintf("_tc.H(%d, %d); ", this.file, block)})
+			this.lines[current.line] = block
+		}
+
 		if _, ok := this.lines[current.line]; !ok {
 			this.lines[current.line] = block
 		}
@@ -579,6 +615,7 @@ func (this *instrumenter) statements(at, block int, clause bool) int {
 		switch {
 		case current.kind == tokenIdent && !isKeyword(current.text) && index+1 < len(this.tokens) && this.tokens[index+1].is(":"):
 			index += 2
+			continue
 		case current.is("if"):
 			index = this.ifStatement(index)
 		case current.is("for"):
@@ -589,7 +626,10 @@ func (this *instrumenter) statements(at, block int, clause bool) int {
 			index = this.block(index) + 1
 		default:
 			index = this.simple(index)
+			continue
 		}
+
+		branched = true
 	}
 
 	return index

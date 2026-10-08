@@ -135,22 +135,25 @@ func Listen(projects *app.Projects, sessions Sessions, version string, port int)
 	mux.HandleFunc("GET /p/{project}", result.slash)
 	mux.HandleFunc("GET /p/{project}/{$}", result.page)
 	routes := map[string]func(*app.Live, http.ResponseWriter, *http.Request){
-		"GET /api/view":         result.view,
-		"GET /api/state":        result.state,
-		"GET /api/events":       result.events,
-		"POST /api/baseline":    result.baseline,
-		"POST /api/selection":   result.selection,
-		"POST /api/show":        result.show,
-		"GET /api/positions":    result.positions,
-		"POST /api/positions":   result.setPosition,
-		"GET /api/preferences":  result.preferences,
-		"POST /api/reclassify":  result.reclassify,
-		"POST /api/preferences": result.savePreferences,
-		"POST /api/view":        result.setView,
-		"POST /api/view/adopt":  result.adopt,
-		"GET /api/tests":        result.tests,
-		"POST /api/tests/run":   result.runTests,
-		"POST /api/tests/stop":  result.stopTests,
+		"GET /api/view":          result.view,
+		"GET /api/state":         result.state,
+		"GET /api/events":        result.events,
+		"POST /api/baseline":     result.baseline,
+		"POST /api/selection":    result.selection,
+		"POST /api/show":         result.show,
+		"GET /api/map-settings":  result.mapSettings,
+		"POST /api/map-settings": result.saveMapSettings,
+		"GET /api/positions":     result.positions,
+		"POST /api/positions":    result.setPosition,
+		"GET /api/preferences":   result.preferences,
+		"POST /api/reclassify":   result.reclassify,
+		"POST /api/preferences":  result.savePreferences,
+		"POST /api/view":         result.setView,
+		"POST /api/view/adopt":   result.adopt,
+		"GET /api/tests":         result.tests,
+		"POST /api/tests/run":    result.runTests,
+		"POST /api/tests/code":   result.testCode,
+		"POST /api/tests/stop":   result.stopTests,
 	}
 
 	for route, handler := range routes {
@@ -402,6 +405,17 @@ func (this *Server) list(writer http.ResponseWriter, request *http.Request) {
 	respond(writer, result)
 }
 
+// mapSettings serves the person's choices on this repository's map.
+func (this *Server) mapSettings(live *app.Live, writer http.ResponseWriter, _ *http.Request) {
+	settings, err := live.MapSettings()
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	respond(writer, settings)
+}
+
 // page serves the live page of one project, titled with its name.
 func (this *Server) page(writer http.ResponseWriter, request *http.Request) {
 	project, err := this.projects.Find(request.PathValue("project"))
@@ -476,6 +490,50 @@ func (this *Server) runTests(live *app.Live, writer http.ResponseWriter, request
 	default:
 		this.tests(live, writer, request)
 	}
+}
+
+// testCode serves the code the tests named ran, with what their latest runs
+// did and did not reach.
+func (this *Server) testCode(live *app.Live, writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+
+	if !decodeUpTo(writer, request, &body, maxTestsBody) {
+		return
+	}
+
+	code, err := live.TestCode(body.IDs)
+	switch {
+	case errors.Is(err, app.ErrNoTests):
+		http.Error(writer, err.Error(), http.StatusNotFound)
+	case err != nil:
+		http.Error(writer, err.Error(), http.StatusServiceUnavailable)
+	default:
+		respond(writer, code)
+	}
+}
+
+// saveMapSettings merges the fields and region names sent into the saved
+// choices on this repository's map.
+func (this *Server) saveMapSettings(live *app.Live, writer http.ResponseWriter, request *http.Request) {
+	var update app.MapSettings
+	if !decode(writer, request, &update) {
+		return
+	}
+
+	settings, err := live.SaveMapSettings(update)
+	if errors.Is(err, app.ErrMapSettings) {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	respond(writer, settings)
 }
 
 // savePreferences merges the fields sent into the saved choices.

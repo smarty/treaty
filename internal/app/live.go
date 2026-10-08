@@ -145,6 +145,7 @@ type Live struct {
 	adoptAt     time.Time
 	adoptAfter  time.Duration
 	positions   sync.Mutex
+	settings    sync.Mutex
 }
 
 // NewLive creates the live graph for a repository. Nothing is built until
@@ -255,6 +256,32 @@ func (this *Live) Refresh() error {
 	this.notifyLocked()
 	this.mutex.Unlock()
 	return err
+}
+
+// TestCode gathers the code some tests ran in the latest build, with what
+// their latest runs did and did not reach.
+//
+// Parameters:
+//   - ids: the tests to show.
+//
+// Returns:
+//   - result: the code, by file.
+//   - err: there is no build or no test bench.
+//
+// Errors:
+//   - ErrNotReady: the live graph has not been built.
+//   - ErrNoTests: no test bench is in use.
+func (this *Live) TestCode(ids []string) (result rules.CodeUnderTest, err error) {
+	if this.tests == nil {
+		return rules.CodeUnderTest{}, ErrNoTests
+	}
+
+	current, err := this.current()
+	if err != nil {
+		return rules.CodeUnderTest{}, err
+	}
+
+	return this.tests.Code(current.head, ids), nil
 }
 
 // RunTests starts running tests against the latest build; their outcomes

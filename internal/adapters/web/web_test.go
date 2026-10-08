@@ -18,6 +18,7 @@ import (
 	"github.com/smarty/treaty/internal/adapters/htmlmap"
 	"github.com/smarty/treaty/internal/adapters/language/golang"
 	"github.com/smarty/treaty/internal/app"
+	"github.com/smarty/treaty/internal/rules"
 )
 
 func TestLiveServer(t *testing.T) {
@@ -342,6 +343,48 @@ func TestPreferences(t *testing.T) {
 	}
 }
 
+func TestMapSettings(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/shop\n")
+	write(t, root, "core/order.go", "package core\n\ntype Order struct{ ID string }\n")
+	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(filepath.Join(t.TempDir(), "settings.json")))
+	live := app.NewLive(service, filesystem.NewWatcher(root))
+	stop := make(chan struct{})
+	defer close(stop)
+	live.Start(stop)
+	_, base := listen(t, root, live)
+
+	if got := string(get(t, base+"/api/map-settings", http.StatusOK)); strings.TrimSpace(got) != "{}" {
+		t.Fatalf("nothing saved yet: %s", got)
+	}
+
+	// Each save merges into what is kept, and an empty name forgets one.
+	post(t, base+"/api/map-settings", "application/json", `{"follow":true}`, http.StatusOK)
+	post(t, base+"/api/map-settings", "application/json", `{"internals":true,"names":{"slices":{"orders":"Ordering","billing":"Money"}}}`, http.StatusOK)
+	post(t, base+"/api/map-settings", "application/json", `{"names":{"slices":{"billing":""}}}`, http.StatusOK)
+	post(t, base+"/api/map-settings", "application/json", `{"names":{"nowhere":{"a":"b"}}}`, http.StatusBadRequest)
+	post(t, base+"/api/map-settings", "application/json", `{"names":{"slices":{"a":"line\nbreak"}}}`, http.StatusBadRequest)
+
+	var saved app.MapSettings
+	if err := json.Unmarshal(get(t, base+"/api/map-settings", http.StatusOK), &saved); err != nil {
+		t.Fatal(err)
+	}
+
+	if saved.Follow == nil || !*saved.Follow || saved.Internals == nil || !*saved.Internals || len(saved.Names) != 1 || len(saved.Names["slices"]) != 1 || saved.Names["slices"]["orders"] != "Ordering" {
+		t.Fatalf("saved: %+v", saved)
+	}
+
+	// They belong to the repository, kept in its workspace.
+	if _, err := os.Stat(filepath.Join(root, ".treaty", "map.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The project's preferences, kept for every repository, are apart.
+	if got := string(get(t, base+"/api/preferences", http.StatusOK)); strings.TrimSpace(got) != "{}" {
+		t.Fatalf("the map's own settings are not preferences: %s", got)
+	}
+}
+
 func TestMoveModules(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "go.mod", "module example.com/shop\n")
@@ -459,6 +502,18 @@ func TestRunTests(t *testing.T) {
 		}
 
 		time.Sleep(50 * time.Millisecond)
+	}
+
+	response, err := http.Post(base+"/api/tests/code", "application/json", strings.NewReader(`{"ids":["go:calc#TestAdd"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var code rules.CodeUnderTest
+	err = json.NewDecoder(response.Body).Decode(&code)
+	_ = response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK || len(code.Ran) != 1 || len(code.Files) != 1 || code.Files[0].File != "calc/calc.go" || code.Files[0].Reached != code.Files[0].Probes || code.Files[0].Probes == 0 {
+		t.Fatalf("the code TestAdd ran: %d %+v %v", response.StatusCode, code, err)
 	}
 
 	post(t, base+"/api/tests/stop", "application/json", `{}`, http.StatusNoContent)

@@ -21,14 +21,19 @@ const (
 // exported constant it was compared with (below, at or above). Group is the
 // index of the first probe of the same decision or comparison. Equality
 // marks a comparison with == or !=, which needs only at and one side.
+// Column and EndColumn, counted in characters from 1, span the expression a
+// decision, operand or comparison probe counts on its line; EndColumn is
+// past its end, or 0 when it runs onto later lines.
 type Probe struct {
-	Kind     string `json:"kind"`
-	Line     int    `json:"line"`
-	Lines    []int  `json:"lines,omitempty"`
-	Group    int    `json:"group"`
-	Operand  bool   `json:"operand,omitempty"`
-	Constant string `json:"constant,omitempty"`
-	Equality bool   `json:"equality,omitempty"`
+	Kind      string `json:"kind"`
+	Line      int    `json:"line"`
+	Lines     []int  `json:"lines,omitempty"`
+	Group     int    `json:"group"`
+	Operand   bool   `json:"operand,omitempty"`
+	Constant  string `json:"constant,omitempty"`
+	Equality  bool   `json:"equality,omitempty"`
+	Column    int    `json:"column,omitempty"`
+	EndColumn int    `json:"end_column,omitempty"`
 }
 
 // Exercised is what test runs show about a module or a contract: of the

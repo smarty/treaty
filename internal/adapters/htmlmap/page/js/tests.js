@@ -83,11 +83,13 @@ async function refreshTests() {
 // applyTests shows a report, redrawing the map only when coverage changed.
 function applyTests(report) {
   testState.shown = report.version;
-  const measures = JSON.stringify(report.measures || null), reinspect = measures !== testState.measuresKey;
+  // What runs reached shows in the inspector, so it follows the measures
+  // and the tests found; the Run tests buttons follow every report.
+  const measures = JSON.stringify([report.measures || null, (report.tests || []).length]), reinspect = measures !== testState.measuresKey;
   testState.measuresKey = measures;
   if (ingestTests(report) && D) render();
-  // What runs reached shows in the inspector, so it follows them.
   if (reinspect && D && state.selected) inspect(); else showTests();
+  refreshRunControls();
 }
 async function postTests(path, body) {
   try {
@@ -207,6 +209,33 @@ function tallyText(counts) {
   if (counts.none) parts.push(`${counts.none} not run`);
   return parts.join(" · ");
 }
+// scopedRun is what Run in the Tests tab runs: every test, or those for
+// the selection. The inspector's Tests run button runs the same.
+function scopedRun() {
+  const report = testState.report, scope = testScope(), visible = report ? report.tests.filter(scope.match) : [];
+  return {
+    scope, visible,
+    title: scope.all ? "Run every test" : `Run the tests shown, those for ${scope.title}`,
+    disabled: !report || report.running || !visible.length,
+    run: () => runTests(visible.map(t => t.id)),
+  };
+}
+// refreshRunControls keeps each Run tests button in the inspector in step
+// with the runs: Running while the selection's tests are queued or running,
+// and beside it how those tests fared, as they finish. It changes only the
+// buttons, so the inspector keeps its place.
+function refreshRunControls() {
+  for (const button of document.querySelectorAll("#inspector .metric-run")) {
+    const scoped = scopedRun(), counts = tally(scoped.visible), busy = !!(counts.running || counts.queued);
+    button.textContent = busy ? "● Running…" : `▶ Run tests (${scoped.visible.length})`;
+    button.disabled = busy || scoped.disabled;
+    button.classList.toggle("busy", busy);
+    const status = button.parentElement.querySelector(".metric-run-status");
+    if (!status) continue;
+    status.textContent = scoped.visible.length > (counts.none || 0) ? tallyText(counts) : "";
+    status.classList.toggle("failed", !!counts.fail);
+  }
+}
 function showTests() {
   const box = document.getElementById("tests"); if (!box) return;
   box.innerHTML = "";
@@ -214,11 +243,11 @@ function showTests() {
   if (!LIVE) return note("Tests run on the live map. Start it with treaty serve and open the map it prints.");
   const report = testState.report;
   if (!report || !D) return note(testState.error || "Loading the tests…");
-  const scope = testScope(), visible = report.tests.filter(scope.match);
+  const scoped = scopedRun(), { scope, visible } = scoped;
   const bar = h("div", { class: "tests-bar" });
-  const run = h("button", { type: "button", title: scope.all ? "Run every test" : `Run the tests shown, those for ${scope.title}` }, `▶ Run ${scope.all ? "all" : "shown"} (${visible.length})`);
-  run.disabled = report.running || !visible.length;
-  run.addEventListener("click", () => runTests(visible.map(t => t.id)));
+  const run = h("button", { type: "button", title: scoped.title }, `▶ Run ${scope.all ? "all" : "shown"} (${visible.length})`);
+  run.disabled = scoped.disabled;
+  run.addEventListener("click", scoped.run);
   bar.appendChild(run);
   if (report.running) { const stop = h("button", { type: "button", title: "Stop the run" }, "■ Stop"); stop.addEventListener("click", stopTests); bar.appendChild(stop); }
   bar.appendChild(h("span", { class: "tests-summary", role: "status" }, tallyText(tally(visible))));
@@ -274,23 +303,26 @@ function testTree(visible, expand) {
     if (more.childElementCount) tree.appendChild(more);
     for (const sub of subs) testRow(sub, sub.slice(id.length + 1), null, depth + 1);
   };
-  // row draws one line of the tree: a toggle with its icon and name, and a
-  // button that runs the tests beneath it.
+  // row draws one line of the tree: the arrow, which opens and closes it;
+  // the icon and name, which open a tab on the code the tests beneath it
+  // ran; and a button that runs those tests.
   const row = (depth, open, toggle, icon, name, title, badge, cov, ids, status, label) => {
     const line = h("div", { class: "test-row" + (status === "fail" ? " failed" : ""), role: "treeitem", "aria-expanded": String(open) });
-    const button = h("button", { type: "button", class: "test-toggle", title, "aria-label": label || name });
+    const button = h("button", { type: "button", class: "test-toggle", title: open ? "Collapse" : "Expand", "aria-label": `${open ? "Collapse" : "Expand"} ${label || name}` });
     button.style.paddingLeft = `${depth * 14 + 4}px`;
     button.appendChild(h("span", { class: "tree-arrow", "aria-hidden": "true" }, open ? "▾" : "▸"));
-    button.appendChild(icon);
-    button.appendChild(h("span", { class: "tree-name" }, name));
-    if (badge) button.appendChild(h("span", { class: "tree-count" + (badge.startsWith("✗") ? " fail" : "") }, badge));
-    if (cov) button.appendChild(h("span", { class: "coverage-text" }, cov));
     button.addEventListener("click", () => { toggle(); showTests(); const again = document.querySelector(`#tests [data-row="${CSS.escape(ids[0] + "|" + depth)}"] .test-toggle`); if (again) again.focus(); });
+    const named = h("button", { type: "button", class: "test-name", title: `${title} · show the code ${ids.length === 1 ? "it" : "they"} ran`, "aria-label": `Show the code ${label || name} ran` });
+    named.appendChild(icon);
+    named.appendChild(h("span", { class: "tree-name" }, name));
+    if (badge) named.appendChild(h("span", { class: "tree-count" + (badge.startsWith("✗") ? " fail" : "") }, badge));
+    if (cov) named.appendChild(h("span", { class: "coverage-text" }, cov));
+    named.addEventListener("click", () => openCodeUnderTest(ids, name));
     line.dataset.row = ids[0] + "|" + depth;
     const play = h("button", { type: "button", class: "test-run", title: ids.length === 1 ? `Run ${name}` : `Run the ${ids.length} tests in ${name}`, "aria-label": `Run ${name}` }, "▶");
     play.disabled = testState.report.running;
     play.addEventListener("click", () => runTests(ids));
-    line.append(button, play);
+    line.append(button, named, play);
     tree.appendChild(line);
   };
   children(root, 0);

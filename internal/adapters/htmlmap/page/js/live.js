@@ -172,13 +172,13 @@ function postSelection(sel) {
   const body = sel ? { type: sel.type, id: sel.id || "", from: sel.from || "", to: sel.to || "" } : {};
   fetch("api/selection", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
 }
-// A person's theme, layout and "Follow Claude" choice are kept by the server
-// in ~/.treaty/settings.json, so they follow them across repositories,
+// A person's theme and layout are kept by the server in
+// ~/.treaty/settings.json, so they follow them across repositories,
 // browsers and ports. Browser storage keeps a copy, for static maps and for
 // the moment before the server answers. Changes are sent in batches.
 // Nothing is sent until the saved preferences have loaded, so the layout the
 // page starts with can never overwrite the one the person saved.
-let pendingPreferences = null, preferencesTimer = 0, preferencesLoaded = false;
+let pendingPreferences = null, preferencesTimer = 0, preferencesLoaded = false, savedFollow = null;
 function savePreferences(update) {
   if (!LIVE || !preferencesLoaded) return;
   pendingPreferences = { ...(pendingPreferences || {}), ...update };
@@ -189,27 +189,54 @@ function savePreferences(update) {
   }, 400);
 }
 // loadPreferences applies what the server keeps. When it keeps nothing yet,
-// this browser's choices become the saved ones.
+// this browser's choices become the saved ones. "Follow Claude" was once
+// kept here for every map; it now belongs to each map, and the old choice
+// is where a map without its own starts.
 async function loadPreferences() {
   let saved = {};
   try { const response = await fetch("api/preferences", { cache: "no-store" }); if (!response.ok) return; saved = await response.json(); } catch (err) { return; }
   preferencesLoaded = true;
-  const follow = document.getElementById("follow");
+  if (typeof saved.follow === "boolean") savedFollow = saved.follow;
   if (saved.theme) { themeChoice = saved.theme; fillThemeMenu(); applyTheme(); }
   else if (themeChoice !== "system") savePreferences({ theme: themeChoice });
-  if (typeof saved.follow === "boolean") follow.checked = saved.follow;
-  else if (follow.checked) savePreferences({ follow: true });
   if (typeof saved.legend === "boolean") setLegend(saved.legend, false);
   else if (!legendShown()) savePreferences({ legend: false });
   if (saved.layout) { dock = loadLayout(saved.layout); renderLayout(); setMapTab(dock.mapTab, false); }
   else if (storedLayout()) savePreferences({ layout: dock });
 }
+// A map's own choices, "Follow Claude", "Show internals" and the names
+// given to its regions, are kept by the server in the repository's .treaty
+// directory. As with preferences, nothing is sent until they have loaded.
+let mapSettingsLoaded = false;
+function saveMapSettings(update) {
+  if (!LIVE || !mapSettingsLoaded) return Promise.resolve(null);
+  return fetch("api/map-settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) })
+    .then(response => response.ok ? response.json() : null).catch(() => null);
+}
+async function loadMapSettings() {
+  let saved = {};
+  try { const response = await fetch("api/map-settings", { cache: "no-store" }); if (!response.ok) return; saved = await response.json() || {}; } catch (err) { return; }
+  mapSettingsLoaded = true;
+  const follow = document.getElementById("follow");
+  if (typeof saved.follow === "boolean") follow.checked = saved.follow;
+  else {
+    const start = storedOption("follow") ?? savedFollow ?? false;
+    follow.checked = start;
+    if (start) saveMapSettings({ follow: true });
+  }
+  storeOption("follow", follow.checked);
+  if (typeof saved.internals === "boolean") { setInternals(saved.internals); storeOption("internals", saved.internals); }
+  else if (state.internals) saveMapSettings({ internals: true });
+  state.regionNames = saved.names || {};
+  if (modules) render();
+}
 function startLive() {
   document.getElementById("live").hidden = false;
+  document.getElementById("follow-option").hidden = false;
   const follow = document.getElementById("follow");
-  try { follow.checked = localStorage.getItem("treaty.follow") === "1"; } catch (err) { /* storage unavailable */ }
-  follow.addEventListener("change", () => { try { localStorage.setItem("treaty.follow", follow.checked ? "1" : "0"); } catch (err) { /* storage unavailable */ } savePreferences({ follow: follow.checked }); });
-  loadPreferences();
+  follow.checked = storedOption("follow") === true;
+  follow.addEventListener("change", () => { storeOption("follow", follow.checked); saveMapSettings({ follow: follow.checked }); });
+  loadPreferences().then(loadMapSettings);
   loadPositions();
   document.getElementById("offer-go").addEventListener("click", () => {
     const target = offered; dismissOffer(); if (!target) return;

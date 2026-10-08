@@ -59,7 +59,7 @@ function drawReferences(svg, rel) {
   }
   for (const [index, r] of (D.layout.regions || []).entries()) {
     el("rect", { class: "backdrop", "data-band": "region:" + index, x: r.x, y: r.y, width: r.w, height: r.h, rx: 8, fill: color(tones[r.tone] || tones[3]), stroke: color("--ring-stroke"), "vector-effect": "non-scaling-stroke" }, svg);
-    el("text", { x: 0, y: 0, class: "ring-label" }, anchored(svg, r.x + 10, r.y + 17, {}, true, true)).textContent = r.label;
+    el("text", { x: 0, y: 0, class: "ring-label" }, anchored(svg, r.x + 10, r.y + 17, {}, true, true)).textContent = regionName(r);
   }
   for (const l of D.layout.labels || []) el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, l.x, l.y, {}, true, true)).textContent = l.text;
 
@@ -261,4 +261,64 @@ function placeSymbol(g, s, x, y, r, rel, file) {
   sg.addEventListener("click", pick);
   sg.addEventListener("keydown", ev => { if (ev_is(ev)) { ev.preventDefault(); pick(ev); } });
   return shape;
+}
+
+// ---- Regions ----
+// A region's name is the label the layout gives it, a layer, a slice's
+// directory or a context, unless the person gave it another. Names given
+// are kept per architecture and are only for the map: treaty.yaml, the
+// rules and every check keep the region's own label.
+function regionName(r) { return ((state.regionNames || {})[D.architecture] || {})[r.label] || r.label; }
+// regionAt finds the region under a map point, and its index.
+function regionAt(x, y) {
+  let hit = -1;
+  (D.layout.regions || []).forEach((r, i) => { if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) hit = i; });
+  return hit < 0 ? null : { region: D.layout.regions[hit], index: hit };
+}
+// regionContextMenu opens a region's menu on a right click inside it, away
+// from its modules.
+function regionContextMenu(ev) {
+  if (ev.defaultPrevented || carry || state.mapTab !== "references" || !D || !(D.layout.regions || []).length) return;
+  if (ev.target.closest && ev.target.closest("[data-module], [data-group], [data-symbol]")) return;
+  const p = toMap(ev.clientX, ev.clientY), hit = regionAt(p.x, p.y);
+  if (!hit) return;
+  ev.preventDefault();
+  regionMenu(hit, ev.clientX, ev.clientY);
+}
+function regionMenu({ region, index }, x, y) {
+  const name = regionName(region), renamed = name !== region.label;
+  const moved = [...state.moved].filter(id => { const p = D.layout.modules[id], at = p && regionAt(p.x, p.y); return at && at.index === index; });
+  const items = [];
+  if (LIVE) {
+    items.push({ label: "Rename…", title: "Give this region another name on the map; treaty.yaml keeps its own", action: () => renameRegion(region, x, y) });
+    items.push({ label: `Restore the name “${region.label}”`, disabled: !renamed, title: renamed ? "" : "This region has its own name", action: () => nameRegion(region, "") });
+    items.push("-");
+  }
+  items.push({ label: "Zoom to this region", action: () => zoomToRect(region) });
+  if (LIVE) items.push({ label: moved.length ? `Put its ${moved.length} moved module${moved.length === 1 ? "" : "s"} back` : "Put its moved modules back", disabled: !moved.length, title: moved.length ? "Return them to where the layout places them" : "No module here has been moved", action: () => { for (const id of moved) savePosition(id, null); } });
+  openMenu(x, y, "Region " + name, items);
+}
+function renameRegion(region, x, y) {
+  openPrompt(x, y, `Rename “${regionName(region)}”`, regionName(region), value => nameRegion(region, value.trim()));
+}
+// nameRegion gives a region a name on this map, or with "" its own label
+// back.
+async function nameRegion(region, name) {
+  const style = D.architecture, before = state.regionNames;
+  const names = { ...(state.regionNames[style] || {}) };
+  if (!name || name === region.label) delete names[region.label]; else names[region.label] = name;
+  state.regionNames = { ...state.regionNames, [style]: names };
+  render();
+  const saved = await saveMapSettings({ names: { [style]: { [region.label]: name === region.label ? "" : name } } });
+  if (saved) { state.regionNames = saved.names || {}; render(); return; }
+  state.regionNames = before; render();
+  setStatus("could not save the region's name", true);
+}
+// zoomToRect fits the view around a rectangle of the map, keeping the
+// view's shape.
+function zoomToRect(r) {
+  const v = state.view || home(), ratio = v.h / v.w, pad = 1.08;
+  const w = Math.max(r.w, r.h / ratio) * pad, h = w * ratio;
+  state.view = { x: r.x + r.w / 2 - w / 2, y: r.y + r.h / 2 - h / 2, w, h };
+  applyView();
 }

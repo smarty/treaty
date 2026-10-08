@@ -32,7 +32,8 @@ function defaultLayout() {
 }
 // loadLayout reads the remembered layout and repairs it: unknown or repeated
 // panels are dropped, missing ones go back to their default drawer, and a
-// missing map returns to the center.
+// missing map returns to the center. Tabs opened on demand are not panels
+// yet when the layout loads, so they are dropped too.
 function storedLayout() { try { return JSON.parse(localStorage.getItem(LAYOUT_KEY)); } catch (err) { return null; } }
 function loadLayout(layout) {
   const fresh = defaultLayout();
@@ -65,6 +66,7 @@ function workspaceRect() { return document.getElementById("workspace").getBoundi
 // listeners survive.
 function renderLayout() {
   const store = document.getElementById("panels"), ws = document.getElementById("workspace");
+  if (tabStrips) for (const strip of ws.querySelectorAll(".tab-strip")) if (!strip.closest(".panel")) tabStrips.unobserve(strip);
   for (const id of Object.keys(PANELS)) store.appendChild(panelEl(id));
   ws.querySelectorAll(".float").forEach(node => node.remove());
   for (const side of SIDES) {
@@ -90,14 +92,23 @@ function stackEl(stack, where) {
   const node = h("div", { class: "stack" });
   node.style.flexGrow = String(stack.weight || 1);
   node.stackRef = stack; node.where = where;
-  const bar = h("div", { class: "tabbar", role: "tablist" });
+  const bar = h("div", { class: "tabbar" }), strip = h("div", { class: "tab-strip", role: "tablist" });
   for (const id of stack.tabs) {
     const active = id === stack.active;
     const tab = h("button", { class: "tab" + (active ? " active" : ""), type: "button", role: "tab", "aria-selected": String(active), "data-tab": id, title: `${PANELS[id].title}: drag to reorder or move` }, PANELS[id].title);
     tab.addEventListener("click", () => { if (stack.active !== id) { stack.active = id; renderLayout(); } });
     tab.addEventListener("pointerdown", ev => startTabDrag(ev, id, stack));
-    bar.appendChild(tab);
+    // A tab opened on demand, such as code under test, closes.
+    if (PANELS[id].closable) {
+      const close = h("span", { class: "tab-close", role: "button", tabindex: 0, title: "Close", "aria-label": "Close " + PANELS[id].title }, "×");
+      close.addEventListener("pointerdown", ev => ev.stopPropagation());
+      close.addEventListener("click", ev => { ev.stopPropagation(); closePanel(id); });
+      close.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); closePanel(id); } });
+      tab.appendChild(close);
+    }
+    strip.appendChild(tab);
   }
+  bar.appendChild(scrollTabs(strip));
   const body = h("div", { class: "stack-body" + (stack.active === "map" ? " fill" : "") });
   if (stack.active) body.appendChild(panelEl(stack.active));
   else body.appendChild(h("p", { class: "stack-empty" }, "Drag a tab here."));
@@ -113,9 +124,9 @@ function floatEl(float) {
   const place = () => Object.assign(node.style, { left: float.x + "px", top: float.y + "px", width: float.w + "px", height: float.h + "px" });
   place();
   // Dragging the tab bar's empty space moves the window; the corner resizes it.
-  const bar = node.querySelector(".tabbar");
+  const bar = node.querySelector(".tabbar"), strip = node.querySelector(".tab-strip");
   bar.addEventListener("pointerdown", ev => {
-    if (ev.target !== bar || ev.button !== 0) return;
+    if ((ev.target !== bar && ev.target !== strip) || ev.button !== 0) return;
     ev.preventDefault();
     const start = { x: ev.clientX - float.x, y: ev.clientY - float.y };
     track(e => { float.x = Math.min(Math.max(e.clientX - start.x, 0), ws.width - float.w); float.y = Math.min(Math.max(e.clientY - start.y, 0), ws.height - float.h); place(); }, saveLayout);
@@ -147,6 +158,7 @@ function startTabDrag(ev, id, source) {
       document.body.appendChild(ghost);
     }
     Object.assign(ghost.style, { left: e.clientX + 12 + "px", top: e.clientY + 8 + "px" });
+    nudgeTabs(e.clientX, e.clientY);
     target = dropTarget(e.clientX, e.clientY, source, id);
     showHint(target);
   }, () => {
@@ -154,6 +166,21 @@ function startTabDrag(ev, id, source) {
     ghost.remove(); showHint(null); swallowClick();
     if (target) moveTab(id, source, target);
   });
+}
+// closePanel closes a tab opened on demand, dropping its panel and any
+// stack it leaves empty.
+function closePanel(id) {
+  for (const stack of [dock.center, ...SIDES.flatMap(side => dock[side].stacks), ...dock.floating]) {
+    if (!stack.tabs.includes(id)) continue;
+    stack.tabs = stack.tabs.filter(tab => tab !== id);
+    if (stack.active === id) stack.active = stack.tabs[0];
+  }
+  for (const side of SIDES) dock[side].stacks = dock[side].stacks.filter(s => s.tabs.length);
+  dock.floating = dock.floating.filter(s => s.tabs.length);
+  const node = panelEl(id);
+  if (node) node.remove();
+  delete PANELS[id];
+  renderLayout();
 }
 // showPanel brings a panel's tab to the front of its stack.
 function showPanel(id) {
@@ -191,6 +218,7 @@ function dragToReorder(bar, selector, onOrder) {
         document.body.appendChild(ghost);
       }
       Object.assign(ghost.style, { left: e.clientX + 12 + "px", top: e.clientY + 8 + "px" });
+      nudgeTabs(e.clientX, e.clientY);
       const r = bar.getBoundingClientRect(), rest = others();
       target = e.clientY >= r.top - 12 && e.clientY <= r.bottom + 12 ? insertionAt(bar, rest, e.clientX) : null;
       if (target && [...bar.querySelectorAll(":scope > " + selector)].indexOf(tab) === target.index) target = null;
@@ -205,9 +233,62 @@ function dragToReorder(bar, selector, onOrder) {
     });
   });
 }
+// ---- Scrolling tabs ----
+// A strip of tabs scrolls sideways once its tabs overflow it: the wheel
+// scrolls it, an arrow at each end shows while there is more to see that
+// way, dragging a tab near an end scrolls toward it, and the selected tab is
+// kept in view.
+const TAB_NUDGE_ZONE = 28, TAB_NUDGE_STEP = 12;
+const tabStrips = typeof ResizeObserver === "function" ? new ResizeObserver(entries => { for (const entry of entries) updateTabArrows(entry.target); }) : null;
+// scrollTabs wraps a strip with its arrows, returning the wrapper to place.
+function scrollTabs(strip) {
+  const wrap = h("div", { class: "tab-scroller" });
+  const arrow = (step, label, text) => {
+    const button = h("button", { type: "button", class: "tab-scroll " + (step < 0 ? "back" : "ahead"), tabindex: -1, "aria-hidden": "true", title: label }, text);
+    button.hidden = true;
+    // Pressing an arrow neither drags a tab nor moves a floating window.
+    button.addEventListener("pointerdown", ev => ev.stopPropagation());
+    button.addEventListener("click", () => strip.scrollBy({ left: step * Math.max(80, strip.clientWidth * 0.75), behavior: "smooth" }));
+    return button;
+  };
+  strip.arrows = [arrow(-1, "Scroll the tabs left", "‹"), arrow(1, "Scroll the tabs right", "›")];
+  wrap.append(strip.arrows[0], strip, strip.arrows[1]);
+  strip.addEventListener("scroll", () => updateTabArrows(strip), { passive: true });
+  strip.addEventListener("wheel", ev => {
+    if (strip.scrollWidth <= strip.clientWidth || Math.abs(ev.deltaX) >= Math.abs(ev.deltaY)) return;
+    ev.preventDefault();
+    strip.scrollLeft += ev.deltaMode === 1 ? ev.deltaY * 16 : ev.deltaY;
+  }, { passive: false });
+  if (tabStrips) tabStrips.observe(strip);
+  requestAnimationFrame(() => { revealTab(strip); updateTabArrows(strip); });
+  return wrap;
+}
+function updateTabArrows(strip) {
+  if (!strip.arrows) return;
+  const end = strip.scrollWidth - strip.clientWidth;
+  strip.arrows[0].hidden = strip.scrollLeft <= 1;
+  strip.arrows[1].hidden = strip.scrollLeft >= end - 1;
+}
+// revealTab scrolls a strip just enough to show its selected tab.
+function revealTab(strip) {
+  const tab = strip.querySelector('[aria-selected="true"]');
+  if (!tab) return;
+  const left = tab.offsetLeft, right = left + tab.offsetWidth, room = 24;
+  if (left < strip.scrollLeft + room) strip.scrollLeft = left - room;
+  else if (right > strip.scrollLeft + strip.clientWidth - room) strip.scrollLeft = right - strip.clientWidth + room;
+}
+// nudgeTabs scrolls the strip under a dragged tab when it nears an end.
+function nudgeTabs(x, y) {
+  for (const strip of document.querySelectorAll(".tab-strip")) {
+    const r = strip.getBoundingClientRect();
+    if (y < r.top - 8 || y > r.bottom + 8 || x < r.left - 8 || x > r.right + 8) continue;
+    if (x < r.left + TAB_NUDGE_ZONE) strip.scrollLeft -= TAB_NUDGE_STEP;
+    else if (x > r.right - TAB_NUDGE_ZONE) strip.scrollLeft += TAB_NUDGE_STEP;
+  }
+}
 // orderMapTabs puts the map's view tabs in the remembered order.
 function orderMapTabs() {
-  const bar = document.querySelector(".map-tabs");
+  const bar = document.querySelector(".map-tab-strip");
   for (const tab of dock.mapOrder) bar.appendChild(bar.querySelector(`[data-map-tab="${tab}"]`));
 }
 // dropTarget decides what releasing a dragged tab at a point would do, and
@@ -316,7 +397,15 @@ function layoutChanged() {
   cancelAnimationFrame(refit);
   refit = requestAnimationFrame(() => { if (D && document.getElementById("map").getBoundingClientRect().width > 0) render(); });
 }
-document.getElementById("layout-reset").addEventListener("click", () => { dock = { ...defaultLayout(), mapTab: state.mapTab }; renderLayout(); });
+// resetLayout puts every panel back in its drawer. Tabs opened on demand,
+// such as coverage, go to the center.
+function resetLayout() {
+  const opened = Object.keys(PANELS).filter(id => PANELS[id].closable);
+  dock = { ...defaultLayout(), mapTab: state.mapTab };
+  dock.center.tabs.push(...opened);
+  renderLayout();
+}
+document.getElementById("layout-reset").addEventListener("click", resetLayout);
 window.addEventListener("resize", () => { if (dock.floating.length) renderLayout(); });
 renderLayout();
 for (const button of document.querySelectorAll(".map-tab")) {
@@ -328,7 +417,9 @@ for (const button of document.querySelectorAll(".map-tab")) {
     setMapTab(next); document.querySelector(`[data-map-tab="${next}"]`).focus();
   });
 }
-dragToReorder(document.querySelector(".map-tabs"), ".map-tab", tabs => { dock.mapOrder = tabs.map(tab => tab.dataset.mapTab); orderMapTabs(); saveLayout(); });
+const mapTabStrip = document.querySelector(".map-tab-strip"), mapTabRest = mapTabStrip.nextSibling;
+mapTabStrip.parentElement.insertBefore(scrollTabs(mapTabStrip), mapTabRest);
+dragToReorder(mapTabStrip, ".map-tab", tabs => { dock.mapOrder = tabs.map(tab => tab.dataset.mapTab); orderMapTabs(); saveLayout(); });
 setMapTab(dock.mapTab, false);
 
 buildLegend();

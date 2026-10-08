@@ -67,9 +67,23 @@ main#workspace { position: relative; display: grid; grid-template-columns: var(-
 .splitter.row { height: 5px; cursor: row-resize; background: linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat; }
 .splitter:hover, .splitter.dragging, .splitter:focus-visible { background: var(--focus); outline: none; }
 .stack { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; background: var(--panel); }
-.tabbar { display: flex; gap: 2px; padding: 4px 6px 0; border-bottom: 1px solid var(--line); background: var(--bg); flex: none; overflow-x: auto; }
-.tab { font-size: 12px; padding: 4px 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: transparent; color: var(--muted); cursor: grab; white-space: nowrap; -webkit-user-select: none; user-select: none; touch-action: none; }
+.tabbar { display: flex; padding: 4px 6px 0; border-bottom: 1px solid var(--line); background: var(--bg); flex: none; }
+/* Tabs that overflow their strip scroll sideways, with an arrow over each
+   end that has more to see. */
+.tab-scroller { position: relative; display: flex; flex: 1; min-width: 0; }
+.tab-strip { display: flex; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; position: relative; }
+.tab-strip::-webkit-scrollbar { display: none; }
+.tab-scroll { position: absolute; top: 0; bottom: 0; z-index: 2; width: 24px; padding: 0; border: 0; border-radius: 0; font-size: 16px; line-height: 1; color: var(--muted); cursor: default; }
+.tab-scroll[hidden] { display: none; }
+.tab-scroll:hover { color: var(--ink); }
+.tab-scroll.back { left: 0; text-align: left; padding-left: 4px; background: linear-gradient(to right, var(--bg) 55%, transparent); }
+.tab-scroll.ahead { right: 0; text-align: right; padding-right: 4px; background: linear-gradient(to left, var(--bg) 55%, transparent); }
+.map-tabs .tab-scroll.back { background: linear-gradient(to right, var(--panel) 55%, transparent); }
+.map-tabs .tab-scroll.ahead { background: linear-gradient(to left, var(--panel) 55%, transparent); }
+.tab { flex: none; font-size: 12px; padding: 4px 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: transparent; color: var(--muted); cursor: default; white-space: nowrap; -webkit-user-select: none; user-select: none; touch-action: none; }
 .tab.active { background: var(--panel); border-color: var(--line); color: var(--ink); }
+/* A tab under the pointer lights up, so it reads as something to press. */
+.tab:not(.active):hover { background: color-mix(in srgb, var(--ink) 9%, transparent); color: var(--ink); }
 .stack-body { flex: 1; min-height: 0; overflow: auto; position: relative; }
 .stack-body.fill { overflow: hidden; }
 .panel { padding: 12px; }
@@ -78,9 +92,17 @@ main#workspace { position: relative; display: grid; grid-template-columns: var(-
 .map-wrap[hidden], .symbol-tree[hidden] { display: none; }
 /* The map's own views. They belong to the map panel and go wherever it goes,
    so dragging one only reorders them; it can't dock like the workspace's tabs. */
-.map-tabs { display: flex; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
-.map-tab { font-size: 12px; padding: 2px 12px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--muted); -webkit-user-select: none; user-select: none; touch-action: none; }
+.map-tabs { display: flex; align-items: center; gap: 12px; padding: 4px 8px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
+.map-tab-strip { gap: 4px; }
+/* The map's options sit at the end of its view bar, and belong to this
+   project's map alone. */
+.map-options { display: flex; align-items: center; gap: 12px; flex: none; font-size: 12px; color: var(--ink); white-space: nowrap; }
+.map-options label { display: inline-flex; align-items: center; gap: 4px; }
+.map-options label[hidden] { display: none; }
+.map-tab { flex: none; font-size: 12px; padding: 2px 12px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--muted); -webkit-user-select: none; user-select: none; touch-action: none; }
 .map-tab[aria-selected="true"] { background: var(--bg); border-color: var(--line); color: var(--ink); font-weight: 600; }
+.map-tab { cursor: default; }
+.map-tab:not([aria-selected="true"]):hover { background: color-mix(in srgb, var(--ink) 9%, transparent); color: var(--ink); }
 .stack-empty { color: var(--muted); font-size: 12px; padding: 16px; }
 /* The symbols view: a column per level, the chosen item alone in its column
    and its children in the next. */
@@ -172,6 +194,13 @@ table.metrics.proof th:not(:first-child) { width: 5em; }
 /* A group of metrics heads its rows, which sit indented beneath it. */
 table.metrics tr.metric-group td { text-align: left; font-weight: 600; color: var(--ink); border-bottom: 0; padding-top: 8px; }
 table.metrics td.metric-child { padding-left: 18px; }
+table.metrics tr.metric-group .metric-run { float: right; font-size: 11px; padding: 1px 8px; font-weight: normal; }
+table.metrics tr.metric-group .metric-run:disabled { opacity: .6; cursor: default; }
+table.metrics tr.metric-group .metric-run.busy { opacity: 1; }
+table.metrics tr.metric-group .metric-run-status { margin-left: 8px; font-size: 11px; font-weight: normal; color: var(--muted); }
+table.metrics tr.metric-group .metric-run-status.failed { color: var(--high); }
+@keyframes run-pulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: no-preference) { table.metrics tr.metric-group .metric-run.busy { animation: run-pulse 1.2s ease-in-out infinite; } }
 /* A metric's full name, cut off when the panel is narrow; its tooltip
    always has the whole name and what it measures. */
 table.metrics td.metric-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
@@ -221,7 +250,10 @@ table.refs tr.ref-added { box-shadow: inset 3px 0 var(--added); } table.refs tr.
 .test-tree { display: grid; }
 .test-row { display: flex; align-items: center; border-radius: 6px; }
 .test-row:hover { background: var(--bg); }
-.test-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-align: left; background: transparent; border: 1px solid transparent; padding: 2px 4px; font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); }
+/* A row's arrow opens and closes it; its name opens the code its tests ran. */
+.test-toggle { flex: none; display: flex; align-items: center; background: transparent; border: 1px solid transparent; padding: 2px 2px 2px 4px; font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); }
+.test-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-align: left; background: transparent; border: 1px solid transparent; padding: 2px 4px; font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); cursor: pointer; }
+.test-name:hover .tree-name { text-decoration: underline dotted; }
 .test-run { flex: none; background: transparent; border: 1px solid transparent; padding: 0 6px; font-size: 10px; color: var(--muted); }
 .test-run:not(:disabled):hover { color: var(--accent); border-color: var(--line); }
 .test-status { flex: none; width: 18px; text-align: center; font-weight: 700; }
@@ -235,3 +267,50 @@ table.refs tr.ref-added { box-shadow: inset 3px 0 var(--added); } table.refs tr.
 .test-output.failed { border-left: 3px solid var(--high); }
 @media (prefers-reduced-motion: no-preference) { .test-status.running { animation: test-pulse 1s ease-in-out infinite; } }
 @keyframes test-pulse { 50% { opacity: .35; } }
+
+/* Tabs opened on demand close from their own ×. */
+.tab-close { margin-left: 6px; padding: 0 4px; border-radius: 4px; color: var(--muted); cursor: default; }
+.tab-close:hover, .tab-close:focus-visible { background: color-mix(in srgb, var(--ink) 20%, transparent); color: var(--ink); }
+table.metrics tr.link { cursor: pointer; }
+table.metrics tr.link:hover td { background: var(--bg); }
+
+/* Code under test: every line with probes reads by glyph, color and count,
+   so it never relies on color alone. */
+.undertest-total { font-size: 12px; margin: 4px 0; }
+.undertest-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); }
+.ut-key.full, .ut-outcome.full, .ut-line.full .mark { color: var(--added); }
+.ut-key.part, .ut-line.part .mark { color: var(--changed); }
+.ut-key.none, .ut-outcome.none, .ut-line.none .mark { color: var(--removed); }
+.ut-file { margin: 14px 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.ut-file-head { display: flex; justify-content: space-between; gap: 8px; padding: 4px 8px; background: var(--bg); border-bottom: 1px solid var(--line); font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
+.ut-count { color: var(--muted); white-space: nowrap; }
+table.ut-code { width: 100%; border-collapse: collapse; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, monospace; }
+table.ut-code td { padding: 0 6px; vertical-align: top; }
+table.ut-code td.ln { width: 1%; text-align: right; color: var(--muted); -webkit-user-select: none; user-select: none; }
+table.ut-code td.mark { width: 1.4em; text-align: center; font-weight: 700; }
+table.ut-code td.src { white-space: pre; tab-size: 4; }
+table.ut-code td.cov { width: 1%; text-align: right; color: var(--muted); white-space: nowrap; }
+.ut-line.full td.src { background: color-mix(in srgb, var(--added) 14%, transparent); }
+.ut-line.part td.src { background: color-mix(in srgb, var(--changed) 18%, transparent); }
+.ut-line.none td.src { background: color-mix(in srgb, var(--removed) 14%, transparent); }
+.ut-line.part { cursor: pointer; }
+.ut-line.part:hover td, .ut-line.part:focus-visible td { outline: 1px solid var(--focus); outline-offset: -1px; }
+tr.ut-gap td { color: var(--muted); text-align: center; background: var(--bg); }
+tr.ut-detail td { background: var(--code-bg); font: 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 4px 8px 4px 48px; }
+tr.ut-detail ul { margin: 2px 0; padding-left: 16px; }
+tr.ut-detail code { font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
+.ut-outcome { font-weight: 600; margin-right: 4px; }
+/* In the project tabs, the theme and the layout are chosen above every map. */
+.framed .unframed { display: none; }
+/* Menus and prompts float at the pointer, over everything. */
+.popup { position: fixed; z-index: 30; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.3); padding: 4px; font-size: 12px; }
+.context-menu { display: flex; flex-direction: column; min-width: 200px; }
+.menu-item { text-align: left; font: inherit; color: var(--ink); background: none; border: 0; border-radius: 5px; padding: 5px 10px; cursor: default; white-space: nowrap; }
+.menu-item:not(:disabled):hover, .menu-item:focus-visible, .menu-item:focus { background: color-mix(in srgb, var(--accent) 20%, transparent); outline: none; }
+.menu-item:disabled { color: var(--muted); }
+.menu-separator { height: 1px; margin: 4px 2px; background: var(--line); }
+.prompt { display: flex; flex-direction: column; gap: 8px; width: 260px; padding: 10px; }
+.prompt-title { font-weight: 600; }
+.prompt input { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+.prompt input:focus-visible { outline: 2px solid var(--focus); outline-offset: -1px; }
+.prompt-actions { display: flex; justify-content: flex-end; gap: 6px; }

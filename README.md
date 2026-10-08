@@ -188,7 +188,10 @@ a divider to resize a drawer. Drag a tab to move its panel into another
 drawer, split a drawer, join the map as a tab, or float it over the map;
 drop it on a tab bar to put it among those tabs, which also reorders them.
 The map's views and the project tabs reorder the same way, but don't dock.
-*Reset layout* restores the default.
+Tabs that don't fit scroll sideways: use the wheel or the arrows at either
+end. *Reset layout*, beside the Theme menu at the top, restores the default.
+*Show internals* and *Follow Claude* sit at the end of the map's view bar
+and belong to each project's map.
 Click a file's cell to select it, just like a module or symbol: the
 inspector shows the file's code and its agent context slice, and a symbol
 shows its documentation and code. Within a file, symbols run values, types,
@@ -216,7 +219,15 @@ up, and the tip says what a drop will do. Escape puts the module back.
   classifies it. Moves between layers wait while another architecture is
   previewed.
 
-The Theme menu offers System (following your OS) and 21 themes: Light and
+Right-click a band, slice or area (`layered`, `slices`, `modular` and
+`none`) for its menu: *Rename…* gives it another name on this map,
+*Restore the name* takes it back, *Zoom to this region* fits it in view, and
+*Put its moved modules back* returns the modules moved inside it. Names are
+for the map only, saved for this repository and architecture in
+`.treaty/map.json`; `treaty.yaml`, the rules and the checks keep the
+region's own name.
+
+The Theme menu, at the top beside the project tabs, offers System (following your OS) and 21 themes: Light and
 Dark in the style of VS Code's defaults; High Contrast and Color-blind Safe
 versions of each for accessibility; and Dawn, Dusk, Fjord, Vampire, Harvest,
 Blossom, Great Wave, Gumdrop, Gumdrop Light, Neon Rain, Comic, Midnight, DOS
@@ -225,9 +236,10 @@ Themes are JSON files in `~/.treaty/themes/`. Treaty rewrites its own there
 every time a server starts, so copy one to a new name to make your own; any
 other `.json` file there shows up in the menu under Yours.
 
-Your theme, layout and *Follow Claude* choice are saved in
-`~/.treaty/settings.json`, so they follow you across repositories, browsers
-and sessions.
+Your theme and layout are saved in `~/.treaty/settings.json`, so they
+follow you across repositories, browsers and sessions. Each map's *Show
+internals*, *Follow Claude* and region names are saved with its repository,
+in `.treaty/map.json`.
 
 ## Working with Claude Code
 

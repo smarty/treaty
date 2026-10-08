@@ -247,6 +247,47 @@ func (this *Tests) Report(g *graph.Graph) (result TestReport) {
 	return result
 }
 
+// Code gathers the code some tests ran, with what their latest runs did
+// and did not reach, from the files whose probes still match their text.
+//
+// Parameters:
+//   - g: the graph of the working tree.
+//   - ids: the tests to show.
+//
+// Returns:
+//   - result: the code, by file.
+func (this *Tests) Code(g *graph.Graph, ids []string) (result rules.CodeUnderTest) {
+	cases, _ := this.discover(g)
+	this.mutex.Lock()
+	probes, hits, hashes := map[string][]rules.Probe{}, map[string]map[string][]int{}, map[string]string{}
+	for file, each := range this.coverage {
+		if len(each.probes) == 0 {
+			continue
+		}
+
+		probes[file], hashes[file] = each.probes, each.hash
+		for test, indexes := range each.hits {
+			if hits[test] == nil {
+				hits[test] = map[string][]int{}
+			}
+
+			hits[test][file] = indexes
+		}
+	}
+
+	this.mutex.Unlock()
+	for file, hash := range hashes {
+		if this.hash(file) != hash {
+			delete(probes, file)
+			for _, files := range hits {
+				delete(files, file)
+			}
+		}
+	}
+
+	return rules.UnderTest(g, testUses(cases), ids, probes, hits)
+}
+
 // Run starts running tests in the background and returns at once. Outcomes
 // arrive in later reports.
 //
