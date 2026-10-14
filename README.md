@@ -218,7 +218,7 @@ up, and the tip says what a drop will do. Escape puts the module back.
   classifies it. Moves between layers wait while another architecture is
   previewed.
 
-The **treaty.yaml** tab, beside the inspector, holds the whole file for
+The **Terms** tab, beside the inspector, holds the whole `treaty.yaml` for
 editing. Save checks it the way `treaty check` reads it, so a file that
 would not load is refused with its line marked, and it won't overwrite a
 change made on disk since you opened it. See

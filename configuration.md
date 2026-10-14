@@ -184,7 +184,7 @@ A silently ignored typo is how a check stops checking.
 
 ## Editing from the map
 
-The live map's **treaty.yaml** tab holds the whole file. Save checks it as
+The live map's **Terms** tab holds the whole file. Save checks it as
 Treaty reads it, so a file that would not load is refused with its line
 marked, and refuses to overwrite the file if it changed on disk since the
 tab loaded it. The map, the checks and agents follow a saved file at once.

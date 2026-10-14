@@ -129,7 +129,6 @@ function showState(st) {
 function showView(view) {
   if (!view || !view.configured) return;
   const select = document.getElementById("architecture");
-  for (const option of select.options) option.textContent = option.textContent.replace(/ \(treaty\.yaml\)$/, "") + (option.value === view.configured ? " (treaty.yaml)" : "");
   if (document.activeElement !== select) select.value = view.architecture;
   document.getElementById("adopt-bar").hidden = !view.previewing;
   document.getElementById("adopt-cancel").textContent = `Keep ${view.configured}`;

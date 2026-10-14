@@ -15,8 +15,9 @@
 // panel, and the center may be left empty. The layout, with the map view
 // shown and the order of the map's views, is remembered per browser.
 // A panel that fills its stack, such as the map, scrolls inside itself
-// rather than in the stack.
-const PANELS = { map: { title: "Map", fill: true, float: { w: 640, h: 480 } }, queue: { title: "Review queue" }, inspector: { title: "Inspector" }, code: { title: "Code" }, tests: { title: "Tests" }, config: { title: "treaty.yaml", fill: true } };
+// rather than in the stack. A panel's about, when it has one, joins its
+// title in the tab's tooltip.
+const PANELS = { map: { title: "Map", fill: true, float: { w: 640, h: 480 } }, queue: { title: "Review queue" }, inspector: { title: "Inspector" }, code: { title: "Code" }, tests: { title: "Tests" }, config: { title: "Terms", about: "treaty.yaml", fill: true } };
 const MAP_TABS = { references: "References", files: "Files", symbols: "Symbols" };
 const LAYOUT_KEY = "treaty.layout.v1";
 const DRAWER_MIN = 160, CENTER_MIN = 240, EDGE_ZONE = 28, DRAG_START = 5, SPLIT_ZONE = 0.3, STACK_MIN = 60;
@@ -97,7 +98,7 @@ function stackEl(stack, where) {
   const bar = h("div", { class: "tabbar" }), strip = h("div", { class: "tab-strip", role: "tablist" });
   for (const id of stack.tabs) {
     const active = id === stack.active;
-    const tab = h("button", { class: "tab" + (active ? " active" : ""), type: "button", role: "tab", "aria-selected": String(active), "data-tab": id, title: `${PANELS[id].title}: drag to reorder or move` }, PANELS[id].title);
+    const tab = h("button", { class: "tab" + (active ? " active" : ""), type: "button", role: "tab", "aria-selected": String(active), "data-tab": id, title: `${PANELS[id].title}${PANELS[id].about ? ` (${PANELS[id].about})` : ""}: drag to reorder or move` }, PANELS[id].title);
     tab.addEventListener("click", () => { if (stack.active !== id) { stack.active = id; renderLayout(); } });
     tab.addEventListener("pointerdown", ev => startTabDrag(ev, id, stack));
     // A tab opened on demand, such as code under test, closes.

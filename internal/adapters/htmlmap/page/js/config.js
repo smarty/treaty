@@ -1,4 +1,4 @@
-// The treaty.yaml tab: the whole file, to read and edit. A save goes through
+// The Terms tab: treaty.yaml, the whole file, to read and edit. A save goes through
 // the same strict reading treaty check uses, so a file that would not load
 // is refused with its line, and it goes through only while the file still
 // holds what the editor started from, so a save never discards a change
