@@ -207,10 +207,12 @@ function collapsedSignature() {
   if (state.mapTab === "files") return "files|" + Math.round(Math.log2(pixelsPerUnit()) * 2);
   return (D.layout.groups || []).filter(isCollapsed).map(g => g.id).join("|") + (cellDetail() ? "|cells" : "");
 }
-// placeName says where the architecture puts a module: its slice or
-// context, its layer and side, and whether it is public.
+// placeName says where the architecture puts a module: its boundary, its
+// layer and side, and whether it is public, or the boundaries that tie
+// for it.
 function placeName(m) {
-  const within = m.section ? m.section.split("/").pop() + " · " : "";
+  if (m.ambiguous) return "claimed by " + m.ambiguous.join(" and ");
+  const within = m.boundary ? m.boundary + " · " : "";
   return within + m.layer + (m.side ? ` (${m.side})` : "") + (m.public ? " (public)" : "");
 }
 // moduleSize is a module hexagon's radius: larger for a module with more

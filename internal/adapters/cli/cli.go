@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -47,7 +46,7 @@ commands:
                                               a new one, such as a newly built treaty
   init [--architecture <name>]                create .treaty and propose treaty.yaml for an
                                               architecture: none (default), hexagonal,
-                                              clean, layered, slices or modular
+                                              clean, layered, vertical or modular
   url [--port <n>]                            print the live map's address for this directory
   here [--force]                              register treaty in this repository's .mcp.json,
                                               so Claude Code sessions here start it
@@ -184,7 +183,7 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	architecture := flags.String("architecture", "", "architecture for init: clean, hexagonal, layered, modular or slices")
+	architecture := flags.String("architecture", "", "architecture for init: clean, hexagonal, layered, modular or vertical")
 	base := flags.String("base", "", "git ref to diff against")
 	at := flags.String("at", "", "git ref to read instead of the working tree")
 	format := flags.String("format", "json", "json or text")
@@ -381,8 +380,8 @@ func checkText(report app.Report) string {
 			layer += "/" + module.Side
 		}
 
-		if module.Section != "" {
-			layer = path.Base(module.Section) + "/" + layer
+		if module.Boundary != "" {
+			layer = module.Boundary + "/" + layer
 		}
 
 		if module.Public {
@@ -408,6 +407,10 @@ func checkText(report app.Report) string {
 	}
 
 	builder.WriteString("\n")
+	for _, warning := range report.Warnings {
+		fmt.Fprintf(&builder, "warning: %s\n", warning)
+	}
+
 	if len(report.Failures) > 0 {
 		fmt.Fprintf(&builder, "FAIL: %s\n", strings.Join(report.Failures, "; "))
 	} else {

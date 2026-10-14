@@ -1,3 +1,4 @@
+version: 1
 architecture: hexagonal
 layers:
   composition: ["cmd/**"]
@@ -7,5 +8,4 @@ layers:
     driving:   ["internal/adapters/cli/**", "internal/adapters/mcp/**", "internal/adapters/web/**"]
     driven:    ["internal/adapters/language/**", "internal/adapters/filesystem/**", "internal/adapters/gitvcs/**", "internal/adapters/htmlmap/**"]
 rules:
-  fail_on: [breaking, layer_violation]
-  warn_on: [unclassified]
+  fail_on: [breaking_changes, layer_violation, unclassified]

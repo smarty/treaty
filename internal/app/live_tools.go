@@ -525,6 +525,10 @@ func (this *analysis) overview() (result string) {
 
 	fmt.Fprintf(&builder, "%d modules, %d symbols, baseline %s\n", len(g.Modules), len(g.Symbols), baseline)
 	builder.WriteString(this.config.Architecture.Summary() + "\n")
+	if this.config.Unversioned {
+		builder.WriteString("note: " + unversionedNote + "\n")
+	}
+
 	for _, layer := range overviewOrder(this.config.Architecture, byLayer) {
 		modules := byLayer[layer]
 		if len(modules) == 0 {
@@ -659,8 +663,7 @@ func changeDetail(change rules.Change) string {
 }
 
 // overviewOrder lists the overview's groups: hexagonal and clean from the
-// center outward, layered from the top down, and slices and contexts by
-// name, with composition, shared and unclassified around them.
+// center outward, layered from the top down, and boundaries by name, with composition, shared and unclassified around them.
 func overviewOrder(architecture rules.Architecture, groups map[string][]*graph.Module) []string {
 	if architecture.Style == rules.StyleHexagonal {
 		return []string{"domain", "application", "adapter (driving)", "adapter (driven)", "composition", "unclassified"}
@@ -690,24 +693,22 @@ func overviewOrder(architecture rules.Architecture, groups map[string][]*graph.M
 	return append(append([]string{graph.LayerComposition}, middle...), graph.LayerShared, graph.LayerUnclassified)
 }
 
-// placeName names a placement for people: its layer and side, its slice
-// and the layer inside it, or its context and whether it is public.
+// placeName names a placement for people: its layer and side, its
+// boundary and the layer inside it, and whether it is public.
 func placeName(place rules.Placement) string {
 	switch {
-	case place.Slice == "":
+	case place.Boundary == "":
 		if place.Side != "" {
 			return fmt.Sprintf("%s (%s)", place.Layer, place.Side)
 		}
 
 		return place.Layer
-	case place.Layer == graph.LayerContext && place.Public:
-		return fmt.Sprintf("context %s (public)", place.Slice)
-	case place.Layer == graph.LayerContext:
-		return "context " + place.Slice
-	case place.Layer == graph.LayerSlice:
-		return "slice " + place.Slice
+	case place.Layer == graph.LayerBoundary && place.Public:
+		return fmt.Sprintf("boundary %s (public)", place.Boundary)
+	case place.Layer == graph.LayerBoundary:
+		return "boundary " + place.Boundary
 	default:
-		return fmt.Sprintf("slice %s: %s", place.Slice, place.Layer)
+		return fmt.Sprintf("boundary %s: %s", place.Boundary, place.Layer)
 	}
 }
 
@@ -720,7 +721,7 @@ func placeOf(g *graph.Graph, module string) rules.Placement {
 }
 
 func placement(module *graph.Module) rules.Placement {
-	return rules.Placement{Layer: module.Layer, Side: module.Side, Slice: module.Slice, Public: module.Public}
+	return rules.Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous}
 }
 
 func moduleEdgeSet(g *graph.Graph) map[string]bool {

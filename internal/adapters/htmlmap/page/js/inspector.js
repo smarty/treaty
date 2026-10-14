@@ -316,7 +316,7 @@ function inspect() {
   } else if (sel.type === "module") {
     const m = modules.get(sel.id); if (!m) return;
     box.appendChild(h("h3", {}, m.label || m.path));
-    dl(box, [["Id", m.id], ["Manifest", m.manifest || ""], ["Layer", m.layer + (m.side ? ` (${m.side})` : "")], [D.architecture === "modular" ? "Context" : "Slice", m.section || ""], ["API", m.public ? "public" : ""], ["Status", m.design ? "planned, not built" : m.new ? "new" : m.removed ? "removed" : ""]]);
+    dl(box, [["Id", m.id], ["Manifest", m.manifest || ""], ["Layer", m.layer + (m.side ? ` (${m.side})` : "")], ["Boundary", m.boundary || ""], ["Claimed by", m.ambiguous ? m.ambiguous.join(" and ") + ", equally" : ""], ["API", m.public ? "public" : ""], ["Status", m.design ? "planned, not built" : m.new ? "new" : m.removed ? "removed" : ""]]);
     box.appendChild(h("p", {}, m.guidance));
     if (state.moved.has(m.id)) {
       const moved = h("p", {}, "You placed this module here. "), back = h("button", { type: "button" }, "Put it back");

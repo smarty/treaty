@@ -87,10 +87,11 @@ func TestCleanPointsInward(t *testing.T) {
 	}
 }
 
-func TestSlicesAreIndependent(t *testing.T) {
+func TestBoundariesAreIndependent(t *testing.T) {
 	architecture := Architecture{
-		Style: StyleSlices, Composition: []string{"cmd/**"}, Shared: []string{"internal/platform/**"}, Slices: []string{"internal/features/*"},
-		Layers: []Layer{{Name: "store", Globs: []string{"store/**"}}, {Name: "api", Globs: []string{"."}}},
+		Style: StyleVertical, Composition: []string{"cmd/**"}, Shared: []string{"internal/platform/**"},
+		Boundaries: []Boundary{{Name: "orders", Globs: []string{"internal/features/orders/**"}}, {Name: "billing", Globs: []string{"internal/features/billing/**"}}},
+		Layers:     []Layer{{Name: "store", Globs: []string{"**/store/**"}}, {Name: "api", Globs: []string{"internal/features/*"}}},
 	}
 
 	if err := architecture.Validate(); err != nil {
@@ -116,12 +117,12 @@ func TestSlicesAreIndependent(t *testing.T) {
 	g.Normalize()
 	architecture.Assign(g)
 
-	if m := g.Module("go:internal/features/orders/store"); m.Layer != "store" || m.Slice != "internal/features/orders" {
-		t.Fatalf("orders/store placed at %s in %s", m.Layer, m.Slice)
+	if m := g.Module("go:internal/features/orders/store"); m.Layer != "store" || m.Boundary != "orders" {
+		t.Fatalf("orders/store placed at %s in %s", m.Layer, m.Boundary)
 	}
 
-	if m := g.Module("go:internal/features/billing/extra"); m.Layer != graph.LayerUnclassified || m.Slice != "internal/features/billing" {
-		t.Fatalf("billing/extra placed at %s in %s", m.Layer, m.Slice)
+	if m := g.Module("go:internal/features/billing/extra"); m.Layer != graph.LayerUnclassified || m.Boundary != "billing" {
+		t.Fatalf("billing/extra placed at %s in %s", m.Layer, m.Boundary)
 	}
 
 	var got []string
@@ -141,7 +142,11 @@ func TestSlicesAreIndependent(t *testing.T) {
 }
 
 func TestModularPublicSurfaceAndCycles(t *testing.T) {
-	architecture := Architecture{Style: StyleModular, Slices: []string{"internal/*"}, Public: []string{".", "api/**"}}
+	architecture := Architecture{Style: StyleModular, Boundaries: []Boundary{
+		{Name: "orders", Globs: []string{"internal/orders/**"}},
+		{Name: "billing", Globs: []string{"internal/billing/**"}},
+		{Name: "shipping", Globs: []string{"internal/shipping/**"}},
+	}, Public: []string{"internal/*", "internal/*/api/**"}}
 	if err := architecture.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +169,7 @@ func TestModularPublicSurfaceAndCycles(t *testing.T) {
 	g.Normalize()
 	architecture.Assign(g)
 
-	if m := g.Module("go:internal/billing/api"); !m.Public || m.Slice != "internal/billing" {
+	if m := g.Module("go:internal/billing/api"); !m.Public || m.Boundary != "billing" {
 		t.Fatalf("billing/api: %+v", m)
 	}
 
@@ -191,6 +196,43 @@ func TestModularPublicSurfaceAndCycles(t *testing.T) {
 	}
 }
 
+func TestBoundaryPrecedence(t *testing.T) {
+	architecture := Architecture{Style: StyleModular, Shared: []string{"lib/**"}, Boundaries: []Boundary{
+		{Name: "orders", Globs: []string{"**/orders/**"}},
+		{Name: "billing", Globs: []string{"web/billing/**", "store/billing/**", "web/billing/orders/legacy"}},
+		{Name: "shipping", Globs: []string{"web/*/shipping/**"}},
+		{Name: "legacy", Globs: []string{"legacy/**"}},
+	}}
+
+	if err := architecture.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct {
+		path string
+		want Placement
+	}{
+		{"web/orders", Placement{Layer: graph.LayerBoundary, Boundary: "orders", Public: true}},
+		{"store/orders/db", Placement{Layer: graph.LayerBoundary, Boundary: "orders"}},
+		{"web/billing", Placement{Layer: graph.LayerBoundary, Boundary: "billing", Public: true}},
+		{"store/billing", Placement{Layer: graph.LayerBoundary, Boundary: "billing", Public: true}},
+		// web/billing/** has two literal segments and **/orders/** one.
+		{"web/billing/orders", Placement{Layer: graph.LayerBoundary, Boundary: "billing"}},
+		// An exact path wins over every wildcard.
+		{"web/billing/orders/legacy", Placement{Layer: graph.LayerBoundary, Boundary: "billing", Public: true}},
+		// Shared comes before boundaries.
+		{"lib/orders", Placement{Layer: graph.LayerShared}},
+		// One literal segment each: a tie.
+		{"legacy/orders", Placement{Layer: graph.LayerUnclassified, Ambiguous: []string{"orders", "legacy"}}},
+		{"web/x/shipping/orders", Placement{Layer: graph.LayerBoundary, Boundary: "shipping"}},
+		{"docs", Placement{Layer: graph.LayerUnclassified}},
+	} {
+		if got := architecture.Resolve(c.path); !got.Same(c.want) {
+			t.Errorf("%s: got %+v, want %+v", c.path, got, c.want)
+		}
+	}
+}
+
 func TestValidate(t *testing.T) {
 	for _, c := range []struct {
 		name         string
@@ -198,10 +240,14 @@ func TestValidate(t *testing.T) {
 	}{
 		{"unknown style", Architecture{Style: "onion"}},
 		{"layered without layers", Architecture{Style: StyleLayered}},
-		{"slices without globs", Architecture{Style: StyleSlices}},
-		{"slice glob with **", Architecture{Style: StyleSlices, Slices: []string{"features/**"}}},
-		{"modular with layers", Architecture{Style: StyleModular, Slices: []string{"internal/*"}, Layers: []Layer{{Name: "api"}}}},
-		{"shared outside slices", Architecture{Style: StyleLayered, Layers: []Layer{{Name: "web"}}, Shared: []string{"lib/**"}}},
+		{"vertical without boundaries", Architecture{Style: StyleVertical}},
+		{"boundary without globs", Architecture{Style: StyleVertical, Boundaries: []Boundary{{Name: "orders"}}}},
+		{"boundary without a name", Architecture{Style: StyleVertical, Boundaries: []Boundary{{Globs: []string{"x/**"}}}}},
+		{"duplicate boundary", Architecture{Style: StyleModular, Boundaries: []Boundary{{Name: "a", Globs: []string{"a/**"}}, {Name: "a", Globs: []string{"b/**"}}}}},
+		{"modular with layers", Architecture{Style: StyleModular, Boundaries: []Boundary{{Name: "a", Globs: []string{"a/**"}}}, Layers: []Layer{{Name: "api"}}}},
+		{"shared outside boundaries", Architecture{Style: StyleLayered, Layers: []Layer{{Name: "web"}}, Shared: []string{"lib/**"}}},
+		{"boundaries in layered", Architecture{Style: StyleLayered, Layers: []Layer{{Name: "web"}}, Boundaries: []Boundary{{Name: "a", Globs: []string{"a/**"}}}}},
+		{"boundary as a layer name", Architecture{Style: StyleLayered, Layers: []Layer{{Name: "boundary"}}}},
 		{"reserved layer name", Architecture{Style: StyleLayered, Layers: []Layer{{Name: "shared"}}}},
 		{"duplicate layer", Architecture{Style: StyleLayered, Layers: []Layer{{Name: "web"}, {Name: "web"}}}},
 	} {
@@ -273,7 +319,7 @@ func TestExactPathWinsOverWildcards(t *testing.T) {
 		"cmd/tool":      {Layer: graph.LayerAdapter, Side: graph.SideDriving},
 		"cmd/server":    {Layer: graph.LayerComposition},
 	} {
-		if got := architecture.Resolve(path); got != want {
+		if got := architecture.Resolve(path); !got.Same(want) {
 			t.Errorf("Resolve(%s) = %+v, want %+v", path, got, want)
 		}
 	}

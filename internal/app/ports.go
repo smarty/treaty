@@ -48,11 +48,32 @@ type Registration struct {
 	Outcome string
 }
 
+// ConfigVersion is the newest treaty.yaml format, the one treaty init
+// writes. The version changes only when a key changes meaning or goes away;
+// a new optional key keeps it. A file without a version is version 0, the
+// format from before versions, which reads the same as version 1.
+const ConfigVersion = 1
+
+// RuleNames maps each name rules.fail_on and rules.warn_on take in
+// treaty.yaml to the kind of finding it stands for, in the order the names
+// are documented.
+var RuleNames = []struct{ Name, Kind string }{
+	{"breaking_changes", rules.FindingBreaking},
+	{"layer_violation", rules.FindingLayerViolation},
+	{"dependency_cycles", rules.FindingCycle},
+	{"unclassified", rules.FindingUnclassified},
+	{"ambiguous_boundaries", rules.FindingAmbiguous},
+}
+
 // Config is the parsed treaty.yaml.
 type Config struct {
 	Architecture rules.Architecture
 	FailOn       []string
 	WarnOn       []string
+
+	// Unversioned is true when treaty.yaml has no version line, which
+	// makes it version 0, the format from before versions.
+	Unversioned bool
 }
 
 // ConfigSource loads the layer config.
@@ -73,6 +94,27 @@ type ConfigSource interface {
 	//   - err: there is no config, or the edit would not place the module
 	//     there.
 	Place(modulePath string, placement rules.Placement) (path string, err error)
+
+	// Text reads the config file as it is, for a person to edit.
+	//
+	// Returns:
+	//   - text: the file's text; empty when there is no file.
+	//   - found: false when no config file exists.
+	//   - err: the file could not be read.
+	Text() (text string, found bool, err error)
+
+	// Save replaces the config file with text, after reading text exactly
+	// as Load would, and only when the file still holds expected.
+	//
+	// Returns:
+	//   - path: where the config was written.
+	//   - err: the text is not a config Load reads, the file changed, or
+	//     the write failed.
+	//
+	// Errors:
+	//   - ErrConfigInvalid: Load would refuse the text.
+	//   - ErrConfigChanged: the file no longer holds expected.
+	Save(text, expected string) (path string, err error)
 }
 
 // Declaration is what a dialect learns from one AutoPen declaration line.

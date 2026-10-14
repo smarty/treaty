@@ -38,6 +38,9 @@ const (
 	// maxTestsBody admits a request to run every test of a large repository.
 	maxTestsBody = 4 * 1024 * 1024
 
+	// maxConfigBody bounds a saved treaty.yaml, with the text it replaces.
+	maxConfigBody = 1024 * 1024
+
 	joinedHeader   = "X-Treaty-Joined"
 	mapHeader      = "X-Treaty-Map"
 	protocolHeader = "X-Treaty-Protocol"
@@ -141,6 +144,8 @@ func Listen(projects *app.Projects, sessions Sessions, version string, port int)
 		"POST /api/baseline":     result.baseline,
 		"POST /api/selection":    result.selection,
 		"POST /api/show":         result.show,
+		"GET /api/config":        result.config,
+		"POST /api/config":       result.saveConfig,
 		"GET /api/map-settings":  result.mapSettings,
 		"POST /api/map-settings": result.saveMapSettings,
 		"GET /api/positions":     result.positions,
@@ -403,6 +408,45 @@ func (this *Server) list(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	respond(writer, result)
+}
+
+// config serves treaty.yaml as it is on disk.
+func (this *Server) config(live *app.Live, writer http.ResponseWriter, _ *http.Request) {
+	text, err := live.ConfigText()
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	respond(writer, text)
+}
+
+// saveConfig replaces treaty.yaml with the text the person edited, when it
+// is valid and the file still holds the text they started from, and
+// answers with the file as saved.
+func (this *Server) saveConfig(live *app.Live, writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Text     string `json:"text"`
+		Expected string `json:"expected"`
+	}
+
+	if !decodeUpTo(writer, request, &body, maxConfigBody) {
+		return
+	}
+
+	switch _, err := live.SaveConfig(body.Text, body.Expected); {
+	case errors.Is(err, app.ErrConfigInvalid):
+		http.Error(writer, err.Error(), http.StatusUnprocessableEntity)
+		return
+	case errors.Is(err, app.ErrConfigChanged):
+		http.Error(writer, err.Error(), http.StatusConflict)
+		return
+	case err != nil:
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	this.config(live, writer, request)
 }
 
 // mapSettings serves the person's choices on this repository's map.

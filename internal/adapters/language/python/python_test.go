@@ -484,7 +484,7 @@ func newService(t *testing.T, root string) *app.Service {
 func TestPackagesKeepTheImportedModule(t *testing.T) {
 	root := t.TempDir()
 	for name, text := range map[string]string{
-		"treaty.yaml":                "architecture: modular\ncontexts: [\"ctx/*\"]\npublic: [\".\"]\n",
+		"treaty.yaml":                "version: 1\narchitecture: modular\nboundaries:\n  a: [\"ctx/a/**\"]\n  b: [\"ctx/b/**\"]\n  c: [\"ctx/c/**\"]\n  d: [\"ctx/d/**\"]\n",
 		"ctx/__init__.py":            "",
 		"ctx/a/__init__.py":          "from .internal.h import helper\nfrom .internal.h import tool as instrument\nfrom .internal.more import *\n",
 		"ctx/a/internal/__init__.py": "",

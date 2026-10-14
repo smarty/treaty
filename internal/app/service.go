@@ -187,7 +187,30 @@ func (this *analysis) fromEntry(change rules.Change) bool {
 	return module != nil && module.Entry
 }
 
+// failures says what fails the check: each kind of finding fail_on lists,
+// counted without what the base already had.
 func (this *analysis) failures() []string {
+	return this.problems(this.config.FailOn)
+}
+
+// warnings says what warn_on lists and fail_on does not, counted the same
+// way. Warnings never fail the check.
+func (this *analysis) warnings() []string {
+	var kinds []string
+	for _, kind := range this.config.WarnOn {
+		if !slices.Contains(this.config.FailOn, kind) {
+			kinds = append(kinds, kind)
+		}
+	}
+
+	return this.problems(kinds)
+}
+
+// problems describes, for each of the given kinds of finding, how many the
+// change brought: violations and cycle edges the base did not have,
+// breaking changes, and modules newly unclassified or claimed by two
+// boundaries.
+func (this *analysis) problems(kinds []string) []string {
 	var result []string
 	counts := map[string]int{}
 	for _, violation := range this.violations {
@@ -196,39 +219,90 @@ func (this *analysis) failures() []string {
 		}
 	}
 
-	if slices.Contains(this.config.FailOn, rules.FindingLayerViolation) && counts[rules.FindingLayerViolation] > 0 {
-		result = append(result, fmt.Sprintf("%d layer violation(s)", counts[rules.FindingLayerViolation]))
-	}
-
-	if slices.Contains(this.config.FailOn, rules.FindingCycle) && counts[rules.FindingCycle] > 0 {
-		result = append(result, fmt.Sprintf("%d cycle edge(s) between contexts", counts[rules.FindingCycle]))
-	}
-
-	if slices.Contains(this.config.FailOn, rules.FindingBreaking) {
-		changed, moved := 0, 0
-		for _, change := range this.changes {
-			switch {
-			case change.Kind == rules.ChangeBreaking || change.Kind == rules.ChangeRemoved:
-				changed++
-			case change.Kind == rules.ChangeMoved && !this.fromEntry(change):
-				moved++
-			}
+	for _, module := range this.head.Modules {
+		if kind := unplaced(module); kind != "" && !this.unplacedInBase(module.ID, kind) {
+			counts[kind]++
 		}
+	}
 
-		// A moved contract breaks its importers like a removed one, so it
-		// counts, and the count says how many of each so it matches what
-		// the findings list.
-		switch {
-		case moved == 0 && changed > 0:
-			result = append(result, fmt.Sprintf("%d breaking change(s)", changed))
-		case moved > 0 && changed == 0:
-			result = append(result, fmt.Sprintf("%d breaking change(s), all moved contracts", moved))
-		case moved > 0:
-			result = append(result, fmt.Sprintf("%d breaking change(s): %d changed or removed, %d moved", changed+moved, changed, moved))
+	for _, kind := range kinds {
+		switch kind {
+		case rules.FindingLayerViolation:
+			if counts[kind] > 0 {
+				result = append(result, fmt.Sprintf("%d layer violation(s)", counts[kind]))
+			}
+		case rules.FindingCycle:
+			if counts[kind] > 0 {
+				result = append(result, fmt.Sprintf("%d cycle edge(s) between boundaries", counts[kind]))
+			}
+		case rules.FindingUnclassified:
+			if counts[kind] > 0 {
+				result = append(result, fmt.Sprintf("%d unclassified module(s)", counts[kind]))
+			}
+		case rules.FindingAmbiguous:
+			if counts[kind] > 0 {
+				result = append(result, fmt.Sprintf("%d module(s) claimed equally by two or more boundaries", counts[kind]))
+			}
+		case rules.FindingBreaking:
+			if text := this.breaking(); text != "" {
+				result = append(result, text)
+			}
 		}
 	}
 
 	return result
+}
+
+// breaking counts the breaking changes, moved contracts among them.
+func (this *analysis) breaking() string {
+	changed, moved := 0, 0
+	for _, change := range this.changes {
+		switch {
+		case change.Kind == rules.ChangeBreaking || change.Kind == rules.ChangeRemoved:
+			changed++
+		case change.Kind == rules.ChangeMoved && !this.fromEntry(change):
+			moved++
+		}
+	}
+
+	// A moved contract breaks its importers like a removed one, so it
+	// counts, and the count says how many of each so it matches what the
+	// findings list.
+	switch {
+	case moved == 0 && changed > 0:
+		return fmt.Sprintf("%d breaking change(s)", changed)
+	case moved > 0 && changed == 0:
+		return fmt.Sprintf("%d breaking change(s), all moved contracts", moved)
+	case moved > 0:
+		return fmt.Sprintf("%d breaking change(s): %d changed or removed, %d moved", changed+moved, changed, moved)
+	}
+
+	return ""
+}
+
+// unplacedInBase reports whether the base had the module unplaced the same
+// way, so the change did not cause it.
+func (this *analysis) unplacedInBase(moduleID, kind string) bool {
+	if this.base == nil {
+		return false
+	}
+
+	before := this.base.Module(moduleID)
+	return before != nil && unplaced(before) == kind
+}
+
+// unplaced names the kind of finding a module raises by not being placed:
+// ambiguous when boundaries tie for it, unclassified when nothing places
+// it, or empty when it is placed.
+func unplaced(module *graph.Module) string {
+	switch {
+	case len(module.Ambiguous) > 0:
+		return rules.FindingAmbiguous
+	case module.Layer == graph.LayerUnclassified:
+		return rules.FindingUnclassified
+	}
+
+	return ""
 }
 
 // graphAt builds the graph of the tree at a ref, with its tests and the

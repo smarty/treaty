@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"io"
 	"errors"
 	"net/http"
 	"os"
@@ -24,7 +25,7 @@ import (
 func TestLiveServer(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "go.mod", "module example.com/shop\n")
-	write(t, root, "treaty.yaml", "layers:\n  domain: [\"core/**\"]\n  adapter:\n    driven: [\"store/**\"]\n")
+	write(t, root, "treaty.yaml", "architecture: hexagonal\nlayers:\n  domain: [\"core/**\"]\n  adapter:\n    driven: [\"store/**\"]\n")
 	write(t, root, "core/order.go", "package core\n\n// Order is a purchase.\ntype Order struct{ ID string }\n")
 	write(t, root, "store/store.go", "package store\n\nimport \"example.com/shop/core\"\n\nfunc Save(order core.Order) error { return nil }\n")
 	git(t, root, "init", "-q")
@@ -235,7 +236,7 @@ func write(t *testing.T, root, name, text string) {
 func TestArchitectureView(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "go.mod", "module example.com/shop\n")
-	write(t, root, "treaty.yaml", "layers:\n  domain: [\"core/**\"]\n  adapter:\n    driven: [\"store/**\"]\n")
+	write(t, root, "treaty.yaml", "architecture: hexagonal\nlayers:\n  domain: [\"core/**\"]\n  adapter:\n    driven: [\"store/**\"]\n")
 	write(t, root, "core/order.go", "package core\n\ntype Order struct{ ID string }\n")
 	write(t, root, "store/store.go", "package store\n\nimport \"example.com/shop/core\"\n\nfunc Save(order core.Order) error { return nil }\n")
 	git(t, root, "init", "-q")
@@ -358,17 +359,17 @@ func TestMapSettings(t *testing.T) {
 
 	// Each save merges into what is kept, and an empty name forgets one.
 	post(t, base+"/api/map-settings", "application/json", `{"follow":true}`, http.StatusOK)
-	post(t, base+"/api/map-settings", "application/json", `{"internals":true,"names":{"slices":{"orders":"Ordering","billing":"Money"}}}`, http.StatusOK)
-	post(t, base+"/api/map-settings", "application/json", `{"names":{"slices":{"billing":""}}}`, http.StatusOK)
+	post(t, base+"/api/map-settings", "application/json", `{"internals":true,"names":{"vertical":{"orders":"Ordering","billing":"Money"}}}`, http.StatusOK)
+	post(t, base+"/api/map-settings", "application/json", `{"names":{"vertical":{"billing":""}}}`, http.StatusOK)
 	post(t, base+"/api/map-settings", "application/json", `{"names":{"nowhere":{"a":"b"}}}`, http.StatusBadRequest)
-	post(t, base+"/api/map-settings", "application/json", `{"names":{"slices":{"a":"line\nbreak"}}}`, http.StatusBadRequest)
+	post(t, base+"/api/map-settings", "application/json", `{"names":{"vertical":{"a":"line\nbreak"}}}`, http.StatusBadRequest)
 
 	var saved app.MapSettings
 	if err := json.Unmarshal(get(t, base+"/api/map-settings", http.StatusOK), &saved); err != nil {
 		t.Fatal(err)
 	}
 
-	if saved.Follow == nil || !*saved.Follow || saved.Internals == nil || !*saved.Internals || len(saved.Names) != 1 || len(saved.Names["slices"]) != 1 || saved.Names["slices"]["orders"] != "Ordering" {
+	if saved.Follow == nil || !*saved.Follow || saved.Internals == nil || !*saved.Internals || len(saved.Names) != 1 || len(saved.Names["vertical"]) != 1 || saved.Names["vertical"]["orders"] != "Ordering" {
 		t.Fatalf("saved: %+v", saved)
 	}
 
@@ -517,5 +518,71 @@ func TestRunTests(t *testing.T) {
 	post(t, base+"/api/tests/stop", "application/json", `{}`, http.StatusNoContent)
 	if state := live.State(); state.Tests == 0 {
 		t.Fatalf("the state counts test changes: %+v", state)
+	}
+}
+
+func TestEditTreatyYAML(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/shop\n")
+	write(t, root, "core/order.go", "package core\n\ntype Order struct{ ID string }\n")
+	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(filepath.Join(t.TempDir(), "settings.json")))
+	live := app.NewLive(service, filesystem.NewWatcher(root))
+	stop := make(chan struct{})
+	defer close(stop)
+	live.Start(stop)
+	_, base := listen(t, root, live)
+
+	read := func() (file app.ConfigText) {
+		if err := json.Unmarshal(get(t, base+"/api/config", http.StatusOK), &file); err != nil {
+			t.Fatal(err)
+		}
+
+		return file
+	}
+
+	save := func(text, expected string, status int) string {
+		body, _ := json.Marshal(map[string]string{"text": text, "expected": expected})
+		response, err := http.Post(base+"/api/config", "application/json", strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		defer response.Body.Close()
+		answer, _ := io.ReadAll(response.Body)
+		if response.StatusCode != status {
+			t.Fatalf("save %q: %d %s, want %d", text, response.StatusCode, answer, status)
+		}
+
+		return string(answer)
+	}
+
+	if file := read(); file.Found || file.Text != "" {
+		t.Fatalf("no treaty.yaml yet: %+v", file)
+	}
+
+	// A first save creates the file, and the map follows it at once.
+	first := "version: 1\narchitecture: layered\nlayers:\n  core: [\"core/**\"]\n"
+	save(first, "", http.StatusOK)
+	if file := read(); !file.Found || file.Text != first {
+		t.Fatalf("saved: %+v", file)
+	}
+
+	if state := live.State(); state.View.Configured != "layered" {
+		t.Fatalf("the map should follow the saved file: %+v", state.View)
+	}
+
+	// A file treaty would not load is refused with its line, and the file
+	// stays as it was.
+	if answer := save(first+"rulez: {}\n", first, http.StatusUnprocessableEntity); !strings.Contains(answer, `line 5: unknown key "rulez"; did you mean "rules"?`) {
+		t.Fatalf("refusal: %s", answer)
+	}
+
+	// A save from text the file no longer holds is refused, so it can't
+	// discard a change made elsewhere.
+	elsewhere := first + "# edited by an agent\n"
+	write(t, root, "treaty.yaml", elsewhere)
+	save(first+"composition: [\"cmd/**\"]\n", first, http.StatusConflict)
+	if file := read(); file.Text != elsewhere {
+		t.Fatalf("the change made elsewhere must survive: %q", file.Text)
 	}
 }

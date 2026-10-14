@@ -12,7 +12,7 @@ The tool is ephemeral. It exists for code review, for thinking through a design 
 
 It is used in two ways. In code review, it shows what a pull request changes in the architecture. While working with an agent, it runs as a live server: the person watches the map update in a browser as code is edited, and the agent uses the same graph through MCP tools to decide where to work without reading the whole codebase. See Live map and MCP server.
 
-The graph's nodes are contract symbols (exported functions, methods, interfaces, types, values) grouped into modules, which a config file places into the layers, slices or contexts of the architecture the team chose: hexagonal, clean, layered, vertical slices or modular monolith. Its scores answer three questions about a change: did a contract change, did a dependency break the architecture's rules, and did stability shift.
+The graph's nodes are contract symbols (exported functions, methods, interfaces, types, values) grouped into modules, which a config file places into the layers or boundaries of the architecture the team chose: hexagonal, clean, layered, vertical or modular monolith. Its scores answer three questions about a change: did a contract change, did a dependency break the architecture's rules, and did stability shift.
 
 **For Claude Code in planning mode.** Treat this document as the spec, and the HTML mockup of the imaginary repo `smarty/injection` PR #142 as the reference for the visual layer. Plan against the phases in the delivery plan, in order; each phase ends with acceptance checks that can be run. Where this document leaves a choice open, it says so in Risks and open questions; raise those in the plan rather than deciding silently. Keep the tool's own code hexagonal, since it should pass its own checks.
 
@@ -23,7 +23,7 @@ Agents now produce diffs faster than humans can review them, and line-based revi
 **Goals**
 
 1. Rank every change in a diff by contract impact, so reviewers see breaking changes and layer violations first.
-2. Enforce the rules of the architecture a team declares in a checked-in config, failing the check on any dependency that breaks them. Five architectures are supported: hexagonal, clean, layered, vertical slices and modular monolith.
+2. Enforce the rules of the architecture a team declares in a checked-in config, failing the check on any dependency that breaks them. Five architectures are supported: hexagonal, clean, layered, vertical and modular monolith.
 3. Render an interactive map that stays legible at 50 modules and 2,000 contract symbols through aggregation and semantic zoom.
 4. Export a context slice per symbol or module that gives an agent the contracts it needs and nothing else.
 5. Let people design new features in AutoPen, then check the design against the code as it is built.
@@ -44,7 +44,7 @@ Agents now produce diffs faster than humans can review them, and line-based revi
 
 Three terms carry the whole design: layer, contract symbol and change kind. Each is defined so a program can compute it.
 
-**Layers.** Every module has exactly one placement, assigned by path globs in the config: a layer, a slice or context (with a layer inside it when the architecture has one), shared, composition or unclassified. The architecture decides which placements may depend on which; see Architectures. The hexagonal architecture, the default, works like this. A dependency may point inward or sideways, never outward.
+**Layers.** Every module has exactly one placement, assigned by path globs in the config: a layer, a boundary (with a layer inside it when the architecture has one), shared, composition or unclassified. The architecture decides which placements may depend on which; see Architectures. The hexagonal architecture works like this. A dependency may point inward or sideways, never outward.
 
 | Layer | Rank | May depend on | Expected stability |
 | --- | --- | --- | --- |
@@ -79,27 +79,29 @@ Nothing can import an entry module, such as a Go `main` package, so its removals
 
 *Decided and built Sep 29, 2026.*
 
-Treaty checks one architecture per repository, named by `architecture:` in `treaty.yaml`; without it, the architecture is hexagonal. Choosing the architecture is the team's decision. Treaty checks the declared one and never recommends another.
+Treaty checks one architecture per repository, named by `architecture:` in `treaty.yaml`; without it, there is no architecture. Choosing the architecture is the team's decision. Treaty checks the declared one and never recommends another. [configuration.md](configuration.md) is the reference for every key; this section explains the design.
+
+*Boundaries decided Oct 14, 2026.* Vertical slices and modular contexts were one concept under two names, each a directory per match of a glob, with globs inside them relative to that directory. They are now **boundaries**: named groups of modules, each with globs of its own, so one boundary can gather `web/orders` and `store/orders`. "Slice" stays the name of what an agent is given, and the vertical architecture is named `vertical`.
 
 Every architecture is built from the same few rules, so the engine stays small:
 
 - **Ranked layers.** Layers run innermost, or lowest, first. A layer may depend on itself and every layer inside or below it, never outward or upward. Layering is always relaxed: skipping a layer is allowed.
-- **Isolation.** Peers may not depend on each other: hexagonal adapters, vertical slices, and the internals of contexts.
+- **Isolation.** Peers may not depend on each other: hexagonal adapters, boundaries in vertical, and the internals of boundaries in modular.
 - **Composition.** In every architecture, composition may depend on everything, and nothing may depend on it.
-- **Shared code.** In slices and modular, every slice or context may use shared code, and shared code may use only shared code.
-- **Public surface.** Another context may use only a context's public packages.
-- **No cycles.** Contexts may not depend on each other in a cycle.
+- **Shared code.** In vertical and modular, every boundary may use shared code, and shared code may use only shared code.
+- **Public surface.** In modular, another boundary may use only a boundary's public packages.
+- **No cycles.** In modular, boundaries may not depend on each other in a cycle.
 
 | Architecture | Config | Rules | Map |
 | --- | --- | --- | --- |
-| None (default) | `architecture: none`, or no `treaty.yaml`; nothing else | Every dependency is allowed; contracts and changes are still checked | One region holding every module |
-| Hexagonal | `architecture: hexagonal`; `layers:` with `composition`, `domain`, `application` and `adapter` (`driving`, `driven`). A config with layers and no `architecture:` key is hexagonal, as configs were before the key existed | Inward only; no adapter uses another adapter | Rings: domain, application, adapters, and a half ring of composition on the left; driving left, driven right |
+| None (default) | `architecture: none`, no `architecture:` key, or no `treaty.yaml`; nothing else | Every dependency is allowed; contracts and changes are still checked | One region holding every module |
+| Hexagonal | `architecture: hexagonal`; `layers:` with `composition`, `domain`, `application` and `adapter` (`driving`, `driven`) | Inward only; no adapter uses another adapter | Rings: domain, application, adapters, and a half ring of composition on the left; driving left, driven right |
 | Clean | `architecture: clean`; `layers:` from `entities`, `use_cases`, `interface_adapters` and `frameworks`, in any order; `composition:` | Inward only | Four rings, entities in the center |
 | Layered | `architecture: layered`; `layers:` in order, top to bottom, any names; `composition:` | A layer may use itself and every layer below it | Horizontal bands, the top layer highest |
-| Vertical slices | `architecture: slices`; `slices:` globs such as `internal/features/*`, each match one slice; `shared:`; `composition:`; optional `layers:` inside every slice, top to bottom, with globs relative to the slice root | A slice may use itself and shared code, never another slice; inside a slice, layers as for layered | A column per slice; with layers, a grid of slices by layer. Composition spans the top, shared code the bottom |
-| Modular monolith | `architecture: modular`; `contexts:` globs, each match one context; `public:` globs relative to each context root, default `["."]`; `shared:`; `composition:` | A context may use its own packages, other contexts' public packages and shared code; no cycles between contexts | An island per context; public packages have a bold outline |
+| Vertical | `architecture: vertical`; `boundaries:` mapping names to globs; `shared:`; `composition:`; optional `layers:` inside every boundary, top to bottom | A boundary may use itself and shared code, never another boundary; inside a boundary, layers as for layered | A column per boundary; with layers, a grid of boundaries by layer. Composition spans the top, shared code the bottom |
+| Modular monolith | `architecture: modular`; `boundaries:`; `public:` globs, by default the top of each boundary glob; `shared:`; `composition:` | A boundary may use its own packages, other boundaries' public packages and shared code; no cycles between boundaries | An island per boundary; public packages have a bold outline |
 
-For layered, hexagonal and clean, a glob that is exactly a module's path wins over every wildcard, so one package can be placed apart from its directory's glob; otherwise composition is matched first, then the layers in order. A slice or context glob may not contain `**`, because each match must be one directory. A module in a slice that matches none of the slice's layers is unclassified. Settings an architecture does not use, such as `shared:` for layered, are an error rather than ignored, so a mistaken config fails loudly.
+Every glob is relative to the repository root, in boundaries, layers and `public` alike, so a glob reads the same wherever it appears. For layered, hexagonal and clean, a glob that is exactly a module's path wins over every wildcard, so one package can be placed apart from its directory's glob; otherwise composition is matched first, then the layers in order. For vertical and modular, composition comes first, then shared, then boundaries; of the boundaries that match, the most specific glob wins, by exact path and then by its count of literal segments. Boundaries that tie leave the module in none of them, ambiguous and unchecked, and `ambiguous_boundaries` reports it. Specificity rather than order decides, because a YAML map's order should not carry meaning and reordering it would silently move code. A module in a boundary that matches none of its layers is unclassified. Settings an architecture does not use, such as `shared:` for layered, are an error rather than ignored, so a mistaken config fails loudly.
 
 Examples:
 
@@ -113,12 +115,14 @@ layers:            # top to bottom
 ```
 
 ```yaml
-architecture: slices
+architecture: vertical
 composition: ["cmd/**"]
 shared:      ["internal/platform/**"]
-slices:      ["internal/features/*"]
-layers:            # optional, inside every slice, top to bottom
-  api:   ["."]
+boundaries:
+  orders:  ["**/orders/**"]
+  billing: ["web/billing/**", "store/billing/**"]
+layers:            # optional, inside every boundary, top to bottom
+  api:   ["web/**"]
   store: ["store/**"]
 ```
 
@@ -126,15 +130,17 @@ layers:            # optional, inside every slice, top to bottom
 architecture: modular
 composition: ["cmd/**"]
 shared:      ["internal/platform/**"]
-contexts:    ["internal/*"]
-public:      [".", "api/**"]
+boundaries:
+  orders:  ["internal/orders/**"]
+  billing: ["internal/billing/**"]
+public:      ["internal/*", "**/api/**"]
 rules:
-  fail_on: [breaking, layer_violation, cycle]
+  fail_on: [breaking_changes, layer_violation, dependency_cycles, unclassified, ambiguous_boundaries]
 ```
 
-**Proposing a config.** `treaty init --architecture <name>` fits the code to the named architecture. For hexagonal, clean and layered it places modules by the shape of the import graph, so the proposal has no violations. For slices and modular it looks for the directory whose children depend on each other least and makes each child a slice or context; for slices, a child that other children use becomes shared, along with whatever it uses. Outside that directory, programs and modules that use slices are composition, and modules only used by slices are shared. Directory names such as `features` or `modules` only break ties.
+**Proposing a config.** `treaty init --architecture <name>` fits the code to the named architecture. For hexagonal, clean and layered it places modules by the shape of the import graph, so the proposal has no violations. For vertical and modular it looks for the directory whose children depend on each other least and makes each child a boundary named after it, with the glob `<child>/**`; for vertical, a child that other children use becomes shared, along with whatever it uses. Outside that directory, programs and modules that use boundaries are composition, and modules only used by boundaries are shared. Directory names such as `features` or `modules` only break ties. Every draft fails on every rule that applies to its architecture, `unclassified` included, so code nobody placed is noticed.
 
-**Agents.** `overview` states the architecture's rules in one paragraph, `allowed` names the rule a dependency would break, and a slice's `may_depend_on_layers` lists what the target may use: layer names, or its own slice and shared code, or its context, other contexts' public packages and shared code.
+**Agents.** `overview` states the architecture's rules in one paragraph, `allowed` names the rule a dependency would break, and a slice's `may_depend_on_layers` lists what the target may use: layer names, or its own boundary and shared code, or its boundary, other boundaries' public packages and shared code.
 
 ## System architecture
 
@@ -184,7 +190,7 @@ One graph per tree, with three node kinds and two edge kinds; everything else is
 
 | Entity | Key fields | Notes |
 | --- | --- | --- |
-| Module | `id`, `path`, `name`, `layer`, `side`, `slice`, `public`, `files[]` | `name` is what the language calls it, such as the Go package name; `side` is `driving` or `driven` for hexagonal adapters, empty otherwise; `slice` is the root path of the vertical slice or context holding the module; `public` marks a context's public packages |
+| Module | `id`, `path`, `name`, `layer`, `side`, `boundary`, `public`, `ambiguous`, `files[]` | `name` is what the language calls it, such as the Go package name; `side` is `driving` or `driven` for hexagonal adapters, empty otherwise; `boundary` names the boundary holding the module; `public` marks a boundary's public packages; `ambiguous` lists the boundaries that tie for a module, which is then in none |
 | Symbol | `id` (module-qualified name), `module`, `file`, `line`, `kind`, `contract`, `signature`, `variants[]` | `kind` is function, method, interface, type or value; each variant is another declaration's file, line, signature and fields |
 | File | `path`, `module`, `symbols[]` | Only needed for the inspector and diff attribution |
 | Reference edge | `from`, `to`, `kind`, `file`, `line` | `kind` is call, type-use, implements or embeds |
@@ -316,7 +322,7 @@ A removed exported symbol pairs with an added one, and becomes a single moved ch
 
 A symbol declared more than once in a module, in files built under different constraints such as Go build tags, is one symbol with variants. It keeps the first declaration's location and signature, its reference edges are the union of every variant's, each carrying its own file, and its body hash covers every variant, so a change to one platform's code alone still shows. Variants whose signatures or fields disagree are reported as a finding.
 
-**2. Architecture rules.** A module depends on another when it references one of its symbols or imports it at all, so a blank import, a dot import, a package-level `var _ = …` and code that runs only in `init` all count. A module edge is a violation when it breaks a rule of the declared architecture, and each violation carries the rule it breaks in words. In every architecture, composition may depend on anything and any edge into composition is a violation. For the modular monolith, an edge between two contexts that depend on each other, directly or through other contexts, is also a cycle finding, unless the edge already breaks a rule. Violations and cycles fail the check by default. With a base, only new ones fail: a violation whose module edge already breaks the rules in the base, judged by the head's `treaty.yaml`, is **existing**. It is still reported, listed and drawn, ranks medium rather than high, and a note counts it, but it does not fail the check, so a team can adopt Treaty on code that already breaks its rules and stop the debt from growing. Existing is judged per module edge, the same way `changes` lists new violations: new references along an edge that already violated do not fail. Without a base every violation is new. Unclassified modules produce a warning, not a failure.
+**2. Architecture rules.** A module depends on another when it references one of its symbols or imports it at all, so a blank import, a dot import, a package-level `var _ = …` and code that runs only in `init` all count. A module edge is a violation when it breaks a rule of the declared architecture, and each violation carries the rule it breaks in words. In every architecture, composition may depend on anything and any edge into composition is a violation. For the modular monolith, an edge between two boundaries that depend on each other, directly or through other boundaries, is also a cycle finding, unless the edge already breaks a rule. Violations and cycles fail the check by default. With a base, only new ones fail: a violation whose module edge already breaks the rules in the base, judged by the head's `treaty.yaml`, is **existing**. It is still reported, listed and drawn, ranks medium rather than high, and a note counts it, but it does not fail the check, so a team can adopt Treaty on code that already breaks its rules and stop the debt from growing. Existing is judged per module edge, the same way `changes` lists new violations: new references along an edge that already violated do not fail. Without a base every violation is new. Unclassified modules produce a warning, not a failure.
 
 **3. Stability metrics.** Robert Martin's package metrics, computed at module level on both graphs, with afferent coupling Ca and efferent coupling Ce counted as distinct modules:
 
@@ -353,11 +359,11 @@ The border stays the module's contract surface at every zoom, and every symbol i
 | --- | --- | --- |
 | Node shape and fill | Symbol kind | Hollow circle function, filled circle method, hollow square interface, filled square concrete type, filled triangle value |
 | Color and glyph | Change kind | Grey unchanged; green with + added; amber with Δ compatible, ! breaking, → moved or \~ implementation only; dashed in the planned color for unimplemented. In signature diffs, removed text is red and added text green, as in git; the color-blind safe themes keep blue for added and orange for removed. Hollow shapes take the color on their outline, filled shapes in their fill; the glyph sits beside the icon |
-| Module border | New module; composition; public API | Dashed blue; a double outline for composition; a bold outer outline for a context's public packages |
+| Module border | New module; composition; public API | Dashed blue; a double outline for composition; a bold outer outline for a boundary's public packages |
 | Teal and dashed | Unimplemented: designed or planned, not yet built | Teal (`#0d9488` light, `#2dd4bf` dark) on the symbol or module outline, always with a dashed outline so the state doesn't rely on color. It turns blue with + once built |
 | Module edge | Dependency | Width grows with reference count; blue when new; amber when changed: it gained or lost a reference, or the signature of a symbol one of its references points to changed. A change to code alone does not count |
 | Dashed edge with hollow arrowhead | Implements or embeds | Drawn separately from solid "uses" edges; a module pair with both bows the two curves apart |
-| Magenta edge with ! marker | Rule violation or context cycle | Always drawn, even with module edges hidden; its label and the inspector give the rule it breaks. An existing violation, one the base has too, is thinner with a hollow marker |
+| Magenta edge with ! marker | Rule violation or boundary cycle | Always drawn, even with module edges hidden; its label and the inspector give the rule it breaks. An existing violation, one the base has too, is thinner with a hollow marker |
 
 **Aggregation.** By default, edges are drawn between modules only. Selecting a symbol draws its symbol-level edges and labels, and dims everything unrelated. The mockup's hand-placed layout does not scale: at more than about 12 modules per ring, module positions and edge routing must be computed, with edges bundled along the gaps between rings.
 
@@ -375,13 +381,15 @@ A test holds every default theme to the map's meaning: the five signals stay at 
 
 **Panels and drawers.** The map, the review queue and the inspector are panels, each a tab in a stack. Stacks sit in drawers on the left, right and bottom of the map, in the center with the map, or in floating windows above it; by default the queue is on the left and the inspector on the right. Dragging the divider between a drawer and the map resizes the drawer, and dragging between two stacks in a drawer shares its room between them. Dragging a tab moves its panel: dropped on a tab bar it goes among that bar's tabs where a line shows, which also reorders a stack's own tabs; dropped on a stack's middle it joins that stack; on the near half of a stack in a drawer it splits the drawer there; at the workspace's left, right or bottom edge it docks in that drawer; anywhere else it floats, and a floating window moves by its tab bar and resizes from its corner. The map stays in the center. The map's views, References, Files and Symbols, reorder the same way within their bar but cannot dock, and their order is kept with the layout. Every strip of tabs, the project tabs included, scrolls sideways once its tabs overflow it: the wheel scrolls it, an arrow over each end shows while there is more to see that way, dragging a tab near an end scrolls toward it, and the selected tab is kept in view. An empty drawer takes no room. *Reset layout* restores the default, keeping any coverage tabs in the center. The theme menu and *Reset layout* sit on the project tabs' ribbon, above every map, and act on the map shown; a static map, alone in its browser tab, keeps them in its own header. "Show internals" and "Follow Claude" are options of each map, at the end of its view bar.
 
-**Region menu.** Right-clicking a region, away from its modules, opens its menu, on the maps drawn as regions: layered bands, slices, grid cells and contexts. *Rename…* asks for a name at the pointer; *Restore the name* gives the region its own label back; *Zoom to this region* fits it in view; *Put its moved modules back* forgets the positions of the modules moved inside it. Names are kept per repository and architecture, by the region's own label, and are only for the map: `treaty.yaml`, the rules, the checks and every agent tool keep the label. A static map offers only the zoom. Menus open on the first enabled item, move by arrow keys, Home and End, and close on Escape, Tab, a press elsewhere or scrolling.
+**Region menu.** Right-clicking a region, away from its modules, opens its menu, on the maps drawn as regions: layered bands, boundaries, grid cells and islands. *Rename…* asks for a name at the pointer; *Restore the name* gives the region its own label back; *Zoom to this region* fits it in view; *Put its moved modules back* forgets the positions of the modules moved inside it. Names are kept per repository and architecture, by the region's own label, and are only for the map: `treaty.yaml`, the rules, the checks and every agent tool keep the label. A static map offers only the zoom. Menus open on the first enabled item, move by arrow keys, Home and End, and close on Escape, Tab, a press elsewhere or scrolling.
 
 **Preferences.** A person's theme and panel layout are kept in `~/.treaty/settings.json`, so they follow the person across repositories, sessions, browsers and ports. A theme picked in one project's tab applies at once to every other open project's map, through the browser's shared storage. The live page loads them when it opens and saves each change through the server, in batches, merging only the fields that changed; it sends nothing until the saved preferences have loaded, so the layout a page starts with never overwrites the saved one. The first time a person's browser meets a server with nothing saved, the choices already in that browser become the saved ones. The file is replaced atomically, so two servers saving at once never tear it. A static map, opened with no server, keeps its choices in the browser. New panels, such as the Tests tab, join the same system, so each person can put them where they like. Each map's own choices, "Show internals", "Follow Claude" and region names, are kept in the repository's `.treaty/map.json`, merged the same way; "Follow Claude" was once kept for every map, and a map without its own starts from that old choice.
 
 **Tests and coverage.** The live map has a Tests tab, docked beside the inspector and the Code tab. With nothing selected it lists every test as a file tree: directories, each package's tests, and the subtests a run reported, each opening and closing. Selecting a symbol shows only the tests that use it or its members; a file, those that use its symbols or sit in its `_test` file; a module or group, those in it or using it. A test uses what it names and what the helpers in its own test package name, transitively, and a test named for a symbol, such as `TestService_Map`, targets it. Each row shows its outcome as a glyph and a color, passed, failed, skipped, running or queued, and a failed test opens its output. Run runs every test shown, and each row's ▶ runs that test, subtest, package or directory alone. Version 1 runs Go tests, the `Test`, `Fuzz` and `Example` functions of `_test.go` files, an example only when it has an `// Output:` comment, with `go test -json`: modules run whole share one `go test` per Go module, and named tests run one per package. Treaty instruments the code itself rather than using `-coverprofile`: it rewrites copies of the Go module's files with counters on the same lines and builds them in with `-overlay`, so the working tree is never touched, and each test reports the counters that rose while it ran, with its subtests. A test that ran alongside another, through `t.Parallel()`, is marked shared, since the counters cannot tell them apart. A run whose instrumented build fails runs again with `-coverprofile`, measuring lines only. Coverage is per line, from the blocks that ran, and every run's coverage of a file adds to the earlier runs' until the file changes, when it is dropped. A module's metrics and a contract's inspector add what runs reached under Tests run: reach, decision outcomes and boundaries (see `scoring.md`). The group's Run tests button runs what the Tests tab's Run does for that selection: the tests that use the contract, or the module's tests and those that use it.
 
 **Coverage tabs.** Clicking a test's name in the Tests tab, a package's or directory's name, or one of the Tests run rows opens a new tab in the center, beside the map, titled *Coverage ·* and what was clicked, on the code those tests ran; a row's arrow still opens and closes it. Each opening makes a new tab, closed by its ×, and none is restored on reload. The tab shows, file by file, the functions and methods the tests reached and those of the contracts they use, even where nothing ran, with the lines between them folded. A line with probes reads by a glyph, a color and a count, so it never relies on color alone: ✓ every probe reached, ◐ some, ✗ none, and reached of total and the percentage on the right. Clicking a line with some reached lists each probe on it: whether its statements ran, each condition's and operand's outcomes, quoting the expression, and where values fell against each exported constant. A block's statements after an `if`, `for`, `switch`, `select` or nested block count as a block of their own, as Go's cover tool counts them, since the one before may return. It draws as a ring around an icon: a faint track and an arc from 12 o'clock clockwise, so half covered is the right half. Symbols carry the ring on every map view; the Tests tab rings the selected symbol, file or module, and lists the coverage of a file's symbols or a module's files. A type's coverage includes its methods. Code no run has covered has no ring. A static map has no Tests tab content, since nothing can run.
+
+**treaty.yaml tab.** *Built Oct 14, 2026.* The live map has a treaty.yaml tab, docked with the inspector, holding the whole file in an editor with numbered lines. Save sends it through the same strict reading `treaty check` uses, so a file that would not load is refused, and the refusal shows with its line marked in the gutter; nothing is written. Save also refuses when the file no longer holds the text the editor started from, so it never discards a change made elsewhere, by an agent, a move on the map or another editor. The tab reads the file again after every rebuild; with unsaved edits it keeps them and says the file changed on disk, and Revert loads the file as it is. A saved file rebuilds the map at once, and the checks and agents follow it. The whole file is shown, rather than a form per key, so comments and layout stay the person's, and the tab works for every key, boundaries included. A static map shows no editor, since there is no server to write the file.
 
 **The symbols view.** Besides references and files, the map has a symbols view that reveals what a caller can reach, the way code completion does after a dot. It starts at the repository's root, named by its package, such as a Go package name. A package opens to its subpackages and then its contract symbols, and a type opens to its members, each choice opening a column to its right. Packages code outside the repository cannot import are left out: Go internal and main packages, Python packages whose path has an `_`-prefixed part or that hold only scripts, and JavaScript packages under a private `package.json`. They return, with internals, when "Show internals" is on.
 
@@ -518,11 +526,12 @@ The tool ships as a single binary, `treaty`, driven by a config file at the repo
 | `treaty restart [--port <n>]` | Stops the treaty server; open sessions start a new one and rejoin | A note on stderr |
 | `treaty url` | Prints the live map's address for this directory, or fails when its map is not open. In Claude Code, `! treaty url` shows it in the session | The URL |
 | `treaty here [--force]` | Registers treaty as an MCP server of the repository, so Claude Code sessions started in it run `treaty mcp`. Creates `.mcp.json`, or adds to an existing one keeping every other entry, the key order and the indentation. A different `treaty` entry is left alone unless `--force` is given | `.mcp.json`, and the next steps |
-| `treaty init [--architecture <name>]` | Proposes a config for the named architecture (`none` by default, which declares no architecture) from the shape of the import graph for a person to edit, and creates `.treaty/`. For slices and modular, see Architectures. For hexagonal, clean and layered: programs (such as Go `main` packages) and modules nothing imports are composition; a module that imports nothing in the repository but is used goes innermost, or lowest; every other module sits one layer inside the deepest module importing it. So the proposal has no violations. A library module with no imports either way is left unclassified and listed in the draft. Directory names are hints: they replace the shape's answer only when that adds no violation, and they set an adapter's side, which otherwise comes from whether it implements a core interface (driven) or calls the application (driving) | `treaty.yaml` draft |
+| `treaty init [--architecture <name>]` | Proposes a config for the named architecture (`none` by default, which declares no architecture) from the shape of the import graph for a person to edit, and creates `.treaty/`. For vertical and modular, see Architectures. For hexagonal, clean and layered: programs (such as Go `main` packages) and modules nothing imports are composition; a module that imports nothing in the repository but is used goes innermost, or lowest; every other module sits one layer inside the deepest module importing it. So the proposal has no violations. A library module with no imports either way is left unclassified and listed in the draft. Directory names are hints: they replace the shape's answer only when that adds no violation, and they set an adapter's side, which otherwise comes from whether it implements a core interface (driven) or calls the application (driving) | `treaty.yaml` draft |
 
 Config file, `treaty.yaml`, for the hexagonal architecture (see Architectures for the others):
 
 ```yaml
+version: 1
 layers:
   domain:      ["internal/graph/**", "internal/lifetime/**"]
   application: ["injection", "injection/scope/**", "injection/ports/**", "injection/errs/**"]
@@ -530,9 +539,12 @@ layers:
     driving:   ["adapters/codegen/**", "adapters/testkit/**"]
     driven:    ["adapters/reflectx/**", "adapters/slogx/**"]
 rules:
-  fail_on: [breaking, layer_violation]
-  warn_on: [unclassified]
+  fail_on: [breaking_changes, layer_violation, unclassified]
 ```
+
+**Versions.** `version` is the file's format, written by `treaty init` and when a preview is adopted. It changes only when a key changes meaning or goes away; a new optional key keeps it, and a Treaty too old to know that key names it as unknown and says a newer Treaty may know it. A version newer than the binary reads is refused before any key is checked, asking for an upgrade. A file without a version line is version 0, the format from before versions. It loads like version 1, and `check` and `overview` add a note asking for `version: 1`. The rule names from before, `breaking` and `cycle`, are errors that name `breaking_changes` and `dependency_cycles`: only a few repositories had written them, and they are fixed by hand. Version 1 was settled before any release wrote it, so the move from `slices` and `contexts` to `boundaries` kept the number. Every key, adapter side and `fail_on` or `warn_on` entry must be known, or loading fails with the line and the nearest known word: a silently ignored typo is how a check stops checking.
+
+**Rules.** `fail_on` and `warn_on` take `breaking_changes`, `layer_violation`, `dependency_cycles`, `unclassified` and `ambiguous_boundaries`; a rule in both fails. Rule names are the config's own: the loader turns them into the kinds of finding reports use, so reports kept their kinds when the names changed. With a base, only what the change introduced counts, as for violations: a module the base already had unclassified or ambiguous neither fails nor warns.
 
 Working directory, never tracked:
 
@@ -560,11 +572,12 @@ Each criterion is checked by an automated test against the fixture repository un
 **Architectures**
 
 - [x] On the tool's own repository, the generic engine gives the same graph and check output as the hexagonal-only engine it replaced.
-- [x] Each architecture's config loads; an unknown architecture, an unknown clean layer, `slices:` for modular and `contexts:` for slices each fail with an error.
-- [x] Slices: an import from one slice into another is a violation; shared code importing a slice is a violation; inside a slice, a lower layer importing a higher one is a violation.
-- [x] Modular: an import of another context's internal package is a violation, and each edge of a cycle between contexts is a cycle finding that fails the check.
+- [x] Each architecture's config loads; an unknown architecture, an unknown clean layer, a boundary without globs and `boundaries:` for layered each fail with an error.
+- [x] Vertical: an import from one boundary into another is a violation; shared code importing a boundary is a violation; inside a boundary, a lower layer importing a higher one is a violation.
+- [x] Modular: an import of another boundary's internal package is a violation, and each edge of a cycle between boundaries is a cycle finding that fails the check.
+- [x] Boundaries: the most specific glob wins, an exact path beats every wildcard, and boundaries that tie leave the module ambiguous.
 - [x] `treaty init --architecture` proposes a config for every architecture; for hexagonal, clean and layered the proposal has no violations.
-- [x] The layered, slices and modular layouts place every module inside its band, cell or island with no overlaps.
+- [x] The layered, vertical and modular layouts place every module inside its band, cell or island with no overlaps.
 
 **Phase 1: Graph and layers**
 

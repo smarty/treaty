@@ -121,6 +121,7 @@ function showState(st) {
     syncBaselineInput();
   }
   showView(st.view);
+  noteConfigState(st);
   if ((st.tests || 0) !== testState.shown) refreshTests();
 }
 // showView reflects which architecture the map draws: treaty.yaml's, or a
@@ -231,6 +232,7 @@ function startLive() {
   follow.addEventListener("change", () => { storeOption("follow", follow.checked); saveMapSettings({ follow: follow.checked }); });
   loadPreferences().then(loadMapSettings);
   loadPositions();
+  setupConfig();
   document.getElementById("offer-go").addEventListener("click", () => {
     const target = offered; dismissOffer(); if (!target) return;
     goTo(target); select(symbols.has(target) ? { type: "symbol", id: target } : { type: "module", id: target });

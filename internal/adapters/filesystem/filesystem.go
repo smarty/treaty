@@ -54,14 +54,15 @@ type Workspace struct {
 }
 
 // configFile is the YAML shape of treaty.yaml. Layers stays a node because
-// its order carries meaning: top to bottom for layered and slices.
+// its order carries meaning: top to bottom for layered and vertical.
+// Boundaries stays a node to keep the order they are listed in.
 type configFile struct {
+	Version      int       `yaml:"version"`
 	Architecture string    `yaml:"architecture"`
 	Composition  []string  `yaml:"composition"`
 	Layers       yaml.Node `yaml:"layers"`
 	Shared       []string  `yaml:"shared"`
-	Slices       []string  `yaml:"slices"`
-	Contexts     []string  `yaml:"contexts"`
+	Boundaries   yaml.Node `yaml:"boundaries"`
 	Public       []string  `yaml:"public"`
 	Rules        struct {
 		FailOn []string `yaml:"fail_on"`
@@ -102,7 +103,8 @@ func NewWorkspace(root string) *Workspace {
 	return &Workspace{root: root}
 }
 
-// Load reads treaty.yaml, falling back to defaults when it is absent.
+// Load reads treaty.yaml, falling back to defaults when it is absent. The
+// file is read strictly: see decodeConfig.
 //
 // Returns:
 //   - config: the parsed config.
@@ -112,7 +114,7 @@ func (this *Config) Load() (config app.Config, found bool, err error) {
 	config = app.Config{
 		Architecture: rules.Architecture{Style: rules.StyleNone},
 		FailOn:       []string{rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingCycle},
-		WarnOn:       []string{rules.FindingUnclassified},
+		WarnOn:       []string{rules.FindingUnclassified, rules.FindingAmbiguous},
 	}
 
 	data, err := os.ReadFile(filepath.Join(this.root, ConfigFile))
@@ -124,24 +126,78 @@ func (this *Config) Load() (config app.Config, found bool, err error) {
 		return config, false, err
 	}
 
-	var file configFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	file, versioned, err := decodeConfig(data)
+	if err != nil {
 		return config, true, fmt.Errorf("%s: %w", ConfigFile, err)
 	}
 
+	config.Unversioned = !versioned
 	if config.Architecture, err = file.architecture(); err != nil {
 		return config, true, fmt.Errorf("%s: %w", ConfigFile, err)
 	}
 
 	if file.Rules.FailOn != nil {
-		config.FailOn = file.Rules.FailOn
+		config.FailOn = ruleKinds(file.Rules.FailOn)
 	}
 
 	if file.Rules.WarnOn != nil {
-		config.WarnOn = file.Rules.WarnOn
+		config.WarnOn = ruleKinds(file.Rules.WarnOn)
 	}
 
 	return config, true, nil
+}
+
+// Text reads treaty.yaml as it is.
+//
+// Returns:
+//   - text: the file's text; empty when there is no file.
+//   - found: false when the file does not exist.
+//   - err: the file could not be read.
+func (this *Config) Text() (text string, found bool, err error) {
+	data, err := os.ReadFile(filepath.Join(this.root, ConfigFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+
+	return string(data), err == nil, err
+}
+
+// Save replaces treaty.yaml with text, after reading it as Load does, when
+// the file still holds expected. Empty text with no file to replace writes
+// an empty file, which declares no architecture.
+//
+// Parameters:
+//   - text: the new file.
+//   - expected: what the file holds now, empty when there is no file.
+//
+// Returns:
+//   - path: where treaty.yaml was written.
+//   - err: the text is invalid, the file changed, or the write failed.
+//
+// Errors:
+//   - app.ErrConfigInvalid: Load would refuse the text.
+//   - app.ErrConfigChanged: the file no longer holds expected.
+func (this *Config) Save(text, expected string) (path string, err error) {
+	file, _, err := decodeConfig([]byte(text))
+	if err == nil {
+		_, err = file.architecture()
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", app.ErrConfigInvalid, err)
+	}
+
+	current, _, err := this.Text()
+	if err != nil {
+		return "", err
+	}
+
+	if current != expected {
+		return "", app.ErrConfigChanged
+	}
+
+	path = filepath.Join(this.root, ConfigFile)
+	return path, os.WriteFile(path, []byte(text), 0o644)
 }
 
 // Fingerprint hashes the path, size and modification time of every file
@@ -401,20 +457,20 @@ func (this configFile) architecture() (result rules.Architecture, err error) {
 	result = rules.Architecture{Style: this.Architecture, Composition: this.Composition, Shared: this.Shared, Public: this.Public}
 	if result.Style == "" {
 		result.Style = rules.StyleNone
-		if len(this.Composition) > 0 || len(this.Layers.Content) > 0 {
-			result.Style = rules.StyleHexagonal
-		}
 	}
 
-	switch {
-	case result.Style == rules.StyleModular && len(this.Slices) > 0:
-		return result, fmt.Errorf("%w: the modular architecture lists contexts, not slices", rules.ErrArchitecture)
-	case result.Style != rules.StyleModular && len(this.Contexts) > 0:
-		return result, fmt.Errorf("%w: contexts apply only to the modular architecture", rules.ErrArchitecture)
-	case result.Style == rules.StyleModular:
-		result.Slices = this.Contexts
-	default:
-		result.Slices = this.Slices
+	if this.Boundaries.Kind != 0 && this.Boundaries.Kind != yaml.MappingNode {
+		return result, fmt.Errorf("%w: boundaries must map each boundary's name to its globs", rules.ErrArchitecture)
+	}
+
+	for i := 0; i+1 < len(this.Boundaries.Content); i += 2 {
+		name, value := this.Boundaries.Content[i].Value, this.Boundaries.Content[i+1]
+		var globs []string
+		if err := value.Decode(&globs); err != nil {
+			return result, fmt.Errorf("boundaries.%s: %w", name, err)
+		}
+
+		result.Boundaries = append(result.Boundaries, rules.Boundary{Name: name, Globs: globs})
 	}
 
 	if this.Layers.Kind != 0 && this.Layers.Kind != yaml.MappingNode {

@@ -425,7 +425,7 @@ func newService(t *testing.T, root string) *app.Service {
 func TestReexportsKeepTheImportedModule(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{
-		"treaty.yaml":                   "architecture: modular\ncontexts: [\"src/ctx/*\"]\npublic: [\".\"]\n",
+		"treaty.yaml":                   "version: 1\narchitecture: modular\nboundaries:\n  a: [\"src/ctx/a/**\"]\n  b: [\"src/ctx/b/**\"]\n  c: [\"src/ctx/c/**\"]\n  d: [\"src/ctx/d/**\"]\n",
 		"src/ctx/a/index.ts":            "export { helper } from './internal/h';\nexport * from './internal/more';\nexport { default as Widget } from './internal/widget';\nimport { tool } from './internal/h';\nexport { tool };\n",
 		"src/ctx/a/internal/h.ts":       "export function helper(): number { return 1; }\nexport function tool(): number { return 2; }\n",
 		"src/ctx/a/internal/more.ts":    "export const LIMIT = 3;\n",

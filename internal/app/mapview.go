@@ -32,29 +32,31 @@ type MapEdge struct {
 	Imports    []graph.Import `json:"imports,omitempty"`
 }
 
-// MapModule is one module hexagon on the map. Section is the vertical slice
-// or bounded context holding it, and Public marks a context's public API.
+// MapModule is one module hexagon on the map. Boundary is the boundary
+// holding it, Public marks a boundary's public API, and Ambiguous lists the
+// boundaries that tie for it.
 // Removed marks a module only the base has; RemovedFiles are files the base
 // had in a module that is still there. Name is what its language calls it,
 // such as a Go package name. Entry and Private mark a module code outside
 // the repository cannot import: a program's entry point, or one only this
 // repository may import.
 type MapModule struct {
-	ID       string   `json:"id"`
-	Path     string   `json:"path"`
-	Label    string   `json:"label"`
-	Name     string   `json:"name,omitempty"`
-	Entry    bool     `json:"entry,omitempty"`
-	Private  bool     `json:"private,omitempty"`
-	Language string   `json:"language"`
-	Layer    string   `json:"layer"`
-	Side     string   `json:"side,omitempty"`
-	Section  string   `json:"section,omitempty"`
-	Public   bool     `json:"public,omitempty"`
-	New      bool     `json:"new"`
-	Removed  bool     `json:"removed,omitempty"`
-	Design   bool     `json:"design"`
-	Files    []string `json:"files"`
+	ID        string   `json:"id"`
+	Path      string   `json:"path"`
+	Label     string   `json:"label"`
+	Name      string   `json:"name,omitempty"`
+	Entry     bool     `json:"entry,omitempty"`
+	Private   bool     `json:"private,omitempty"`
+	Language  string   `json:"language"`
+	Layer     string   `json:"layer"`
+	Side      string   `json:"side,omitempty"`
+	Boundary  string   `json:"boundary,omitempty"`
+	Ambiguous []string `json:"ambiguous,omitempty"`
+	Public    bool     `json:"public,omitempty"`
+	New       bool     `json:"new"`
+	Removed   bool     `json:"removed,omitempty"`
+	Design    bool     `json:"design"`
+	Files     []string `json:"files"`
 
 	RemovedFiles []string      `json:"removed_files,omitempty"`
 	Manifest     string        `json:"manifest,omitempty"`
@@ -212,7 +214,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 	for _, module := range analysis.head.Modules {
 		entry := MapModule{
 			ID: module.ID, Path: module.Path, Label: label(module), Name: module.Name, Entry: module.Entry, Private: module.Private,
-			Language: module.Language, Layer: module.Layer, Side: module.Side, Section: module.Slice, Public: module.Public,
+			Language: module.Language, Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous,
 			Files: module.Files, Manifest: module.Manifest, Metrics: analysis.metrics[module.ID], Guidance: architecture.Guidance(placement(module)),
 			New: analysis.base != nil && analysis.base.Module(module.ID) == nil,
 		}
@@ -295,7 +297,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 				place := architecture.Resolve(modulePath)
 				view.Modules = append(view.Modules, MapModule{
 					ID: element.Module, Path: modulePath, Label: modulePath, Language: language, Layer: place.Layer, Side: place.Side,
-					Section: place.Slice, Public: place.Public, Design: true, Guidance: architecture.Guidance(place),
+					Boundary: place.Boundary, Public: place.Public, Ambiguous: place.Ambiguous, Design: true, Guidance: architecture.Guidance(place),
 				})
 			}
 
@@ -422,7 +424,7 @@ func removed(analysis *analysis, view *MapView, changes map[string]rules.Change)
 
 		view.Modules = append(view.Modules, MapModule{
 			ID: module.ID, Path: module.Path, Label: label(module), Name: module.Name, Entry: module.Entry, Private: module.Private,
-			Language: module.Language, Layer: module.Layer, Side: module.Side, Section: module.Slice, Public: module.Public,
+			Language: module.Language, Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous,
 			Files: module.Files, Manifest: module.Manifest, Removed: true,
 			Metrics: analysis.baseMetrics[module.ID], Guidance: architecture.Guidance(placement(module)),
 		})

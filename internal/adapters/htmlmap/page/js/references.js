@@ -47,7 +47,7 @@ function draw() {
 // areas, the groups, the modules with their files and contracts, and the
 // dependencies between them.
 function drawReferences(svg, rel) {
-  // Rings for hexagonal and clean; bands, slices, cells and contexts as
+  // Rings for hexagonal and clean; bands, boundaries, cells and islands as
   // regions for the other architectures.
   const tones = ["--ring-domain", "--ring-app", "--ring-adapter", "--ring-outer"];
   // A half ring, such as hexagonal composition, covers only the left, and
@@ -158,7 +158,7 @@ function drawReferences(svg, rel) {
     // Composition wires adapters into the core: a double outline marks the
     // only modules allowed to depend on adapters.
     if (m.layer === "composition") el("polygon", { points: hexPoints(p.x, p.y, S * 0.84).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--hex-stroke"), "stroke-width": 1, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
-    // A context's public API is the only part other contexts may use: a
+    // A boundary's public API is the only part other boundaries may use: a
     // bold outline marks it.
     if (m.public) el("polygon", { points: hexPoints(p.x, p.y, S * 1.12).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--module-stroke"), "stroke-width": 2.4, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
     el("text", { x: 0, y: 0, "text-anchor": "middle", class: "module-label" + (state.selected && state.selected.type === "module" && state.selected.id === m.id ? " selected-label" : "") }, anchored(g, p.x, p.y + S + 13, {}, true, true)).textContent = moduleLabel(m);
@@ -267,8 +267,8 @@ function placeSymbol(g, s, x, y, r, rel, file) {
 }
 
 // ---- Regions ----
-// A region's name is the label the layout gives it, a layer, a slice's
-// directory or a context, unless the person gave it another. Names given
+// A region's name is the label the layout gives it, a layer or a
+// boundary, unless the person gave it another. Names given
 // are kept per architecture and are only for the map: treaty.yaml, the
 // rules and every check keep the region's own label.
 function regionName(r) { return ((state.regionNames || {})[D.architecture] || {})[r.label] || r.label; }

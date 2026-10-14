@@ -1,8 +1,8 @@
 # Treaty
 
 Treaty reads a codebase into a graph of its contracts, places them in the
-architecture your team declares (hexagonal, clean, layered, vertical slices
-or modular monolith), and checks, slices and draws that graph. You can use it
+architecture your team declares (hexagonal, clean, layered, vertical or
+modular monolith), and checks, slices and draws that graph. You can use it
 for code review, for thinking through a design, and alongside a coding
 agent.
 
@@ -93,6 +93,8 @@ without fixing everything first, while the debt can't grow.
 A hexagonal `treaty.yaml` looks like this:
 
 ```yaml
+version: 1
+architecture: hexagonal
 layers:
   composition: ["cmd/**"]
   domain:      ["internal/graph/**", "internal/rules/**"]
@@ -101,9 +103,21 @@ layers:
     driving:   ["internal/adapters/cli/**", "internal/adapters/web/**"]
     driven:    ["internal/adapters/language/**", "internal/adapters/gitvcs/**"]
 rules:
-  fail_on: [breaking, layer_violation]
-  warn_on: [unclassified]
+  fail_on: [breaking_changes, layer_violation, unclassified]
 ```
+
+[configuration.md](configuration.md) is the full reference for the file:
+
+- [Keys](configuration.md#keys): every key, its type, its default and the
+  architectures that take it.
+- [Globs](configuration.md#globs) and
+  [how a module is placed](configuration.md#how-a-module-is-placed): what a
+  pattern matches, and which glob wins when several do.
+- [Rules](configuration.md#rules): what `fail_on` and `warn_on` count,
+  including modules no glob places, and why only what a change introduced
+  fails.
+- [Versions](configuration.md#versions): the file's `version`, and why a
+  misspelled key is an error rather than ignored.
 
 ## Architectures
 
@@ -116,42 +130,22 @@ on everything, and nothing may depend on composition.
 | `hexagonal` | Dependencies point inward: domain ← application ← adapters. No adapter uses another adapter | Rings, with driving adapters on the left and driven on the right |
 | `clean` | Dependencies point inward: entities ← use cases ← interface adapters ← frameworks | Four rings |
 | `layered` | A layer may use itself and every layer below it. Skipping a layer is allowed; forbidding it is a team decision | Horizontal bands |
-| `slices` | A slice may use itself and shared code, never another slice. Optional layers inside every slice | A column per slice, or a grid of slices by layer |
-| `modular` | A context may use its own packages, other contexts' public packages and shared code. No cycles between contexts | An island per context |
+| `vertical` | A boundary may use itself and shared code, never another boundary. Optional layers inside every boundary | A column per boundary, or a grid of boundaries by layer |
+| `modular` | A boundary may use its own packages, other boundaries' public packages and shared code. No cycles between boundaries | An island per boundary |
+
+The layer architectures place modules in layers: their names are fixed for
+`hexagonal` and `clean`, and yours for `layered`; see
+[Layers](configuration.md#layers). `vertical` and `modular` divide code into
+named [boundaries](configuration.md#boundaries), each gathering whatever
+directories its globs match, so a feature spread across `web/orders` and
+`store/orders` can still be one boundary:
 
 ```yaml
-architecture: layered
-composition: ["cmd/**"]
-layers:                                # top to bottom
-  presentation: ["internal/web/**"]
-  business:     ["internal/service/**"]
-  data:         ["internal/store/**"]
+architecture: vertical
+boundaries:
+  orders:  ["**/orders/**"]
+  billing: ["web/billing/**", "store/billing/**"]
 ```
-
-```yaml
-architecture: slices
-composition: ["cmd/**"]
-shared:      ["internal/platform/**"]
-slices:      ["internal/features/*"]   # each match is one slice
-layers:                                # optional, inside every slice, top to bottom
-  api:   ["."]
-  store: ["store/**"]
-```
-
-```yaml
-architecture: modular
-composition: ["cmd/**"]
-shared:      ["internal/platform/**"]
-contexts:    ["internal/*"]            # each match is one context
-public:      [".", "api/**"]           # what other contexts may use, relative to each context
-```
-
-For `layered`, the layer names are yours. For `clean`, use
-the layer names `entities`, `use_cases`, `interface_adapters` and
-`frameworks`. For `layered`, `hexagonal` and `clean`, a glob that is exactly
-a module's path, such as `internal/web/admin`, wins over every wildcard, so
-one package can sit in a different layer from its directory's glob. The
-design document has the full rules.
 
 Treaty reads the whole repository, including sub-trees with their own
 `go.mod`. Their imports resolve through their own module paths, and imports
@@ -224,7 +218,13 @@ up, and the tip says what a drop will do. Escape puts the module back.
   classifies it. Moves between layers wait while another architecture is
   previewed.
 
-Right-click a band, slice or area (`layered`, `slices`, `modular` and
+The **treaty.yaml** tab, beside the inspector, holds the whole file for
+editing. Save checks it the way `treaty check` reads it, so a file that
+would not load is refused with its line marked, and it won't overwrite a
+change made on disk since you opened it. See
+[Editing from the map](configuration.md#editing-from-the-map).
+
+Right-click a band, boundary or area (`layered`, `vertical`, `modular` and
 `none`) for its menu: *Rename…* gives it another name on this map,
 *Restore the name* takes it back, *Zoom to this region* fits it in view, and
 *Put its moved modules back* returns the modules moved inside it. Names are
@@ -303,7 +303,7 @@ a large repository (20,000 files or more, or one slow to walk).
 | `treaty serve [--port <n>] [--open]` | Keeps this directory's live map open until interrupted |
 | `treaty mcp [--port <n>]` | Relays an agent session over MCP on stdio to the treaty server, starting it when needed |
 | `treaty restart [--port <n>]` | Stops the treaty server; open sessions start a new one and rejoin |
-| `treaty init [--architecture <name>]` | Creates `.treaty/` and proposes a `treaty.yaml` for `none` (default), `hexagonal`, `clean`, `layered`, `slices` or `modular` |
+| `treaty init [--architecture <name>]` | Creates `.treaty/` and proposes a `treaty.yaml` for `none` (default), `hexagonal`, `clean`, `layered`, `vertical` or `modular` |
 | `treaty url` | Prints the live map's address for this directory |
 | `treaty here [--force]` | Registers Treaty in this repository's `.mcp.json` |
 

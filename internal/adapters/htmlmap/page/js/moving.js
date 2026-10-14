@@ -190,7 +190,7 @@ function symbolElement(id) { return id ? mapEl.querySelector(`[data-symbol="${CS
 mapEl.addEventListener("click", ev => {
   const nearest = nearestSymbol(ev.clientX, ev.clientY);
   if (nearest) { ev.stopPropagation(); select({ type: "symbol", id: nearest }); return; }
-  // Rings, bands, slices and islands are backdrop: clicking them clears the
+  // Rings, bands, boundaries and islands are backdrop: clicking them clears the
   // selection like clicking empty map.
   if (ev.target === mapEl || ev.target.classList.contains("backdrop")) select(null);
 }, true);

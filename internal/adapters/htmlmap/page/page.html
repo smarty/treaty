@@ -18,7 +18,7 @@
     <label>Baseline <select id="baseline-mode"><option value="head">HEAD</option><option value="pr">Pull request</option><option value="ref">Ref</option></select></label>
     <input id="baseline-arg" type="text" size="16" spellcheck="false" aria-label="Baseline ref or target branch">
     <button id="baseline-apply" type="button">Apply</button>
-    <label title="Preview the code in another architecture; treaty.yaml changes only when you choose to use it">Architecture <select id="architecture"><option value="none">None</option><option value="hexagonal">Hexagonal</option><option value="clean">Clean</option><option value="layered">Layered</option><option value="slices">Vertical slices</option><option value="modular">Modular monolith</option></select></label>
+    <label title="Preview the code in another architecture; treaty.yaml changes only when you choose to use it">Architecture <select id="architecture"><option value="none">None</option><option value="hexagonal">Hexagonal</option><option value="clean">Clean</option><option value="layered">Layered</option><option value="vertical">Vertical</option><option value="modular">Modular monolith</option></select></label>
     <span class="adopt" id="adopt-bar" role="status" hidden>Previewing; treaty.yaml is unchanged <button id="adopt" type="button">Use this architecture</button> <button id="adopt-cancel" type="button">Keep treaty.yaml</button></span>
     <span class="status" id="status" role="status"></span>
   </span>
@@ -78,6 +78,13 @@
   <section class="panel inspector" data-panel="inspector" aria-label="Inspector"><div id="inspector"><p class="empty">Select a module, file, symbol, edge or queue item.</p></div></section>
   <section class="panel code-panel" data-panel="code" aria-label="Code"><div id="code"><p class="empty">Select a symbol or file to see its code.</p></div></section>
   <section class="panel tests-panel" data-panel="tests" aria-label="Tests"><div id="tests"><p class="empty">Loading the tests…</p></div></section>
+  <section class="panel config-panel" data-panel="config" aria-label="treaty.yaml">
+    <p id="config-static" class="empty">treaty.yaml can be read and edited on the live map, which treaty serve opens.</p>
+    <div id="config-live" class="config-live" hidden>
+      <div class="config-bar"><button id="config-save" type="button" disabled>Save</button><button id="config-revert" type="button" disabled title="Load treaty.yaml as it is on disk, discarding your edits">Revert</button><span id="config-status" class="config-status" role="status" aria-live="polite"></span></div>
+      <div class="config-editor"><div id="config-gutter" class="config-gutter" aria-hidden="true"></div><textarea id="config-text" spellcheck="false" wrap="off" autocomplete="off" autocapitalize="off" aria-label="treaty.yaml"></textarea></div>
+    </div>
+  </section>
 </div>
 <script>
 /*SCRIPT*/

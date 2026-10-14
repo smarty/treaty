@@ -119,8 +119,8 @@ func TestProposeRingsAndBandsHaveNoViolations(t *testing.T) {
 	}
 }
 
-func TestProposeSlices(t *testing.T) {
-	root, proposal := proposeSections(shapeGraph(), rules.StyleSlices)
+func TestProposeVertical(t *testing.T) {
+	root, proposal := proposeSections(shapeGraph(), rules.StyleVertical)
 	if root != "internal/features" {
 		t.Fatalf("root %q, proposal %v", root, proposal)
 	}
@@ -141,28 +141,51 @@ func TestProposeSlices(t *testing.T) {
 		}
 	}
 
-	draft := sectionDraft(rules.StyleSlices, root, proposal)
-	if !strings.Contains(draft, `slices: ["internal/features/*"]`) || !strings.Contains(draft, `"internal/features/money/**"`) {
-		t.Errorf("draft:\n%s", draft)
+	draft := sectionDraft(rules.StyleVertical, root, proposal)
+	for _, want := range []string{"  billing: [\"internal/features/billing/**\"]\n  orders: [\"internal/features/orders/**\"]\n", `"internal/features/money/**"`, "fail_on: [breaking_changes, layer_violation, unclassified, ambiguous_boundaries]"} {
+		if !strings.Contains(draft, want) {
+			t.Errorf("draft should have %q:\n%s", want, draft)
+		}
+	}
+
+	if strings.Contains(draft, "  money:") {
+		t.Errorf("shared code is no boundary:\n%s", draft)
+	}
+
+	architecture := architectureFrom(rules.StyleVertical, root, proposal)
+	if got := architecture.Resolve("internal/features/orders/store"); got.Boundary != "orders" {
+		t.Errorf("orders/store placed %+v", got)
 	}
 }
 
-func TestProposeContexts(t *testing.T) {
+func TestProposeModular(t *testing.T) {
 	root, proposal := proposeSections(shapeGraph(), rules.StyleModular)
 	if root != "internal/features" {
 		t.Fatalf("root %q, proposal %v", root, proposal)
 	}
 
 	if proposal["internal/features/money"] != groupSection {
-		t.Errorf("contexts are never shared: money proposed as %q", proposal["internal/features/money"])
+		t.Errorf("modular boundaries are never shared: money proposed as %q", proposal["internal/features/money"])
 	}
 
-	if draft := sectionDraft(rules.StyleModular, root, proposal); !strings.Contains(draft, `contexts: ["internal/features/*"]`) || !strings.Contains(draft, `public: ["."]`) {
-		t.Errorf("draft:\n%s", draft)
+	draft := sectionDraft(rules.StyleModular, root, proposal)
+	for _, want := range []string{"  money: [\"internal/features/money/**\"]", "dependency_cycles"} {
+		if !strings.Contains(draft, want) {
+			t.Errorf("draft should have %q:\n%s", want, draft)
+		}
+	}
+
+	architecture := architectureFrom(rules.StyleModular, root, proposal)
+	if got := architecture.Resolve("internal/features/orders"); got.Boundary != "orders" || !got.Public {
+		t.Errorf("the top of a boundary is public by default: %+v", got)
+	}
+
+	if got := architecture.Resolve("internal/features/orders/store"); got.Boundary != "orders" || got.Public {
+		t.Errorf("orders/store is internal: %+v", got)
 	}
 }
 
-// shapeGraph is a small program: cmd/app wires two feature slices that share
+// shapeGraph is a small program: cmd/app wires two features that share
 // money and a logger.
 func shapeGraph() *graph.Graph {
 	g := graph.New()

@@ -22,12 +22,11 @@ const (
 
 	LayerAdapter      = "adapter"
 	LayerApplication  = "application"
+	LayerBoundary     = "boundary"
 	LayerComposition  = "composition"
-	LayerContext      = "context"
 	LayerDomain       = "domain"
 	LayerNone         = "none"
 	LayerShared       = "shared"
-	LayerSlice        = "slice"
 	LayerUnclassified = "unclassified"
 
 	SideDriven  = "driven"
@@ -84,22 +83,24 @@ type Import struct {
 // point, such as a Go main package, which nothing can import. Private marks
 // a module only this repository can import, such as a Go internal package.
 // Manifest is the language's module file in the module's directory, such as
-// go.mod, when there is one. Slice is the
-// root path of the vertical slice or bounded context holding the module, and
-// Public marks a context's packages that other contexts may use.
+// go.mod, when there is one. Boundary names the boundary holding the module,
+// for the vertical and modular architectures, and Public marks a boundary's
+// packages that other boundaries may use. Ambiguous lists the boundaries
+// that tie for a module, which then sits in none of them.
 type Module struct {
-	ID       string   `json:"id"`
-	Language string   `json:"language"`
-	Path     string   `json:"path"`
-	Name     string   `json:"name,omitempty"`
-	Entry    bool     `json:"entry,omitempty"`
-	Private  bool     `json:"private,omitempty"`
-	Manifest string   `json:"manifest,omitempty"`
-	Layer    string   `json:"layer"`
-	Side     string   `json:"side,omitempty"`
-	Slice    string   `json:"slice,omitempty"`
-	Public   bool     `json:"public,omitempty"`
-	Files    []string `json:"files"`
+	ID        string   `json:"id"`
+	Language  string   `json:"language"`
+	Path      string   `json:"path"`
+	Name      string   `json:"name,omitempty"`
+	Entry     bool     `json:"entry,omitempty"`
+	Private   bool     `json:"private,omitempty"`
+	Manifest  string   `json:"manifest,omitempty"`
+	Layer     string   `json:"layer"`
+	Side      string   `json:"side,omitempty"`
+	Boundary  string   `json:"boundary,omitempty"`
+	Public    bool     `json:"public,omitempty"`
+	Ambiguous []string `json:"ambiguous,omitempty"`
+	Files     []string `json:"files"`
 }
 
 // ModuleEdge aggregates every reference and import from one module to

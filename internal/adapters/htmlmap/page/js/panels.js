@@ -14,7 +14,9 @@
 // that drawer, and anywhere else floats it. The map moves like any other
 // panel, and the center may be left empty. The layout, with the map view
 // shown and the order of the map's views, is remembered per browser.
-const PANELS = { map: { title: "Map", float: { w: 640, h: 480 } }, queue: { title: "Review queue" }, inspector: { title: "Inspector" }, code: { title: "Code" }, tests: { title: "Tests" } };
+// A panel that fills its stack, such as the map, scrolls inside itself
+// rather than in the stack.
+const PANELS = { map: { title: "Map", fill: true, float: { w: 640, h: 480 } }, queue: { title: "Review queue" }, inspector: { title: "Inspector" }, code: { title: "Code" }, tests: { title: "Tests" }, config: { title: "treaty.yaml", fill: true } };
 const MAP_TABS = { references: "References", files: "Files", symbols: "Symbols" };
 const LAYOUT_KEY = "treaty.layout.v1";
 const DRAWER_MIN = 160, CENTER_MIN = 240, EDGE_ZONE = 28, DRAG_START = 5, SPLIT_ZONE = 0.3, STACK_MIN = 60;
@@ -22,7 +24,7 @@ const SIDES = ["left", "right", "bottom"];
 function defaultLayout() {
   return {
     left: { size: 300, stacks: [{ tabs: ["queue"], active: "queue", weight: 1 }] },
-    right: { size: 360, stacks: [{ tabs: ["inspector", "code", "tests"], active: "inspector", weight: 1 }] },
+    right: { size: 360, stacks: [{ tabs: ["inspector", "code", "tests", "config"], active: "inspector", weight: 1 }] },
     bottom: { size: 240, stacks: [] },
     center: { tabs: ["map"], active: "map" },
     floating: [],
@@ -109,7 +111,7 @@ function stackEl(stack, where) {
     strip.appendChild(tab);
   }
   bar.appendChild(scrollTabs(strip));
-  const body = h("div", { class: "stack-body" + (stack.active === "map" ? " fill" : "") });
+  const body = h("div", { class: "stack-body" + (PANELS[stack.active] && PANELS[stack.active].fill ? " fill" : "") });
   if (stack.active) body.appendChild(panelEl(stack.active));
   else body.appendChild(h("p", { class: "stack-empty" }, "Drag a tab here."));
   node.append(bar, body);

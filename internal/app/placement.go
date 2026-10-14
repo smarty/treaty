@@ -149,8 +149,8 @@ func placeable(architecture rules.Architecture, placement rules.Placement) error
 		return fmt.Errorf("%w: an adapter is driving or driven, not %q", ErrPlacement, placement.Side)
 	case !sided && placement.Side != "":
 		return fmt.Errorf("%w: only a hexagonal adapter has a side", ErrPlacement)
-	case placement.Slice != "" || placement.Public:
-		return fmt.Errorf("%w: a layer move sets no slice or public API", ErrPlacement)
+	case placement.Boundary != "" || placement.Public:
+		return fmt.Errorf("%w: a layer move sets no boundary or public API", ErrPlacement)
 	}
 
 	return nil

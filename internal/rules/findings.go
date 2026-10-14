@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	FindingAmbiguous      = "ambiguous_boundary"
 	FindingBreaking       = "breaking"
 	FindingCompatible     = "compatible"
 	FindingCycle          = "cycle"
@@ -24,6 +25,14 @@ const (
 	SeverityHigh   = "high"
 	SeverityLow    = "low"
 	SeverityMedium = "medium"
+)
+
+var (
+	// FindingKinds lists every kind of finding.
+	FindingKinds = []string{FindingAmbiguous, FindingBreaking, FindingCompatible, FindingCycle, FindingImplementation, FindingImplementers, FindingLayerViolation, FindingMoved, FindingNewContract, FindingNewModule, FindingUnclassified, FindingVariants}
+
+	// Failable lists the kinds of finding that can fail a check, or warn.
+	Failable = []string{FindingBreaking, FindingLayerViolation, FindingCycle, FindingUnclassified, FindingAmbiguous}
 )
 
 // Finding is one item in the review queue.
@@ -121,7 +130,14 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 	}
 
 	for _, module := range head.Modules {
-		if module.Layer == graph.LayerUnclassified {
+		if len(module.Ambiguous) > 0 {
+			result = append(result, Finding{
+				Severity: SeverityMedium, Kind: FindingAmbiguous,
+				Title:   fmt.Sprintf("%s is claimed by boundaries %s", module.ID, strings.Join(module.Ambiguous, " and ")),
+				Detail:  "Their globs match it equally well, so it is in no boundary and its dependencies are not checked. Name its path exactly in the boundary it belongs to.",
+				Targets: []string{module.ID},
+			})
+		} else if module.Layer == graph.LayerUnclassified {
 			result = append(result, Finding{
 				Severity: SeverityMedium, Kind: FindingUnclassified,
 				Title:   fmt.Sprintf("%s matches no layer", module.ID),
@@ -132,8 +148,8 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 
 		if base != nil && base.Module(module.ID) == nil {
 			detail := fmt.Sprintf("Placed in the %s layer.", module.Layer)
-			if module.Slice != "" {
-				detail = fmt.Sprintf("Placed in the %s layer of %s.", module.Layer, module.Slice)
+			if module.Boundary != "" {
+				detail = fmt.Sprintf("Placed in the %s layer of boundary %s.", module.Layer, module.Boundary)
 			}
 
 			result = append(result, Finding{

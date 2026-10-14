@@ -11,6 +11,7 @@ import (
 	"github.com/smarty/treaty/internal/adapters/filesystem"
 	"github.com/smarty/treaty/internal/app"
 	"github.com/smarty/treaty/internal/graph"
+	"github.com/smarty/treaty/internal/rules"
 )
 
 const tricky = "package tricky\n" + `
@@ -391,7 +392,7 @@ func TestHiddenDependencies(t *testing.T) {
 			root := t.TempDir()
 			for file, text := range map[string]string{
 				"go.mod":                   "module example.com/shop\n",
-				"treaty.yaml":              "architecture: layered\nlayers:\n  presentation: [\"internal/api/**\"]\n  data: [\"internal/storage/**\"]\nrules:\n  fail_on: [layer_violation]\n",
+				"treaty.yaml":              "version: 1\narchitecture: layered\nlayers:\n  presentation: [\"internal/api/**\"]\n  data: [\"internal/storage/**\"]\nrules:\n  fail_on: [layer_violation]\n",
 				"internal/api/api.go":      api,
 				"internal/storage/file.go": storage,
 			} {
@@ -691,5 +692,43 @@ func TestNeverBuiltFiles(t *testing.T) {
 
 	if g.Module("go:tools") != nil {
 		t.Fatal("a package of only tools files should not be a module")
+	}
+}
+
+func TestInitWritesTheCurrentVersion(t *testing.T) {
+	for _, style := range rules.Styles {
+		t.Run(style, func(t *testing.T) {
+			root := t.TempDir()
+			for name, text := range map[string]string{
+				"go.mod":                "module example.com/app\n",
+				"cmd/app/main.go":       "package main\n\nimport (\n\t\"example.com/app/internal/billing\"\n\t\"example.com/app/internal/orders\"\n)\n\nfunc main() { orders.Run(); billing.Run() }\n",
+				"internal/orders/o.go":  "package orders\n\n// Run runs.\nfunc Run() {}\n",
+				"internal/billing/b.go": "package billing\n\n// Run runs.\nfunc Run() {}\n",
+			} {
+				path := filepath.Join(root, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+
+				if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			service := app.NewService(root, filesystem.NewConfig(root), NewExtractor(), []app.Dialect{NewDialect()},
+				nil, filesystem.NewWorkspace(root), nil, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+			if _, err := service.Init(style); err != nil {
+				t.Fatal(err)
+			}
+
+			config, found, err := filesystem.NewConfig(root).Load()
+			if err != nil || !found {
+				t.Fatalf("the draft must load strictly: found %t, err %v", found, err)
+			}
+
+			if config.Unversioned {
+				t.Error("treaty init must write a version line")
+			}
+		})
 	}
 }

@@ -65,7 +65,7 @@ type Label struct {
 }
 
 // Layout is the computed geometry of the map: rings for hexagonal and clean,
-// regions for layered, slices and modular. Each module's hexagon holds a
+// regions for layered, vertical and modular. Each module's hexagon holds a
 // ring of its files, every cell CellSize across, so a module with more files
 // is larger; Sizes gives each module's radius.
 type Layout struct {
@@ -87,8 +87,8 @@ type Point struct {
 	Y float64 `json:"y"`
 }
 
-// Region is a labeled rectangle: a band, a slice, a cell of the grid or a
-// context. X and Y are its top-left corner, and Tone picks its shade. Layer
+// Region is a labeled rectangle: a band, a boundary, a cell of the grid or
+// an island. X and Y are its top-left corner, and Tone picks its shade. Layer
 // names the layer of a band or cell, so a module dropped there can join it.
 type Region struct {
 	Label string  `json:"label"`
@@ -119,8 +119,8 @@ type box struct {
 	w, h   float64
 }
 
-// gridBlock is the middle of a region layout: slices as columns of cells,
-// one per layer, or contexts as islands in rows.
+// gridBlock is the middle of a region layout: boundaries as columns of cells,
+// one per layer, or boundaries as islands in rows.
 type gridBlock struct {
 	columns []string
 	cells   [][]*box
@@ -276,8 +276,8 @@ func (this *gridBlock) place(result *Layout, x, y float64) {
 }
 
 // ComputeLayout places modules by the view's architecture: concentric rings
-// for hexagonal and clean, horizontal bands for layered, a grid of slices by
-// layer for slices, and islands for the contexts of a modular monolith.
+// for hexagonal and clean, horizontal bands for layered, a grid of boundaries by
+// layer for vertical, and islands for the boundaries of a modular monolith.
 //
 // Notes:
 //   - Within each ring or region, directories with two or more children
@@ -299,7 +299,7 @@ func ComputeLayout(view app.MapView) (result Layout) {
 		result = noneLayout(view)
 	case rules.StyleLayered:
 		result = bandLayout(view)
-	case rules.StyleSlices:
+	case rules.StyleVertical:
 		result = gridLayout(view)
 	case rules.StyleModular:
 		result = islandLayout(view)
@@ -450,14 +450,14 @@ func noneLayout(view app.MapView) Layout {
 	return stack([]*box{{label: layerLabel(graph.LayerNone), bucket: graph.LayerNone, layer: graph.LayerNone, items: topItems(view.Modules)}}, nil)
 }
 
-// gridLayout draws each slice as a column and, when slices have layers,
+// gridLayout draws each boundary as a column and, when boundaries have layers,
 // each layer as a row across them. Composition spans the top, and shared
 // code and unclassified modules span the bottom.
 func gridLayout(view app.MapView) Layout {
 	rows := slices.Clone(view.Layers)
 	slices.Reverse(rows)
 	if len(rows) == 0 {
-		rows = []string{graph.LayerSlice}
+		rows = []string{graph.LayerBoundary}
 	}
 
 	cells := map[[2]string][]app.MapModule{}
@@ -465,20 +465,20 @@ func gridLayout(view app.MapView) Layout {
 	var columns []string
 	unplaced := false
 	for _, module := range view.Modules {
-		if module.Section == "" {
+		if module.Boundary == "" {
 			byLayer[module.Layer] = append(byLayer[module.Layer], module)
 			continue
 		}
 
-		if !slices.Contains(columns, module.Section) {
-			columns = append(columns, module.Section)
+		if !slices.Contains(columns, module.Boundary) {
+			columns = append(columns, module.Boundary)
 		}
 
 		if module.Layer == graph.LayerUnclassified {
 			unplaced = true
 		}
 
-		key := [2]string{module.Section, module.Layer}
+		key := [2]string{module.Boundary, module.Layer}
 		cells[key] = append(cells[key], module)
 	}
 
@@ -492,7 +492,7 @@ func gridLayout(view app.MapView) Layout {
 		var cellBoxes []*box
 		for _, row := range rows {
 			label := ""
-			if row != graph.LayerSlice {
+			if row != graph.LayerBoundary {
 				label = layerLabel(row)
 			}
 
@@ -516,30 +516,30 @@ func gridLayout(view app.MapView) Layout {
 	return stack(above, &gridBlock{columns: columns, cells: grid}, below...)
 }
 
-// islandLayout draws each context of a modular monolith as an island,
+// islandLayout draws each boundary of a modular monolith as an island,
 // arranged in rows, with composition above them and shared code and
 // unclassified modules below.
 func islandLayout(view app.MapView) Layout {
-	bySection := map[string][]app.MapModule{}
+	byBoundary := map[string][]app.MapModule{}
 	byLayer := map[string][]app.MapModule{}
-	var sections []string
+	var boundaries []string
 	for _, module := range view.Modules {
-		if module.Section == "" {
+		if module.Boundary == "" {
 			byLayer[module.Layer] = append(byLayer[module.Layer], module)
 			continue
 		}
 
-		if !slices.Contains(sections, module.Section) {
-			sections = append(sections, module.Section)
+		if !slices.Contains(boundaries, module.Boundary) {
+			boundaries = append(boundaries, module.Boundary)
 		}
 
-		bySection[module.Section] = append(bySection[module.Section], module)
+		byBoundary[module.Boundary] = append(byBoundary[module.Boundary], module)
 	}
 
-	sort.Strings(sections)
+	sort.Strings(boundaries)
 	var islands []*box
-	for i, section := range sections {
-		islands = append(islands, &box{label: path.Base(section), tone: i % 2, bucket: section, layer: graph.LayerContext, items: topItems(bySection[section])})
+	for i, boundary := range boundaries {
+		islands = append(islands, &box{label: boundary, tone: i % 2, bucket: boundary, layer: graph.LayerBoundary, items: topItems(byBoundary[boundary])})
 	}
 
 	var above, below []*box

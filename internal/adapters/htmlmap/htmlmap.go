@@ -25,6 +25,7 @@ var scripts = []string{
 	"symbols.js",
 	"tests.js",
 	"undertest.js",
+	"config.js",
 	"panels.js",
 }
 

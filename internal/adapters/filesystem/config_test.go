@@ -21,13 +21,15 @@ func TestLoadArchitectures(t *testing.T) {
 		want  []string
 	}{
 		{"none when nothing is declared", `
+version: 1
 rules:
   warn_on: [unclassified]
 `, rules.StyleNone, nil},
 		{"none declared", `
 architecture: none
 `, rules.StyleNone, nil},
-		{"hexagonal when layers have no architecture key", `
+		{"hexagonal in any order", `
+architecture: hexagonal
 layers:
   adapter:
     driven: ["db/**"]
@@ -35,8 +37,6 @@ layers:
   composition: ["cmd/**"]
   domain: ["core/**"]
   application: ["app/**"]
-mutation:
-  scope: blast_radius
 `, rules.StyleHexagonal, []string{"domain", "application", "adapter/driving", "adapter/driven"}},
 		{"clean in any order", `
 architecture: clean
@@ -53,18 +53,21 @@ layers:
   business: ["service/**"]
   data: ["store/**"]
 `, rules.StyleLayered, []string{"data", "business", "presentation"}},
-		{"slices with layers", `
-architecture: slices
+		{"vertical with layers", `
+architecture: vertical
 shared: ["platform/**"]
-slices: ["features/*"]
+boundaries:
+  orders: ["**/orders/**"]
+  billing: ["web/billing/**", "store/billing/**"]
 layers:
-  api: ["."]
+  api: ["web/**"]
   store: ["store/**"]
-`, rules.StyleSlices, []string{"store", "api"}},
+`, rules.StyleVertical, []string{"store", "api"}},
 		{"modular", `
 architecture: modular
-contexts: ["internal/*"]
-public: [".", "api/**"]
+boundaries:
+  orders: ["internal/orders/**"]
+public: ["**/api/**"]
 `, rules.StyleModular, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -106,8 +109,11 @@ public: [".", "api/**"]
 func TestLoadRejectsBadArchitectures(t *testing.T) {
 	for _, text := range []string{
 		"architecture: onion\n",
-		"architecture: modular\nslices: [\"internal/*\"]\n",
-		"architecture: slices\ncontexts: [\"internal/*\"]\n",
+		"layers:\n  data: [\"x\"]\n",
+		"architecture: vertical\n",
+		"architecture: vertical\nboundaries: [\"internal/*\"]\n",
+		"architecture: modular\nboundaries:\n  orders: []\n",
+		"architecture: layered\nlayers:\n  web: [\"web/**\"]\nboundaries:\n  orders: [\"x/**\"]\n",
 		"architecture: clean\nlayers:\n  services: [\"x\"]\n",
 		"layers: [\"x\"]\n",
 		"architecture: none\nlayers:\n  data: [\"x\"]\n",
@@ -137,7 +143,7 @@ func TestLoadWithoutConfigIsNone(t *testing.T) {
 
 func TestLoadedHexagonalPlacesAdapters(t *testing.T) {
 	root := t.TempDir()
-	text := "layers:\n  composition: [\"cmd/**\"]\n  adapter:\n    driving: [\"web/**\"]\n"
+	text := "architecture: hexagonal\nlayers:\n  composition: [\"cmd/**\"]\n  adapter:\n    driving: [\"web/**\"]\n"
 	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(text), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +172,7 @@ layers:
   adapter:
     driving: ["internal/web/**"]
 rules:
-  fail_on: [breaking]
+  fail_on: [breaking_changes]
 `
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(original), 0o644); err != nil {
@@ -185,7 +191,7 @@ rules:
 			t.Fatal(err)
 		}
 
-		if got := loaded.Architecture.Resolve(path); got != placement {
+		if got := loaded.Architecture.Resolve(path); !got.Same(placement) {
 			t.Fatalf("%s resolves to %+v, want %+v", path, got, placement)
 		}
 
@@ -194,7 +200,7 @@ rules:
 	}
 
 	text := place("internal/web/admin", rules.Placement{Layer: graph.LayerAdapter, Side: graph.SideDriven})
-	for _, want := range []string{"# Our layers.", "# the pure core", `driven: ["internal/web/admin"]`, "fail_on: [breaking]"} {
+	for _, want := range []string{"# Our layers.", "# the pure core", `driven: ["internal/web/admin"]`, "fail_on: [breaking_changes]"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("the edit must keep comments and add the module to a new side list (%q):\n%s", want, text)
 		}
@@ -229,7 +235,7 @@ func TestPlaceInLayeredComposition(t *testing.T) {
 		}
 
 		loaded, _, _ := config.Load()
-		if got := loaded.Architecture.Resolve("web/main"); got != placement {
+		if got := loaded.Architecture.Resolve("web/main"); !got.Same(placement) {
 			t.Fatalf("web/main resolves to %+v, want %+v", got, placement)
 		}
 	}
@@ -275,5 +281,114 @@ func TestDesignsBeforeTheRename(t *testing.T) {
 
 	if _, err := os.Stat(old); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("saving replaces the old .cml file: %v", err)
+	}
+}
+
+func TestLoadReadsVersions(t *testing.T) {
+	for _, c := range []struct {
+		name        string
+		yaml        string
+		unversioned bool
+	}{
+		{"no version line is version 0", "architecture: none\n", true},
+		{"version 0 said outright", "version: 0\narchitecture: none\n", false},
+		{"the current version", "version: 1\narchitecture: none\n", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(c.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			config, _, err := NewConfig(root).Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if config.Unversioned != c.unversioned {
+				t.Errorf("unversioned %t, want %t", config.Unversioned, c.unversioned)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsWhatItCannotRead(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		yaml string
+		want error
+		says string
+	}{
+		{"a newer version", "version: 2\narchitecture: none\n", ErrConfigVersion, "line 1: unsupported treaty.yaml version: the file is version 2 and this treaty reads up to version 1; upgrade treaty"},
+		{"a newer version with keys from it", "version: 2\nfuture: true\n", ErrConfigVersion, "upgrade treaty"},
+		{"a version that is not a number", "version: \"1\"\n", ErrConfigVersion, "version must be a whole number"},
+		{"a negative version", "version: -1\n", ErrConfigVersion, "version must be a whole number"},
+		{"a misspelled key", "version: 1\narchitecure: clean\n", ErrUnknownKey, `line 2: unknown key "architecure"; did you mean "architecture"?`},
+		{"a key from a newer treaty", "version: 1\nmutation:\n  scope: all\n", ErrUnknownKey, `unknown key "mutation"; a newer treaty may know it`},
+		{"a misspelled rules key", "rules:\n  fail_one: [breaking_changes]\n", ErrUnknownKey, `line 2: unknown key "fail_one" under rules; did you mean "fail_on"?`},
+		{"a misspelled adapter side", "layers:\n  adapter:\n    drivng: [\"web/**\"]\n", ErrUnknownKey, `unknown key "drivng" under layers.adapter; did you mean "driving"?`},
+		{"a misspelled rule", "rules:\n  fail_on: [breaking_changes, layer_violations]\n", ErrUnknownRule, `line 2: fail_on: unknown rule "layer_violations"; did you mean "layer_violation"?`},
+		{"a finding that is not a rule", "rules:\n  fail_on: [new_contract]\n", ErrUnknownRule, "fail_on takes breaking_changes, layer_violation, dependency_cycles, unclassified, ambiguous_boundaries"},
+		{"an unknown warning", "rules:\n  warn_on: [everything]\n", ErrUnknownRule, "warn_on takes breaking_changes"},
+		{"an old rule name", "version: 1\nrules:\n  fail_on: [breaking]\n", ErrUnknownRule, `line 3: fail_on: unknown rule "breaking"; since version 1 it is "breaking_changes"`},
+		{"a rule name from before version 1", "rules:\n  fail_on: [cycle]\n", ErrUnknownRule, `line 2: fail_on: unknown rule "cycle"; since version 1 it is "dependency_cycles"`},
+		{"slices from before boundaries", "architecture: modular\nslices: [\"internal/*\"]\n", ErrUnknownKey, `unknown key "slices"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(c.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, found, err := NewConfig(root).Load()
+			if !found || !errors.Is(err, c.want) {
+				t.Fatalf("found %t, err %v, want %v", found, err, c.want)
+			}
+
+			if !strings.Contains(err.Error(), c.says) {
+				t.Errorf("error %q should say %q", err, c.says)
+			}
+		})
+	}
+}
+
+func TestLayerNamesAreNotKeys(t *testing.T) {
+	root := t.TempDir()
+	text := "version: 1\narchitecture: layered\nlayers:\n  anything_goes: [\"web/**\"]\n  adapter: [\"db/**\"]\n"
+	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := NewConfig(root).Load(); err != nil {
+		t.Fatalf("a layered architecture names its own layers: %v", err)
+	}
+}
+
+func TestRuleNames(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		yaml string
+		fail []string
+		warn []string
+	}{
+		{"defaults", "version: 1\n", []string{rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingCycle}, []string{rules.FindingUnclassified, rules.FindingAmbiguous}},
+		{"version 1 names", "version: 1\nrules:\n  fail_on: [breaking_changes, dependency_cycles, ambiguous_boundaries]\n  warn_on: [unclassified, layer_violation]\n",
+			[]string{rules.FindingBreaking, rules.FindingCycle, rules.FindingAmbiguous}, []string{rules.FindingUnclassified, rules.FindingLayerViolation}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(c.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			config, _, err := NewConfig(root).Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !slices.Equal(config.FailOn, c.fail) || !slices.Equal(config.WarnOn, c.warn) {
+				t.Errorf("fail_on %v, warn_on %v; want %v and %v", config.FailOn, config.WarnOn, c.fail, c.warn)
+			}
+		})
 	}
 }

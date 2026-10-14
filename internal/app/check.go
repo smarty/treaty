@@ -10,16 +10,16 @@ import (
 
 const ReportSchema = "treaty/report/v1"
 
-// ModuleReport is one module's placement and metrics. Section is the
-// vertical slice or bounded context holding it.
+// ModuleReport is one module's placement and metrics. Boundary is the
+// boundary holding it, for the vertical and modular architectures.
 type ModuleReport struct {
-	ID      string        `json:"id"`
-	Layer   string        `json:"layer"`
-	Side    string        `json:"side,omitempty"`
-	Section string        `json:"section,omitempty"`
-	Public  bool          `json:"public,omitempty"`
-	Before  *rules.Metric `json:"before,omitempty"`
-	Metrics rules.Metric  `json:"metrics"`
+	ID       string        `json:"id"`
+	Layer    string        `json:"layer"`
+	Side     string        `json:"side,omitempty"`
+	Boundary string        `json:"boundary,omitempty"`
+	Public   bool          `json:"public,omitempty"`
+	Before   *rules.Metric `json:"before,omitempty"`
+	Metrics  rules.Metric  `json:"metrics"`
 }
 
 // Report is the output of treaty check. Notes say what the check could not
@@ -33,6 +33,7 @@ type Report struct {
 	Violations []rules.Violation `json:"violations"`
 	Findings   []rules.Finding   `json:"findings"`
 	Failures   []string          `json:"failures"`
+	Warnings   []string          `json:"warnings,omitempty"`
 }
 
 // Check runs every check on the working tree, and on the diff from base when
@@ -52,8 +53,15 @@ func (this *Service) Check(base string) (result Report, err error) {
 
 	result = analysis.report()
 	result.Notes = append(this.notes(base, analysis), result.Notes...)
+	if analysis.config.Unversioned {
+		result.Notes = append(result.Notes, unversionedNote)
+	}
+
 	return result, nil
 }
+
+// unversionedNote asks for a version line in a treaty.yaml without one.
+var unversionedNote = fmt.Sprintf("treaty.yaml has no version line, so it is read as version 0, the format from before versions; add \"version: %d\" at its top", ConfigVersion)
 
 // notes explains a check that compared nothing: one with no base, or whose
 // base is the current commit while the working tree matches it.
@@ -83,6 +91,7 @@ func (this *analysis) report() Report {
 		Violations: this.violations,
 		Findings:   this.findings,
 		Failures:   this.failures(),
+		Warnings:   this.warnings(),
 	}
 
 	if existing := this.existing(); existing > 0 {
@@ -102,7 +111,7 @@ func (this *analysis) report() Report {
 	}
 
 	for _, module := range this.head.Modules {
-		entry := ModuleReport{ID: module.ID, Layer: module.Layer, Side: module.Side, Section: module.Slice, Public: module.Public, Metrics: this.metrics[module.ID]}
+		entry := ModuleReport{ID: module.ID, Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Metrics: this.metrics[module.ID]}
 		if before, ok := this.baseMetrics[module.ID]; ok {
 			entry.Before = &before
 		}
@@ -137,6 +146,10 @@ func (this Report) Summary() string {
 		fmt.Fprintf(&builder, "FAIL: %s\n", strings.Join(this.Failures, "; "))
 	} else {
 		builder.WriteString("PASS\n")
+	}
+
+	for _, warning := range this.Warnings {
+		fmt.Fprintf(&builder, "warning: %s\n", warning)
 	}
 
 	for _, note := range this.Notes {

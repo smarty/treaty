@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -34,9 +35,10 @@ type glob struct {
 //     lowest, since a leaf can always sit there. Every other module sits one
 //     layer further in than the deepest module importing it. So the
 //     proposal has no layer violations by construction.
-//   - For slices and modular, the slices or contexts are the children of the
-//     directory whose children depend on each other least. For slices, a
-//     child that other children use becomes shared.
+//   - For vertical and modular, the boundaries are the children of the
+//     directory whose children depend on each other least, each named after
+//     its directory. For vertical, a child that other children use becomes
+//     shared.
 //   - A library module with no imports either way has no shape to place it
 //     by. It is left unclassified and listed for a person to place.
 //   - Directory names are hints. A hinted layer replaces the shape's answer
@@ -126,15 +128,9 @@ func architectureFrom(style, root string, proposal map[string]string) rules.Arch
 			{Name: graph.LayerAdapter, Side: graph.SideDriving, Globs: groups[graph.SideDriving]},
 			{Name: graph.LayerAdapter, Side: graph.SideDriven, Globs: groups[graph.SideDriven]},
 		}
-	case rules.StyleSlices, rules.StyleModular:
+	case rules.StyleVertical, rules.StyleModular:
 		result.Shared = groups[graph.LayerShared]
-		if root != "" {
-			result.Slices = []string{strings.TrimPrefix(root+"/*", "./")}
-		}
-
-		if style == rules.StyleModular {
-			result.Public = []string{"."}
-		}
+		result.Boundaries = proposedBoundaries(root, proposal)
 	default:
 		names := outsideIn(style)
 		for i := len(names) - 1; i >= 0; i-- {
@@ -272,7 +268,7 @@ func layerDraft(style string, proposal map[string]string) string {
 	builder.WriteString("# deepest module that imports them. Directory names only break ties.\n")
 	writeUnplaced(&builder, proposal, "with no imports either way to place them by")
 	if style == rules.StyleHexagonal {
-		builder.WriteString("architecture: hexagonal\n")
+		fmt.Fprintf(&builder, "version: %d\narchitecture: hexagonal\n", ConfigVersion)
 		builder.WriteString("layers:\n")
 		for _, group := range []string{graph.LayerComposition, graph.LayerDomain, graph.LayerApplication} {
 			fmt.Fprintf(&builder, "  %s: %s\n", group, yamlList(groups[group]))
@@ -281,11 +277,11 @@ func layerDraft(style string, proposal map[string]string) string {
 		builder.WriteString("  adapter:\n")
 		fmt.Fprintf(&builder, "    driving: %s\n", yamlList(groups[graph.SideDriving]))
 		fmt.Fprintf(&builder, "    driven: %s\n", yamlList(groups[graph.SideDriven]))
-		builder.WriteString("rules:\n  fail_on: [breaking, layer_violation]\n  warn_on: [unclassified]\n")
+		builder.WriteString(rulesDraft(rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingUnclassified))
 		return builder.String()
 	}
 
-	fmt.Fprintf(&builder, "architecture: %s\n", style)
+	fmt.Fprintf(&builder, "version: %d\narchitecture: %s\n", ConfigVersion, style)
 	fmt.Fprintf(&builder, "composition: %s\n", yamlList(groups[graph.LayerComposition]))
 	if style == rules.StyleClean {
 		builder.WriteString("layers: # outermost first; each may use itself and every ring inside it\n")
@@ -297,7 +293,7 @@ func layerDraft(style string, proposal map[string]string) string {
 		fmt.Fprintf(&builder, "  %s: %s\n", name, yamlList(groups[name]))
 	}
 
-	builder.WriteString("rules:\n  fail_on: [breaking, layer_violation]\n  warn_on: [unclassified]\n")
+	builder.WriteString(rulesDraft(rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingUnclassified))
 	return builder.String()
 }
 
@@ -325,7 +321,7 @@ func propose(g *graph.Graph, style string) (architecture rules.Architecture, tex
 	switch style {
 	case rules.StyleNone:
 		return rules.Architecture{Style: rules.StyleNone}, noneDraft()
-	case rules.StyleSlices, rules.StyleModular:
+	case rules.StyleVertical, rules.StyleModular:
 		root, proposal := proposeSections(g, style)
 		return architectureFrom(style, root, proposal), sectionDraft(style, root, proposal)
 	default:
@@ -442,18 +438,18 @@ func proposeLayers(g *graph.Graph, style string) map[string]string {
 	return result
 }
 
-// proposeSections finds the directory whose children make the best slices
-// or contexts, and places every module around them.
+// proposeSections finds the directory whose children make the best
+// boundaries, and places every module around them.
 //
 // Notes:
 //   - A candidate is any directory with two or more children holding
 //     modules that are not programs. Its score is the number of children
-//     that can stand alone: for slices, a child that another child uses
-//     becomes shared instead; for contexts, a child whose internal packages
+//     that can stand alone: for vertical, a child that another child uses
+//     becomes shared instead; for modular, a child whose internal packages
 //     another child uses counts against it. The highest score wins, then a
 //     name such as features or modules, then the shallower directory.
-//   - Outside the chosen directory, programs and modules that use a slice
-//     or context are composition, and modules only used by them are
+//   - Outside the chosen directory, programs and modules that use a
+//     boundary are composition, and modules only used by them are
 //     shared.
 //
 // Returns:
@@ -645,53 +641,103 @@ func noneDraft() string {
 	var builder strings.Builder
 	builder.WriteString("# Written by treaty init. No architecture is declared, so every dependency is\n")
 	builder.WriteString("# allowed; contracts and their changes are still checked. To declare one, run\n")
-	builder.WriteString("# treaty init --architecture <hexagonal, clean, layered, slices or modular>.\n")
-	builder.WriteString("architecture: none\n")
-	builder.WriteString("rules:\n  fail_on: [breaking]\n")
+	builder.WriteString("# treaty init --architecture <hexagonal, clean, layered, vertical or modular>.\n")
+	fmt.Fprintf(&builder, "version: %d\narchitecture: none\n", ConfigVersion)
+	builder.WriteString(rulesDraft(rules.FindingBreaking))
 	return builder.String()
 }
 
-// sectionDraft writes the proposed config for slices or modular.
+// sectionDraft writes the proposed config for vertical or modular.
 func sectionDraft(style, root string, proposal map[string]string) string {
 	groups := map[string][]string{}
 	for _, glob := range compressGlobs(proposal) {
 		groups[glob.group] = append(groups[glob.group], glob.pattern)
 	}
 
-	unit, key := "slice", "slices"
-	if style == rules.StyleModular {
-		unit, key = "context", "contexts"
-	}
-
 	var builder strings.Builder
 	builder.WriteString("# Proposed by treaty init from the import graph. Edit before relying on it.\n")
-	fmt.Fprintf(&builder, "# Each child of the directory whose children depend on each other least is a %s.\n", unit)
-	if style == rules.StyleSlices {
-		builder.WriteString("# Children that other slices use are shared. Run treaty check to see what is left.\n")
+	builder.WriteString("# Each child of the directory whose children depend on each other least is a\n# boundary.")
+	if style == rules.StyleVertical {
+		builder.WriteString(" Children that other boundaries use are shared. Run treaty check to\n# see what is left.\n")
 	} else {
-		builder.WriteString("# Other contexts may use only a context's public packages. Run treaty check to\n# see which internals are used across contexts.\n")
+		builder.WriteString(" Other boundaries may use only a boundary's public packages. Run\n# treaty check to see which internals are used across boundaries.\n")
 	}
 
-	writeUnplaced(&builder, proposal, "neither only using nor only used by the "+key)
-	fmt.Fprintf(&builder, "architecture: %s\n", style)
+	writeUnplaced(&builder, proposal, "neither only using nor only used by the boundaries")
+	fmt.Fprintf(&builder, "version: %d\narchitecture: %s\n", ConfigVersion, style)
 	fmt.Fprintf(&builder, "composition: %s\n", yamlList(groups[graph.LayerComposition]))
 	fmt.Fprintf(&builder, "shared: %s\n", yamlList(groups[graph.LayerShared]))
-	if root == "" {
-		fmt.Fprintf(&builder, "# No directory has two independent children; list the %s by hand.\n", key)
-		fmt.Fprintf(&builder, "%s: []\n", key)
+	boundaries := proposedBoundaries(root, proposal)
+	if len(boundaries) == 0 {
+		builder.WriteString("# No directory has two independent children; name the boundaries by hand,\n# such as orders: [\"web/orders/**\", \"store/orders/**\"].\n")
+		builder.WriteString("boundaries: {}\n")
 	} else {
-		fmt.Fprintf(&builder, "%s: %s # each match is one %s\n", key, yamlList([]string{strings.TrimPrefix(root+"/*", "./")}), unit)
+		builder.WriteString("boundaries: # each name gathers the modules its globs match\n")
+		for _, boundary := range boundaries {
+			fmt.Fprintf(&builder, "  %s: %s\n", yamlKey(boundary.Name), yamlList(boundary.Globs))
+		}
 	}
 
-	if style == rules.StyleSlices {
-		builder.WriteString("# Optional layers inside every slice, top to bottom, with globs relative to the\n# slice root; each may use itself and the layers below it:\n")
-		builder.WriteString("# layers:\n#   api: [\".\"]\n#   app: [\"app/**\"]\n#   store: [\"store/**\"]\n")
+	if style == rules.StyleVertical {
+		builder.WriteString("# Optional layers inside every boundary, top to bottom; each may use itself and\n# the layers below it:\n")
+		builder.WriteString("# layers:\n#   api: [\"**/api/**\"]\n#   store: [\"**/store/**\"]\n")
+		builder.WriteString(rulesDraft(rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingUnclassified, rules.FindingAmbiguous))
 	} else {
-		builder.WriteString("public: [\".\"] # packages inside each context, relative to its root, that other contexts may use\n")
+		builder.WriteString("# By default other boundaries may use the top package of each boundary glob;\n# list globs to choose the public packages instead:\n# public: [\"**/api/**\"]\n")
+		builder.WriteString(rulesDraft(rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingCycle, rules.FindingUnclassified, rules.FindingAmbiguous))
 	}
 
-	builder.WriteString("rules:\n  fail_on: [breaking, layer_violation, cycle]\n  warn_on: [unclassified]\n")
 	return builder.String()
+}
+
+// proposedBoundaries makes a boundary of each child of root that holds a
+// module the proposal places in a section, named after the child.
+func proposedBoundaries(root string, proposal map[string]string) (result []rules.Boundary) {
+	seen := map[string]bool{}
+	for modulePath, group := range proposal {
+		if child, ok := childOf(root, modulePath); ok && group == groupSection {
+			seen[child] = true
+		}
+	}
+
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+
+	sort.Strings(names)
+	for _, name := range names {
+		result = append(result, rules.Boundary{Name: name, Globs: []string{strings.TrimPrefix(path.Join(root, name)+"/**", "./")}})
+	}
+
+	return result
+}
+
+// rulesDraft writes the rules section that fails on the given kinds of
+// finding, by their names in treaty.yaml.
+func rulesDraft(kinds ...string) string {
+	var names []string
+	for _, rule := range RuleNames {
+		if slices.Contains(kinds, rule.Kind) {
+			names = append(names, rule.Name)
+		}
+	}
+
+	return "rules:\n  fail_on: [" + strings.Join(names, ", ") + "]\n"
+}
+
+// plainKey matches a map key YAML reads back unquoted as the same string,
+// unless it is a word YAML treats as a boolean or null.
+var plainKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
+
+// yamlKey quotes a map key that YAML would not read back as the same
+// string.
+func yamlKey(key string) string {
+	if plainKey.MatchString(key) && !slices.Contains([]string{"true", "false", "yes", "no", "on", "off", "null"}, strings.ToLower(key)) {
+		return key
+	}
+
+	return fmt.Sprintf("%q", key)
 }
 
 func writeUnplaced(builder *strings.Builder, proposal map[string]string, reason string) {

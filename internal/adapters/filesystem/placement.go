@@ -75,14 +75,14 @@ func (this *Config) Place(modulePath string, placement rules.Placement) (path st
 		return "", err
 	}
 
-	if architecture.Resolve(modulePath) != placement {
+	if !architecture.Resolve(modulePath).Same(placement) {
 		appendScalar(targetList(root, architecture.Style, placement), modulePath)
 		if text, architecture, err = encodeConfig(&document); err != nil {
 			return "", err
 		}
 	}
 
-	if got := architecture.Resolve(modulePath); got != placement {
+	if got := architecture.Resolve(modulePath); !got.Same(placement) {
 		return "", fmt.Errorf("%w: %s would be placed in %s, not %s", rules.ErrArchitecture, modulePath, describe(got), describe(placement))
 	}
 
@@ -160,8 +160,8 @@ func encodeConfig(document *yaml.Node) (text []byte, architecture rules.Architec
 
 // parseArchitecture reads the architecture a treaty.yaml declares.
 func parseArchitecture(data []byte) (rules.Architecture, error) {
-	var file configFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	file, _, err := decodeConfig(data)
+	if err != nil {
 		return rules.Architecture{}, fmt.Errorf("%s: %w", ConfigFile, err)
 	}
 

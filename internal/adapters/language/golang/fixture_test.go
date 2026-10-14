@@ -119,7 +119,7 @@ func TestSourceOutlinesLongFiles(t *testing.T) {
 func TestUnclassifiedOnlyWarns(t *testing.T) {
 	root := t.TempDir()
 	copyTree(t, "testdata/injection", root)
-	if err := os.WriteFile(filepath.Join(root, "treaty.yaml"), []byte("layers:\n  domain: [\"internal/**\"]\n  application: [\"injection/**\"]\n  adapter:\n    driven: [\"adapters/**\"]\n  composition: [\"cmd/**\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "treaty.yaml"), []byte("architecture: hexagonal\nlayers:\n  domain: [\"internal/**\"]\n  application: [\"injection/**\"]\n  adapter:\n    driven: [\"adapters/**\"]\n  composition: [\"cmd/**\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -502,5 +502,72 @@ func TestExistingViolationsDoNotFail(t *testing.T) {
 
 	if !slices.Equal(titles, []string{"go:store → go:core breaks a layer rule", "go:store → go:web breaks a layer rule (existing)"}) {
 		t.Fatalf("violation findings: %v", titles)
+	}
+}
+
+func TestUnplacedModulesFailOrWarn(t *testing.T) {
+	root := t.TempDir()
+	write := func(files map[string]string) {
+		for name, text := range files {
+			file := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	git := func(args ...string) {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+
+	// docs matches no glob in the base already. legacy/orders is claimed
+	// by orders and legacy equally.
+	config := "version: 1\narchitecture: vertical\nboundaries:\n  orders: [\"**/orders/**\"]\n  legacy: [\"legacy/**\"]\nrules:\n  fail_on: [unclassified]\n  warn_on: [ambiguous_boundaries]\n"
+	write(map[string]string{
+		"go.mod":                  "module example.com/m\n",
+		"treaty.yaml":             config,
+		"web/orders/orders.go":    "package orders\n\nfunc Page() {}\n",
+		"docs/docs.go":            "package docs\n\nfunc Read() {}\n",
+		"legacy/orders/legacy.go": "package orders\n\nfunc Old() {}\n",
+	})
+	git("init", "-q")
+	git("add", ".")
+	git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "before")
+	service := app.NewService(root, filesystem.NewConfig(root), NewExtractor(), []app.Dialect{NewDialect()},
+		gitvcs.New(root), filesystem.NewWorkspace(t.TempDir()), &viewRecorder{}, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+
+	report, err := service.Check("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Equal(report.Failures, []string{"1 unclassified module(s)"}) || !slices.Equal(report.Warnings, []string{"1 module(s) claimed equally by two or more boundaries"}) {
+		t.Fatalf("without a base: failures %v, warnings %v", report.Failures, report.Warnings)
+	}
+
+	if !slices.ContainsFunc(report.Findings, func(finding rules.Finding) bool {
+		return finding.Kind == rules.FindingAmbiguous && finding.Title == "go:legacy/orders is claimed by boundaries orders and legacy"
+	}) {
+		t.Fatalf("findings: %+v", report.Findings)
+	}
+
+	// Against the base, docs was already unclassified, but tools is new.
+	write(map[string]string{"tools/tools.go": "package tools\n\nfunc Run() {}\n"})
+	if report, err = service.Check("HEAD"); err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Equal(report.Failures, []string{"1 unclassified module(s)"}) || len(report.Warnings) != 0 {
+		t.Fatalf("against the base: failures %v, warnings %v", report.Failures, report.Warnings)
+	}
+
+	if summary := report.Summary(); !strings.Contains(summary, "FAIL: 1 unclassified module(s)") {
+		t.Fatalf("summary:\n%s", summary)
 	}
 }

@@ -3,7 +3,7 @@ package rules
 import (
 	"errors"
 	"fmt"
-	"path"
+	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -17,7 +17,7 @@ const (
 	StyleLayered   = "layered"
 	StyleModular   = "modular"
 	StyleNone      = "none"
-	StyleSlices    = "slices"
+	StyleVertical  = "vertical"
 )
 
 var (
@@ -31,7 +31,7 @@ var (
 	HexagonalLayers = []string{graph.LayerDomain, graph.LayerApplication, graph.LayerAdapter}
 
 	// Styles lists every supported architecture, the default first.
-	Styles = []string{StyleNone, StyleClean, StyleHexagonal, StyleLayered, StyleModular, StyleSlices}
+	Styles = []string{StyleNone, StyleClean, StyleHexagonal, StyleLayered, StyleModular, StyleVertical}
 )
 
 // Architecture is the dependency rules of one codebase: a style, and the
@@ -46,18 +46,27 @@ var (
 //   - Layers run innermost, or lowest, first. A layer may depend on itself
 //     and on every layer inside or below it, never outward or upward.
 //     Hexagonal adds one rule: an adapter may not depend on another adapter.
-//   - Slices and contexts are directory roots, one per match of a glob in
-//     Slices, such as internal/features/*. For the slices style, Layers are
-//     optional and apply inside every slice, with globs relative to its root.
-//   - Shared code may be used by every slice or context, and may itself use
-//     only shared code.
+//   - Boundaries are named groups of modules, for the vertical and modular
+//     styles. For the vertical style, Layers are optional and apply inside
+//     every boundary. Every glob, in boundaries, layers and public alike, is
+//     relative to the repository root.
+//   - Shared code may be used by every boundary, and may itself use only
+//     shared code.
 type Architecture struct {
 	Style       string
 	Composition []string
 	Layers      []Layer
 	Shared      []string
-	Slices      []string
+	Boundaries  []Boundary
 	Public      []string
+}
+
+// Boundary is one named group of modules and the globs that gather them.
+// Its globs may reach across directories, such as web/orders/** and
+// store/orders/**.
+type Boundary struct {
+	Name  string
+	Globs []string
 }
 
 // Layer is one ring or band: its name, the globs of its modules and, for a
@@ -70,10 +79,22 @@ type Layer struct {
 
 // Placement is where the architecture puts one module.
 type Placement struct {
-	Layer  string
-	Side   string
-	Slice  string
-	Public bool
+	Layer     string
+	Side      string
+	Boundary  string
+	Public    bool
+	Ambiguous []string
+}
+
+// Same reports whether two placements put a module in the same place.
+//
+// Parameters:
+//   - other: the placement to compare with.
+//
+// Returns:
+//   - result: true when layer, side, boundary, public and ambiguity match.
+func (this Placement) Same(other Placement) bool {
+	return this.Layer == other.Layer && this.Side == other.Side && this.Boundary == other.Boundary && this.Public == other.Public && slices.Equal(this.Ambiguous, other.Ambiguous)
 }
 
 // Violation is a module edge that breaks a rule of the architecture. It has
@@ -137,7 +158,7 @@ func (this Violation) First() (file string, line int, detail string) {
 func (this Architecture) Assign(g *graph.Graph) {
 	for _, module := range g.Modules {
 		placement := this.Resolve(module.Path)
-		module.Layer, module.Side, module.Slice, module.Public = placement.Layer, placement.Side, placement.Slice, placement.Public
+		module.Layer, module.Side, module.Boundary, module.Public, module.Ambiguous = placement.Layer, placement.Side, placement.Boundary, placement.Public, placement.Ambiguous
 	}
 }
 
@@ -165,8 +186,8 @@ func (this Architecture) Check(from, to Placement) (allowed bool, rule string) {
 	}
 
 	switch this.Style {
-	case StyleSlices:
-		return this.checkSlices(from, to)
+	case StyleVertical:
+		return this.checkVertical(from, to)
 	case StyleModular:
 		return this.checkModular(from, to)
 	case StyleHexagonal:
@@ -200,17 +221,23 @@ func (this Architecture) Guidance(placement Placement) string {
 
 		return "Composition: wires everything together. It may use every module; nothing may use it."
 	case graph.LayerUnclassified:
-		return "Unclassified: add a glob to treaty.yaml so its dependencies are checked."
-	case graph.LayerShared:
-		return "Shared: every slice or context may use it. It may use only shared code."
-	case graph.LayerContext:
-		if placement.Public {
-			return fmt.Sprintf("Public API of the %s context: other contexts may use it. Keep it small and stable.", placement.Slice)
+		if len(placement.Ambiguous) > 0 {
+			return fmt.Sprintf("Ambiguous: boundaries %s match it equally well, so it is in none of them. Name it exactly in one of them in treaty.yaml.", strings.Join(placement.Ambiguous, " and "))
 		}
 
-		return fmt.Sprintf("Internal to the %s context: only %s may use it. It may use the public packages of other contexts and shared code.", placement.Slice, placement.Slice)
-	case graph.LayerSlice:
-		return fmt.Sprintf("Slice %s: may use itself and shared code, never another slice.", placement.Slice)
+		return "Unclassified: add a glob to treaty.yaml so its dependencies are checked."
+	case graph.LayerShared:
+		return "Shared: every boundary may use it. It may use only shared code."
+	case graph.LayerBoundary:
+		if this.Style == StyleModular && placement.Public {
+			return fmt.Sprintf("Public API of boundary %s: other boundaries may use it. Keep it small and stable.", placement.Boundary)
+		}
+
+		if this.Style == StyleModular {
+			return fmt.Sprintf("Internal to boundary %s: only %s may use it. It may use the public packages of other boundaries and shared code.", placement.Boundary, placement.Boundary)
+		}
+
+		return fmt.Sprintf("Boundary %s: may use itself and shared code, never another boundary.", placement.Boundary)
 	}
 
 	if this.Style == StyleHexagonal {
@@ -225,8 +252,8 @@ func (this Architecture) Guidance(placement Placement) string {
 	}
 
 	uses := strings.Join(this.MayUse(placement), ", ")
-	if this.Style == StyleSlices {
-		return fmt.Sprintf("%s layer of slice %s: may use %s, never another slice.", placement.Layer, placement.Slice, uses)
+	if this.Style == StyleVertical {
+		return fmt.Sprintf("%s layer of boundary %s: may use %s, never another boundary.", placement.Layer, placement.Boundary, uses)
 	}
 
 	return fmt.Sprintf("%s: may use %s.", placement.Layer, uses)
@@ -254,22 +281,22 @@ func (this Architecture) LayerNames() []string {
 //   - placement: the module's placement.
 //
 // Returns:
-//   - result: layer names, or descriptions of slices and contexts.
+//   - result: layer names, or descriptions of boundaries.
 func (this Architecture) MayUse(placement Placement) []string {
 	names := this.LayerNames()
-	sliced := this.Style == StyleSlices || this.Style == StyleModular
+	sliced := this.bounded()
 	switch placement.Layer {
 	case graph.LayerNone:
 		return []string{"every module"}
 	case graph.LayerComposition:
 		if sliced {
-			return []string{"every " + this.unit(), graph.LayerShared, graph.LayerComposition}
+			return []string{"every boundary", graph.LayerShared, graph.LayerComposition}
 		}
 
 		return append(names, graph.LayerComposition)
 	case graph.LayerUnclassified:
 		if sliced {
-			return []string{"every " + this.unit(), graph.LayerShared}
+			return []string{"every boundary", graph.LayerShared}
 		}
 
 		return names
@@ -279,13 +306,13 @@ func (this Architecture) MayUse(placement Placement) []string {
 
 	switch this.Style {
 	case StyleModular:
-		return []string{placement.Slice, "public packages of other contexts", graph.LayerShared}
-	case StyleSlices:
-		if placement.Layer == graph.LayerSlice {
-			return []string{placement.Slice, graph.LayerShared}
+		return []string{placement.Boundary, "public packages of other boundaries", graph.LayerShared}
+	case StyleVertical:
+		if placement.Layer == graph.LayerBoundary {
+			return []string{placement.Boundary, graph.LayerShared}
 		}
 
-		return []string{fmt.Sprintf("%s (%s)", placement.Slice, strings.Join(this.within(placement.Layer), ", ")), graph.LayerShared}
+		return []string{fmt.Sprintf("%s (%s)", placement.Boundary, strings.Join(this.within(placement.Layer), ", ")), graph.LayerShared}
 	case StyleHexagonal:
 		if placement.Layer == graph.LayerAdapter {
 			return []string{graph.LayerDomain, graph.LayerApplication}
@@ -301,6 +328,14 @@ func (this Architecture) MayUse(placement Placement) []string {
 //   - For the layered, hexagonal and clean styles, a glob that is exactly
 //     the module's path wins over every wildcard; otherwise composition
 //     comes first, then the layers in order.
+//   - For the vertical and modular styles, composition comes first, then
+//     shared, then the boundaries. Of the boundaries that match, the one
+//     whose glob is most specific wins: a glob that is exactly the path, or
+//     else the one with the most literal segments. Boundaries that tie leave
+//     the module unclassified, with the tied names in Ambiguous.
+//   - For the modular style, a module is public when it matches a public
+//     glob or, with none given, when it is at the top of its boundary: it
+//     matches one of the boundary's globs without the trailing /**.
 //
 // Parameters:
 //   - modulePath: the module path relative to the repository root.
@@ -312,7 +347,7 @@ func (this Architecture) Resolve(modulePath string) (result Placement) {
 		return Placement{Layer: graph.LayerNone}
 	}
 
-	if this.Style != StyleSlices && this.Style != StyleModular {
+	if !this.bounded() {
 		// A module named by its exact path is placed there whatever the
 		// wildcards say, so one module can leave a broad glob.
 		if slices.Contains(this.Composition, modulePath) {
@@ -330,7 +365,7 @@ func (this Architecture) Resolve(modulePath string) (result Placement) {
 		return Placement{Layer: graph.LayerComposition}
 	}
 
-	if this.Style != StyleSlices && this.Style != StyleModular {
+	if !this.bounded() {
 		for _, layer := range this.Layers {
 			if MatchAny(layer.Globs, modulePath) {
 				return Placement{Layer: layer.Name, Side: layer.Side}
@@ -344,31 +379,96 @@ func (this Architecture) Resolve(modulePath string) (result Placement) {
 		return Placement{Layer: graph.LayerShared}
 	}
 
-	root, relative, ok := sliceRoot(this.Slices, modulePath)
-	if !ok {
+	boundary, tied := this.boundaryOf(modulePath)
+	if len(tied) > 0 {
+		return Placement{Layer: graph.LayerUnclassified, Ambiguous: tied}
+	}
+
+	if boundary == nil {
 		return Placement{Layer: graph.LayerUnclassified}
 	}
 
 	if this.Style == StyleModular {
-		public := this.Public
-		if len(public) == 0 {
-			public = []string{"."}
-		}
-
-		return Placement{Layer: graph.LayerContext, Slice: root, Public: MatchAny(public, relative)}
+		return Placement{Layer: graph.LayerBoundary, Boundary: boundary.Name, Public: this.public(*boundary, modulePath)}
 	}
 
 	if len(this.Layers) == 0 {
-		return Placement{Layer: graph.LayerSlice, Slice: root}
+		return Placement{Layer: graph.LayerBoundary, Boundary: boundary.Name}
 	}
 
 	for _, layer := range this.Layers {
-		if MatchAny(layer.Globs, relative) {
-			return Placement{Layer: layer.Name, Slice: root}
+		if MatchAny(layer.Globs, modulePath) {
+			return Placement{Layer: layer.Name, Boundary: boundary.Name}
 		}
 	}
 
-	return Placement{Layer: graph.LayerUnclassified, Slice: root}
+	return Placement{Layer: graph.LayerUnclassified, Boundary: boundary.Name}
+}
+
+// boundaryOf finds the boundary whose glob matches a module path most
+// specifically, or the names of the boundaries that tie for it.
+func (this Architecture) boundaryOf(modulePath string) (result *Boundary, tied []string) {
+	best := -1
+	for i, boundary := range this.Boundaries {
+		score := -1
+		for _, glob := range boundary.Globs {
+			if Match(glob, modulePath) {
+				score = max(score, specificity(glob, modulePath))
+			}
+		}
+
+		switch {
+		case score < 0 || score < best:
+		case score > best:
+			result, best, tied = &this.Boundaries[i], score, nil
+		default:
+			if tied == nil {
+				tied = []string{result.Name}
+			}
+
+			tied = append(tied, boundary.Name)
+		}
+	}
+
+	if tied != nil {
+		return nil, tied
+	}
+
+	return result, nil
+}
+
+// public reports whether a module is one other boundaries may use.
+func (this Architecture) public(boundary Boundary, modulePath string) bool {
+	if len(this.Public) > 0 {
+		return MatchAny(this.Public, modulePath)
+	}
+
+	for _, glob := range boundary.Globs {
+		top, _ := strings.CutSuffix(glob, "/**")
+		if Match(top, modulePath) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// specificity scores how closely a glob that matches a path names it: one
+// that is exactly the path beats every wildcard, and otherwise each literal
+// segment counts one.
+func specificity(glob, modulePath string) int {
+	if glob == modulePath {
+		return math.MaxInt
+	}
+
+	result := 0
+	for _, segment := range strings.Split(glob, "/") {
+		if !strings.ContainsAny(segment, "*?[") {
+			result++
+		}
+	}
+
+	return result
 }
 
 // Summary states the architecture's rules in one paragraph, for an agent.
@@ -381,15 +481,15 @@ func (this Architecture) Summary() string {
 		return "Rules: none. No architecture is declared, so every dependency is allowed; contracts and their changes are still tracked."
 	case StyleHexagonal:
 		return "Rules: domain may use domain; application and adapters may use domain and application; composition may use everything; nothing may use composition; adapters may not use each other."
-	case StyleSlices:
-		result := "Rules (vertical slices): a slice may use itself and shared code, never another slice; shared code may use only shared code; composition may use everything; nothing may use composition."
+	case StyleVertical:
+		result := "Rules (vertical): a boundary may use itself and shared code, never another boundary; shared code may use only shared code; composition may use everything; nothing may use composition."
 		if len(this.Layers) > 0 {
-			result += fmt.Sprintf(" Inside a slice, layers run top to bottom as %s, and each may use itself and the layers below it.", strings.Join(this.topDown(), ", "))
+			result += fmt.Sprintf(" Inside a boundary, layers run top to bottom as %s, and each may use itself and the layers below it.", strings.Join(this.topDown(), ", "))
 		}
 
 		return result
 	case StyleModular:
-		return "Rules (modular monolith): a context may use its own packages, the public packages of other contexts and shared code; contexts may not depend on each other in a cycle; shared code may use only shared code; composition may use everything; nothing may use composition."
+		return "Rules (modular monolith): a boundary may use its own packages, the public packages of other boundaries and shared code; boundaries may not depend on each other in a cycle; shared code may use only shared code; composition may use everything; nothing may use composition."
 	}
 
 	if this.Style == StyleClean {
@@ -406,29 +506,28 @@ func (this Architecture) Summary() string {
 //
 // Errors:
 //   - ErrArchitecture: an unknown style, a layer name the style does not
-//     allow, a missing slice or context glob, or a setting the style does
-//     not use.
+//     allow, a boundary without a name or globs, or a setting the style
+//     does not use.
 func (this Architecture) Validate() error {
 	if !slices.Contains(Styles, this.Style) {
 		return fmt.Errorf("%w: unknown architecture %q; use one of %s", ErrArchitecture, this.Style, strings.Join(Styles, ", "))
 	}
 
-	if this.Style == StyleNone && (len(this.Composition) > 0 || len(this.Layers) > 0 || len(this.Shared) > 0 || len(this.Slices) > 0 || len(this.Public) > 0) {
-		return fmt.Errorf("%w: the none architecture has no composition, layers, shared code, slices or contexts; choose another architecture to use them", ErrArchitecture)
+	if this.Style == StyleNone && (len(this.Composition) > 0 || len(this.Layers) > 0 || len(this.Shared) > 0 || len(this.Boundaries) > 0 || len(this.Public) > 0) {
+		return fmt.Errorf("%w: the none architecture has no composition, layers, shared code or boundaries; choose another architecture to use them", ErrArchitecture)
 	}
 
-	sliced := this.Style == StyleSlices || this.Style == StyleModular
-	if !sliced && (len(this.Shared) > 0 || len(this.Slices) > 0 || len(this.Public) > 0) {
-		return fmt.Errorf("%w: shared, slices, contexts and public apply only to the slices and modular architectures", ErrArchitecture)
+	if !this.bounded() && (len(this.Shared) > 0 || len(this.Boundaries) > 0 || len(this.Public) > 0) {
+		return fmt.Errorf("%w: shared, boundaries and public apply only to the vertical and modular architectures", ErrArchitecture)
 	}
 
-	if this.Style == StyleSlices && len(this.Public) > 0 {
+	if this.Style == StyleVertical && len(this.Public) > 0 {
 		return fmt.Errorf("%w: public applies only to the modular architecture", ErrArchitecture)
 	}
 
 	seen := map[string]bool{}
 	for _, layer := range this.Layers {
-		if layer.Name == graph.LayerComposition || layer.Name == graph.LayerShared || layer.Name == graph.LayerUnclassified || layer.Name == graph.LayerContext || layer.Name == graph.LayerSlice || layer.Name == graph.LayerNone {
+		if layer.Name == graph.LayerComposition || layer.Name == graph.LayerShared || layer.Name == graph.LayerUnclassified || layer.Name == graph.LayerBoundary || layer.Name == graph.LayerNone {
 			return fmt.Errorf("%w: %q is a reserved name and cannot be a layer", ErrArchitecture, layer.Name)
 		}
 
@@ -458,18 +557,26 @@ func (this Architecture) Validate() error {
 		}
 	case StyleModular:
 		if len(this.Layers) > 0 {
-			return fmt.Errorf("%w: the modular architecture has no layers; list contexts instead", ErrArchitecture)
+			return fmt.Errorf("%w: the modular architecture has no layers; list boundaries instead", ErrArchitecture)
 		}
 	}
 
-	if sliced && len(this.Slices) == 0 {
-		return fmt.Errorf("%w: the %s architecture needs at least one %s glob", ErrArchitecture, this.Style, map[bool]string{true: "contexts", false: "slices"}[this.Style == StyleModular])
+	if this.bounded() && len(this.Boundaries) == 0 {
+		return fmt.Errorf("%w: the %s architecture needs at least one boundary", ErrArchitecture, this.Style)
 	}
 
-	for _, glob := range this.Slices {
-		if slices.Contains(strings.Split(glob, "/"), "**") {
-			return fmt.Errorf("%w: %s glob %q may not use **: each match must be one directory", ErrArchitecture, this.unit(), glob)
+	names := map[string]bool{}
+	for _, boundary := range this.Boundaries {
+		switch {
+		case boundary.Name == "":
+			return fmt.Errorf("%w: every boundary needs a name", ErrArchitecture)
+		case names[boundary.Name]:
+			return fmt.Errorf("%w: boundary %q is listed twice", ErrArchitecture, boundary.Name)
+		case len(boundary.Globs) == 0:
+			return fmt.Errorf("%w: boundary %q needs at least one glob", ErrArchitecture, boundary.Name)
 		}
+
+		names[boundary.Name] = true
 	}
 
 	return nil
@@ -477,7 +584,7 @@ func (this Architecture) Validate() error {
 
 // Violations finds every module edge that breaks a rule of the
 // architecture. For the modular style, it also finds every edge between
-// contexts that closes a cycle, unless the edge already breaks a rule.
+// boundaries that closes a cycle, unless the edge already breaks a rule.
 //
 // Parameters:
 //   - g: a graph whose modules have been placed.
@@ -504,7 +611,7 @@ func (this Architecture) Violations(g *graph.Graph) []Violation {
 			reported[[2]string{violation.From, violation.To}] = true
 		}
 
-		for _, cycle := range contextCycles(g) {
+		for _, cycle := range boundaryCycles(g) {
 			if !reported[[2]string{cycle.From, cycle.To}] {
 				result = append(result, cycle)
 			}
@@ -529,26 +636,26 @@ func (this Architecture) checkModular(from, to Placement) (bool, string) {
 	case to.Layer == graph.LayerShared:
 		return true, ""
 	case from.Layer == graph.LayerShared:
-		return false, fmt.Sprintf("shared may not depend on the %s context: shared code may use only shared code", to.Slice)
-	case from.Slice == to.Slice || to.Public:
+		return false, fmt.Sprintf("shared may not depend on boundary %s: shared code may use only shared code", to.Boundary)
+	case from.Boundary == to.Boundary || to.Public:
 		return true, ""
 	default:
-		return false, fmt.Sprintf("%s may not use the internals of %s: other contexts may use only its public packages", from.Slice, to.Slice)
+		return false, fmt.Sprintf("boundary %s may not use the internals of boundary %s: other boundaries may use only its public packages; make it public, or change boundaries in treaty.yaml", from.Boundary, to.Boundary)
 	}
 }
 
-// checkSlices applies the vertical slices' rules between two placed
-// modules, neither of them composition or unclassified.
-func (this Architecture) checkSlices(from, to Placement) (bool, string) {
+// checkVertical applies the vertical architecture's rules between two
+// placed modules, neither of them composition or unclassified.
+func (this Architecture) checkVertical(from, to Placement) (bool, string) {
 	switch {
 	case to.Layer == graph.LayerShared:
 		return true, ""
 	case from.Layer == graph.LayerShared:
-		return false, fmt.Sprintf("shared may not depend on slice %s: shared code may use only shared code", to.Slice)
-	case from.Slice != to.Slice:
-		return false, fmt.Sprintf("slice %s may not depend on slice %s: slices are independent; move the shared code into shared", from.Slice, to.Slice)
+		return false, fmt.Sprintf("shared may not depend on boundary %s: shared code may use only shared code", to.Boundary)
+	case from.Boundary != to.Boundary:
+		return false, fmt.Sprintf("boundary %s may not depend on boundary %s: boundaries are independent; move the code both use into shared, or change boundaries in treaty.yaml", from.Boundary, to.Boundary)
 	case this.rank(to.Layer) > this.rank(from.Layer):
-		return false, fmt.Sprintf("in slice %s, %s may not depend on %s: a layer may use only itself and the layers below it", from.Slice, from.Layer, to.Layer)
+		return false, fmt.Sprintf("in boundary %s, %s may not depend on %s: a layer may use only itself and the layers below it", from.Boundary, from.Layer, to.Layer)
 	default:
 		return true, ""
 	}
@@ -565,8 +672,8 @@ func (this Architecture) direction() string {
 
 // name describes a placement for rule text.
 func (this Architecture) name(placement Placement) string {
-	if placement.Slice != "" && placement.Layer != graph.LayerShared {
-		return placement.Slice
+	if placement.Boundary != "" && placement.Layer != graph.LayerShared {
+		return "boundary " + placement.Boundary
 	}
 
 	return placement.Layer
@@ -589,13 +696,9 @@ func (this Architecture) topDown() []string {
 	return result
 }
 
-// unit names what the style divides code into.
-func (this Architecture) unit() string {
-	if this.Style == StyleModular {
-		return "context"
-	}
-
-	return "slice"
+// bounded reports whether the style divides code into boundaries.
+func (this Architecture) bounded() bool {
+	return this.Style == StyleVertical || this.Style == StyleModular
 }
 
 // within lists a layer and every layer inside or below it, innermost first.
@@ -604,9 +707,9 @@ func (this Architecture) within(layer string) []string {
 	return names[:min(this.rank(layer)+1, len(names))]
 }
 
-// contextCycles finds every module edge between two contexts that depend on
-// each other, directly or through other contexts.
-func contextCycles(g *graph.Graph) []Violation {
+// boundaryCycles finds every module edge between two boundaries that depend
+// on each other, directly or through other boundaries.
+func boundaryCycles(g *graph.Graph) []Violation {
 	type crossing struct {
 		edge     graph.ModuleEdge
 		from, to *graph.Module
@@ -616,12 +719,12 @@ func contextCycles(g *graph.Graph) []Violation {
 	var crossings []crossing
 	for _, edge := range g.ModuleEdges() {
 		from, to := g.Module(edge.From), g.Module(edge.To)
-		if from.Layer != graph.LayerContext || to.Layer != graph.LayerContext || from.Slice == to.Slice {
+		if from.Layer != graph.LayerBoundary || to.Layer != graph.LayerBoundary || from.Boundary == to.Boundary {
 			continue
 		}
 
-		if !slices.Contains(next[from.Slice], to.Slice) {
-			next[from.Slice] = append(next[from.Slice], to.Slice)
+		if !slices.Contains(next[from.Boundary], to.Boundary) {
+			next[from.Boundary] = append(next[from.Boundary], to.Boundary)
 		}
 
 		crossings = append(crossings, crossing{edge, from, to})
@@ -629,14 +732,14 @@ func contextCycles(g *graph.Graph) []Violation {
 
 	var result []Violation
 	for _, each := range crossings {
-		back := contextPath(next, each.to.Slice, each.from.Slice)
+		back := boundaryPath(next, each.to.Boundary, each.from.Boundary)
 		if back == nil {
 			continue
 		}
 
 		result = append(result, Violation{
 			Kind:       FindingCycle,
-			Rule:       fmt.Sprintf("contexts may not depend on each other in a cycle: %s → %s", each.from.Slice, strings.Join(back, " → ")),
+			Rule:       fmt.Sprintf("boundaries may not depend on each other in a cycle: %s → %s", each.from.Boundary, strings.Join(back, " → ")),
 			From:       each.edge.From,
 			FromLayer:  each.from.Layer,
 			To:         each.edge.To,
@@ -649,9 +752,9 @@ func contextCycles(g *graph.Graph) []Violation {
 	return result
 }
 
-// contextPath finds the shortest path of contexts from start to goal,
+// boundaryPath finds the shortest path of boundaries from start to goal,
 // including both, or nil when goal is unreachable.
-func contextPath(next map[string][]string, start, goal string) []string {
+func boundaryPath(next map[string][]string, start, goal string) []string {
 	previous := map[string]string{start: ""}
 	queue := []string{start}
 	for len(queue) > 0 {
@@ -680,32 +783,5 @@ func contextPath(next map[string][]string, start, goal string) []string {
 }
 
 func placementOf(module *graph.Module) Placement {
-	return Placement{Layer: module.Layer, Side: module.Side, Slice: module.Slice, Public: module.Public}
-}
-
-// sliceRoot finds the slice or context holding a module path: the prefix of
-// the path that matches one of the globs, and the rest of the path inside
-// it, which is "." for the root package itself.
-func sliceRoot(globs []string, modulePath string) (root, relative string, ok bool) {
-	segments := strings.Split(modulePath, "/")
-	for _, glob := range globs {
-		count := len(strings.Split(glob, "/"))
-		if len(segments) < count {
-			continue
-		}
-
-		candidate := strings.Join(segments[:count], "/")
-		if !Match(glob, candidate) {
-			continue
-		}
-
-		relative = path.Join(segments[count:]...)
-		if relative == "" {
-			relative = "."
-		}
-
-		return candidate, relative, true
-	}
-
-	return "", "", false
+	return Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous}
 }

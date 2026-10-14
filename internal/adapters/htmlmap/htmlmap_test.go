@@ -3,7 +3,6 @@ package htmlmap
 import (
 	"fmt"
 	"math"
-	"path"
 	"slices"
 	"strings"
 	"testing"
@@ -200,20 +199,20 @@ func TestRegionLayouts(t *testing.T) {
 			{"cmd/app", graph.LayerComposition, ""}, {"web/admin", "presentation", ""}, {"web/public", "presentation", ""},
 			{"service/orders", "business", ""}, {"service/billing", "business", ""}, {"store/sql", "data", ""}, {"lonely", graph.LayerUnclassified, ""},
 		}},
-		{"slices", app.MapView{Architecture: rules.StyleSlices, Layers: []string{"store", "api"}}, []spec{
+		{"vertical", app.MapView{Architecture: rules.StyleVertical, Layers: []string{"store", "api"}}, []spec{
 			{"cmd/app", graph.LayerComposition, ""}, {"platform/log", graph.LayerShared, ""},
-			{"features/orders", "api", "features/orders"}, {"features/orders/store", "store", "features/orders"},
-			{"features/billing", "api", "features/billing"}, {"features/billing/store", "store", "features/billing"}, {"features/billing/extra", graph.LayerUnclassified, "features/billing"},
+			{"features/orders", "api", "orders"}, {"features/orders/store", "store", "orders"},
+			{"features/billing", "api", "billing"}, {"features/billing/store", "store", "billing"}, {"features/billing/extra", graph.LayerUnclassified, "billing"},
 		}},
 		{"modular", app.MapView{Architecture: rules.StyleModular}, []spec{
 			{"cmd/app", graph.LayerComposition, ""}, {"platform/log", graph.LayerShared, ""},
-			{"internal/orders", graph.LayerContext, "internal/orders"}, {"internal/orders/db", graph.LayerContext, "internal/orders"},
-			{"internal/billing", graph.LayerContext, "internal/billing"}, {"internal/shipping", graph.LayerContext, "internal/shipping"},
+			{"internal/orders", graph.LayerBoundary, "orders"}, {"internal/orders/db", graph.LayerBoundary, "orders"},
+			{"internal/billing", graph.LayerBoundary, "billing"}, {"internal/shipping", graph.LayerBoundary, "shipping"},
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			for _, each := range c.specs {
-				c.view.Modules = append(c.view.Modules, app.MapModule{ID: "go:" + each.path, Path: each.path, Layer: each.layer, Section: each.section})
+				c.view.Modules = append(c.view.Modules, app.MapModule{ID: "go:" + each.path, Path: each.path, Layer: each.layer, Boundary: each.section})
 			}
 
 			layout := ComputeLayout(c.view)
@@ -232,8 +231,8 @@ func TestRegionLayouts(t *testing.T) {
 				}
 
 				want := layerLabel(module.Layer)
-				if module.Section != "" && c.view.Architecture == rules.StyleModular {
-					want = path.Base(module.Section)
+				if module.Boundary != "" && c.view.Architecture == rules.StyleModular {
+					want = module.Boundary
 				}
 
 				inside := false
