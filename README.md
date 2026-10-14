@@ -60,11 +60,28 @@ implementation detail, and it is judged through the contracts that reach it.
 
 ## Install
 
-Treaty requires Go 1.27 or later.
+Each [release](https://github.com/smarty/treaty/releases) has a binary for
+macOS and Linux, on Intel and ARM, with SHA-256 checksums. Put `treaty`
+anywhere on your `PATH`:
+
+```sh
+version=v0.2.0 os=darwin arch=arm64   # or linux, and amd64
+curl -fsSLO "https://github.com/smarty/treaty/releases/download/$version/treaty_${version}_${os}_${arch}.tar.gz"
+tar -xzf "treaty_${version}_${os}_${arch}.tar.gz"
+mv "treaty_${version}_${os}_${arch}/treaty" /usr/local/bin/
+```
+
+The macOS binaries are not notarized. A file downloaded with `curl` runs as
+is; one downloaded in a browser needs `xattr -d com.apple.quarantine treaty`
+first.
+
+Or build it with Go 1.27 or later:
 
 ```sh
 go install github.com/smarty/treaty/cmd/treaty@latest
 ```
+
+`treaty version` prints the version you have.
 
 ## Getting started
 
@@ -306,6 +323,7 @@ a large repository (20,000 files or more, or one slow to walk).
 | `treaty init [--architecture <name>]` | Creates `.treaty/` and proposes a `treaty.yaml` for `none` (default), `hexagonal`, `clean`, `layered`, `vertical` or `modular` |
 | `treaty url` | Prints the live map's address for this directory |
 | `treaty here [--force]` | Registers Treaty in this repository's `.mcp.json` |
+| `treaty version` | Prints this build's version: the release's, or for a build from source the module version Go recorded |
 
 ## AutoPen
 
@@ -325,6 +343,36 @@ the MCP server all work.
 
 The full design, including goals, non-goals, acceptance criteria and open
 questions, is in [Treaty design document.md](Treaty%20design%20document.md).
+
+## Releasing
+
+CI runs `gofmt`, `go vet` and the tests on macOS and Linux for every push to
+`master` and every pull request. The tests include one that parses the live
+map's script with Node, since the page has no build step to catch a syntax
+error.
+
+Before a release, compare the new build with the last one across the
+repositories you have, so a scanner change can't quietly shift what Treaty
+reads:
+
+```sh
+go build -o /tmp/treaty-new ./cmd/treaty
+scripts/compare.sh "$(command -v treaty)" /tmp/treaty-new ~/src/github.com/smarty/*/
+```
+
+It diffs `overview` and `dump` for each repository and lists the ones that
+differ. Then tag and push:
+
+```sh
+git tag -a v0.2.0 -m "Treaty v0.2.0"
+git push origin v0.2.0
+```
+
+The release workflow runs the tests again, builds the archives with
+`scripts/release.sh`, which stamps the version into the binary, and publishes
+them with their checksums as a GitHub release. A tag with a suffix, such as
+`v0.2.0-rc.1`, publishes a pre-release. `scripts/release.sh v0.2.0` builds the
+same archives locally, in `dist/`.
 
 ## License
 

@@ -50,6 +50,7 @@ commands:
   url [--port <n>]                            print the live map's address for this directory
   here [--force]                              register treaty in this repository's .mcp.json,
                                               so Claude Code sessions here start it
+  version                                     print this build's version
 `
 
 var ErrUsage = errors.New("usage")
@@ -68,6 +69,9 @@ type Launcher interface {
 
 	// Restart stops the treaty server, so its sessions start a new one.
 	Restart(port int, stderr io.Writer) error
+
+	// Version names this build of treaty.
+	Version() string
 
 	// Serve keeps this directory's live map open until interrupted.
 	Serve(port int, open bool, stderr io.Writer) error
@@ -352,6 +356,9 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 		return launcher.MCP(*port, stdin, stdout, stderr)
 	case "restart":
 		return launcher.Restart(*port, stderr)
+	case "version":
+		fmt.Fprintln(stdout, launcher.Version())
+		return nil
 	case "daemon":
 		return launcher.Daemon(*port, stderr)
 	default:

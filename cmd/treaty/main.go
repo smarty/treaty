@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"syscall"
 	"time"
@@ -32,9 +33,11 @@ import (
 	"github.com/smarty/treaty/internal/app"
 )
 
-const (
-	version = "0.1.0"
+// stamp is the release version, set when a release is built, by
+// -ldflags "-X main.stamp=v0.2.0". See version.
+var stamp string
 
+const (
 	// patience is how long a session waits for the treaty server to come
 	// back before failing the requests it sent.
 	patience = 15 * time.Second
@@ -85,7 +88,7 @@ func main() {
 // take over.
 func (this launcher) Daemon(port int, stderr io.Writer) error {
 	projects := app.NewProjects(open, app.ProjectGrace)
-	server, err := web.Listen(projects, sessions{}, version, port)
+	server, err := web.Listen(projects, sessions{}, version(), port)
 	if err != nil {
 		return fmt.Errorf("the treaty server cannot listen on port %d: %w", port, err)
 	}
@@ -212,7 +215,7 @@ func (this launcher) await(base string) (session *web.Session, err error) {
 }
 
 func (sessions) Serve(project *app.Project, mapURL string, joined bool, in io.Reader, out io.Writer) error {
-	return mcp.New(project.Live, version, mapURL, joined).Serve(in, out)
+	return mcp.New(project.Live, version(), mapURL, joined).Serve(in, out)
 }
 
 func baseURL(port int) string {
@@ -346,4 +349,23 @@ func treatyHome(name string) string {
 	}
 
 	return filepath.Join(home, ".treaty", name)
+}
+
+// Version names this build of treaty.
+func (this launcher) Version() string { return version() }
+
+// version names this build: the stamp a release build sets, or else the
+// version Go recorded, which is the module version for go install
+// github.com/smarty/treaty/cmd/treaty@v0.2.0 and one made from the commit
+// for a build from a clone, or else "dev".
+func version() string {
+	if stamp != "" {
+		return stamp
+	}
+
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+
+	return "dev"
 }

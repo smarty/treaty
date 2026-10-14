@@ -3,6 +3,9 @@ package htmlmap
 import (
 	"fmt"
 	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -414,5 +417,34 @@ func TestPageInlinesEveryScript(t *testing.T) {
 
 	if strings.Contains(page, "/*STYLE*/") || strings.Contains(page, "/*SCRIPT*/") || !strings.Contains(page, "/*DATA*/null") {
 		t.Error("the page must inline its style and scripts and keep the data marker")
+	}
+}
+
+// The page's script is plain JavaScript with no build step, so a syntax
+// error would surface only in a browser. Node, when installed, catches it.
+func TestPageScriptParses(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+
+	var script strings.Builder
+	for _, name := range scripts {
+		data, err := assets.ReadFile("page/js/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		script.Write(data)
+		script.WriteString("\n")
+	}
+
+	file := filepath.Join(t.TempDir(), "page.js")
+	if err := os.WriteFile(file, []byte(script.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if output, err := exec.Command(node, "--check", file).CombinedOutput(); err != nil {
+		t.Fatalf("the page's script does not parse: %v\n%s", err, output)
 	}
 }

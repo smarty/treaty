@@ -1,0 +1,36 @@
+# Publishes a release when a version tag such as v0.2.0 is pushed: the
+# tests run again, then scripts/release.sh builds macOS and Linux binaries,
+# and the archives and their checksums go up as a GitHub release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Test
+        run: go test ./...
+      - name: Build
+        run: scripts/release.sh "$GITHUB_REF_NAME"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A tag with a suffix, such as v0.2.0-rc.1, is a pre-release.
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
+            --title "Treaty $GITHUB_REF_NAME" --generate-notes --verify-tag $prerelease
