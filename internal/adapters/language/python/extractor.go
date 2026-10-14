@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -27,6 +28,7 @@ type Extractor struct{}
 type binding struct {
 	at   location
 	name string
+	line int
 }
 
 // fileState is one parsed file placed in its module.
@@ -39,6 +41,15 @@ type fileState struct {
 	bindings  map[string]binding
 	stars     []*fileState
 	reachable map[string]bool
+	aliases   *aliases
+}
+
+// aliases holds the symbols made for names a file provides from another
+// module, as a package's __init__.py does, so a consumer depends on the
+// module it imported rather than the one behind it.
+type aliases struct {
+	graph *graph.Graph
+	made  map[string]string
 }
 
 // location is a module or package that an import can name: a .py file, a
@@ -105,6 +116,7 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 	}
 
 	result = graph.New()
+	made := &aliases{graph: result, made: map[string]string{}}
 	var states []*fileState
 	imports := &resolver{byPath: map[string]*fileState{}, dirs: map[string]bool{}}
 	declaredIn := map[string]map[string]map[string]bool{}
@@ -123,6 +135,7 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 			symbols:    map[string]string{},
 			bindings:   map[string]binding{},
 			reachable:  map[string]bool{},
+			aliases:    made,
 		}
 
 		states = append(states, state)
@@ -271,6 +284,8 @@ func (this *Extractor) Source(root, file string) (result []byte, err error) {
 
 // export finds the symbol a file provides under a name: its own
 // definition, a name it imports, or a public name a star import brings in.
+// A name the file provides from another module resolves to an alias in the
+// file's own module, which uses the symbol behind it.
 func (this *fileState) export(name string, seen map[string]bool) string {
 	if this == nil {
 		return ""
@@ -291,10 +306,62 @@ func (this *fileState) export(name string, seen map[string]bool) string {
 			return ""
 		}
 
-		return bound.at.file.export(bound.name, seen)
+		return this.alias(name, bound.at.file.export(bound.name, seen), bound.line)
 	}
 
-	return this.starredFrom(name, seen)
+	return this.alias(name, this.starredFrom(name, seen), 0)
+}
+
+// alias returns target when it is in the file's module, or else a symbol
+// in the file's module that stands for it under the name, made on first
+// use with an edge to target. It takes the target's kind, signature and
+// documentation, so a change behind it shows on the module that offers it
+// too.
+func (this *fileState) alias(name, target string, line int) string {
+	other := this.aliases.graph.Symbol(target)
+	if other == nil || other.Module == this.module {
+		return target
+	}
+
+	key := this.path + "\x00" + name
+	if id, ok := this.aliases.made[key]; ok {
+		return id
+	}
+
+	id := graph.SymbolID(this.module, name)
+	if this.aliases.graph.Symbol(id) != nil {
+		id = graph.SymbolID(this.module, strings.TrimSuffix(path.Base(this.path), ".py")+"/"+name)
+	}
+
+	symbol := this.aliases.graph.AddSymbol(&graph.Symbol{
+		ID: id, Module: this.module, Name: strings.TrimPrefix(id, this.module+":"), Kind: other.Kind,
+		File: this.path, Line: max(line, 1), EndLine: max(line, 1), Contract: !strings.HasPrefix(name, "_"),
+		Signature: renamed(other.Signature, other.Name, name), Fields: other.Fields, Doc: other.Doc, Hash: hash("alias " + other.ID),
+	})
+
+	this.aliases.made[key] = symbol.ID
+	kind := graph.EdgeTypeUse
+	if other.Kind == graph.KindFunction || other.Kind == graph.KindMethod {
+		kind = graph.EdgeCall
+	}
+
+	this.aliases.graph.AddEdge(graph.Edge{From: symbol.ID, To: other.ID, Kind: kind, File: this.path, Line: symbol.Line})
+	return symbol.ID
+}
+
+// renamed puts an alias's name in place of its target's in a signature,
+// as from m import a as b asks, so the signature still defines the alias.
+func renamed(signature, target, name string) string {
+	target = target[strings.LastIndexAny(target, "/.")+1:]
+	if target == name {
+		return signature
+	}
+
+	if found := regexp.MustCompile(`\b` + regexp.QuoteMeta(target) + `\b`).FindStringIndex(signature); found != nil {
+		return signature[:found[0]] + name + signature[found[1]:]
+	}
+
+	return signature
 }
 
 // starred finds the symbol a star import brings in under a name.
@@ -475,7 +542,7 @@ func (this *fileState) resolveImports(g *graph.Graph, imports *resolver) {
 				recorded = true
 			}
 
-			this.bindings[name.as] = binding{at: base, name: name.name}
+			this.bindings[name.as] = binding{at: base, name: name.name, line: spec.line}
 		}
 	}
 }

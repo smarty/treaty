@@ -480,3 +480,83 @@ func newService(t *testing.T, root string) *app.Service {
 	return app.NewService(root, filesystem.NewConfig(root), NewExtractor(), []app.Dialect{NewDialect()},
 		nil, filesystem.NewWorkspace(t.TempDir()), nil, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
 }
+
+func TestPackagesKeepTheImportedModule(t *testing.T) {
+	root := t.TempDir()
+	for name, text := range map[string]string{
+		"treaty.yaml":                "architecture: modular\ncontexts: [\"ctx/*\"]\npublic: [\".\"]\n",
+		"ctx/__init__.py":            "",
+		"ctx/a/__init__.py":          "from .internal.h import helper\nfrom .internal.h import tool as instrument\nfrom .internal.more import *\n",
+		"ctx/a/internal/__init__.py": "",
+		"ctx/a/internal/h.py":        "def helper():\n    return 1\n\ndef tool():\n    return 2\n",
+		"ctx/a/internal/more.py":     "LIMIT = 3\n",
+		"ctx/b/__init__.py":          "",
+		"ctx/b/u.py":                 "from ctx.a import helper, instrument, LIMIT\nimport ctx.a\n\ndef use():\n    return helper() + instrument() + LIMIT + ctx.a.helper()\n",
+		"ctx/c/__init__.py":          "from ctx.a.internal.h import helper as leaked\n",
+		"ctx/d/__init__.py":          "",
+		"ctx/d/u.py":                 "from ctx.c import leaked\n\ndef value():\n    return leaked()\n",
+	} {
+		file := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	service := newService(t, root)
+	report, err := service.Check("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// b imports only a's package, so it depends on a alone. c's package
+	// reaches into a's internals itself, and only c breaks the rules.
+	var violations []string
+	for _, violation := range report.Violations {
+		violations = append(violations, violation.From+" -> "+violation.To)
+	}
+
+	if want := []string{"py:ctx/c -> py:ctx/a/internal"}; !slices.Equal(violations, want) {
+		t.Errorf("violations: got %q, want %q", violations, want)
+	}
+
+	g, err := service.Extract()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for id, to := range map[string]string{
+		"py:ctx/a:helper":     "py:ctx/a/internal:helper",
+		"py:ctx/a:instrument": "py:ctx/a/internal:tool",
+		"py:ctx/a:LIMIT":      "py:ctx/a/internal:LIMIT",
+		"py:ctx/c:leaked":     "py:ctx/a/internal:helper",
+	} {
+		symbol := g.Symbol(id)
+		if symbol == nil || !symbol.Contract || !slices.ContainsFunc(g.Edges, func(edge graph.Edge) bool { return edge.From == id && edge.To == to }) {
+			t.Errorf("%s should be a contract standing for %s: %+v", id, to, symbol)
+		}
+	}
+
+	for _, edge := range g.Edges {
+		if strings.HasPrefix(edge.From, "py:ctx/b:") && !strings.HasPrefix(edge.To, "py:ctx/a:") {
+			t.Errorf("b should use only a's package: %s -> %s", edge.From, edge.To)
+		}
+	}
+
+	dumped, err := service.Dump("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsed, err := service.ParseGraph(dumped)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if differences := graph.Compare(g, parsed); len(differences) > 0 {
+		t.Fatalf("round trip lost %d thing(s):\n%s", len(differences), strings.Join(differences, "\n"))
+	}
+}

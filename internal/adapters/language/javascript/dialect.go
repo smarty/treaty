@@ -86,7 +86,7 @@ func (this *Dialect) Declare(text string, parent *app.Declaration) (result app.D
 }
 
 // IsFile reports whether a header path names a JavaScript or TypeScript
-// file.
+// file, or a Vue or Svelte component.
 //
 // Parameters:
 //   - path: the header path.
@@ -94,7 +94,7 @@ func (this *Dialect) Declare(text string, parent *app.Declaration) (result app.D
 // Returns:
 //   - result: true for source files.
 func (this *Dialect) IsFile(name string) bool {
-	return slices.Contains(sourceExtensions, path.Ext(name))
+	return slices.Contains(sourceExtensions, path.Ext(name)) || component(name)
 }
 
 // Language is the id prefix: js or ts.

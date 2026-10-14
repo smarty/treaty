@@ -141,6 +141,7 @@ func (this *Service) analyzeGraphs(config Config, head, base revision, baseRef s
 		result.baseMetrics = rules.Metrics(base.graph)
 		rules.Proof(base.graph, base.tests, measured, result.baseMetrics)
 		result.changes = rules.Classify(base.graph, head.graph, this.compatible)
+		rules.MarkExisting(result.violations, config.Architecture.Violations(base.graph))
 	}
 
 	result.findings = rules.Rank(head.graph, base.graph, result.changes, result.violations)
@@ -190,7 +191,9 @@ func (this *analysis) failures() []string {
 	var result []string
 	counts := map[string]int{}
 	for _, violation := range this.violations {
-		counts[violation.Kind]++
+		if !violation.Existing {
+			counts[violation.Kind]++
+		}
 	}
 
 	if slices.Contains(this.config.FailOn, rules.FindingLayerViolation) && counts[rules.FindingLayerViolation] > 0 {

@@ -95,8 +95,8 @@ function drawReferences(svg, rel) {
     const a = anchorOf(e.from), b = anchorOf(e.to); if (!a || !b || a.key === b.key) continue;
     // A removed dependency stays apart from a live one between the same ends.
     const key = a.key + "\u0000" + b.key + (e.removed ? "\u0000removed" : "");
-    if (!pairs.has(key)) pairs.set(key, { from: a.key, to: b.key, a, b, references: [], imports: [], count: 0, violation: false, new: false, changed: false, removed: !!e.removed });
-    const pair = pairs.get(key); pair.references.push(...e.references); pair.imports.push(...(e.imports || [])); pair.count += e.count; pair.violation ||= e.violation; pair.new ||= e.new; pair.changed ||= e.changed;
+    if (!pairs.has(key)) pairs.set(key, { from: a.key, to: b.key, a, b, references: [], imports: [], count: 0, violation: false, existing: true, new: false, changed: false, removed: !!e.removed });
+    const pair = pairs.get(key); pair.references.push(...e.references); pair.imports.push(...(e.imports || [])); pair.count += e.count; pair.violation ||= e.violation; if (e.violation) pair.existing &&= !!e.existing; pair.new ||= e.new; pair.changed ||= e.changed;
   }
   const edgeLayer = el("g", {}, svg);
   const maxCount = Math.max(1, ...[...pairs.values()].map(e => e.count));
@@ -115,12 +115,15 @@ function drawReferences(svg, rel) {
       const trim = (p, toward, by) => { const vx = toward[0] - p.x, vy = toward[1] - p.y, d = Math.hypot(vx, vy) || 1; return { x: p.x + vx / d * by, y: p.y + vy / d * by }; };
       const a = trim(from, [cx, cy], from.r + 4), b = trim(to, [cx, cy], to.r + 8);
       const stroke = e.violation ? color("--violation") : e.new ? color("--added") : e.removed ? color("--removed") : e.changed ? color("--changed") : color("--edge");
-      const width = e.violation ? 2.5 : 1 + 3 * part.refs.length / maxCount;
+      // A violation the base already had stays on the map, thinner and with
+      // a hollow mark, since it does not fail the check.
+      const old = e.violation && e.existing;
+      const width = e.violation ? (old ? 1.5 : 2.5) : 1 + 3 * part.refs.length / maxCount;
       const dimmed = rel && !(relatedKey(rel, e.from) && relatedKey(rel, e.to));
       const kinds = part.inherit ? [...new Set(part.refs.map(r => r.kind))].join(", ") : "uses";
       const imported = !part.inherit && !part.refs.length ? ` · ${e.imports.length} import${e.imports.length === 1 ? "" : "s"}, no references` : "";
-      const label = `${from.label} → ${to.label} · ${kinds} · ${part.refs.length} reference${part.refs.length === 1 ? "" : "s"}${imported}${e.violation ? " · violation" + (e.rule ? ": " + e.rule : "") : ""}${e.removed ? " · removed" : e.new ? " · added" : e.changed ? " · changed" : ""}`;
-      const path = el("path", { d: `M${a.x},${a.y} Q${cx},${cy} ${b.x},${b.y}`, fill: "none", stroke, "stroke-width": width, "marker-end": part.inherit ? "url(#inherit)" : "url(#arrow)", "vector-effect": "non-scaling-stroke", "data-label": label, class: dimmed && !e.violation ? "dim" : "", tabindex: 0, role: "button", "aria-label": `${part.inherit ? "Inherits" : "Dependency"} ${from.label} to ${to.label}${e.violation ? ", layer violation" : ""}` }, edgeLayer);
+      const label = `${from.label} → ${to.label} · ${kinds} · ${part.refs.length} reference${part.refs.length === 1 ? "" : "s"}${imported}${e.violation ? (old ? " · existing violation" : " · violation") + (e.rule ? ": " + e.rule : "") : ""}${e.removed ? " · removed" : e.new ? " · added" : e.changed ? " · changed" : ""}`;
+      const path = el("path", { d: `M${a.x},${a.y} Q${cx},${cy} ${b.x},${b.y}`, fill: "none", stroke, "stroke-width": width, "marker-end": part.inherit ? "url(#inherit)" : "url(#arrow)", "vector-effect": "non-scaling-stroke", "data-label": label, class: dimmed && !e.violation ? "dim" : "", tabindex: 0, role: "button", "aria-label": `${part.inherit ? "Inherits" : "Dependency"} ${from.label} to ${to.label}${e.violation ? (old ? ", existing layer violation" : ", layer violation") : ""}` }, edgeLayer);
       if (part.inherit || e.removed) path.setAttribute("stroke-dasharray", e.removed ? "3 3" : "6 4");
       path.dataset.edge = e.from + "|" + e.to + (e.removed ? "|removed" : "");
       const pick = () => select({ type: "edge", from: e.from, to: e.to, removed: e.removed, edge: e });
@@ -130,9 +133,9 @@ function drawReferences(svg, rel) {
       path.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } });
       if (e.violation && index === 0) {
         const qx = 0.25 * a.x + 0.5 * cx + 0.25 * b.x, qy = 0.25 * a.y + 0.5 * cy + 0.25 * b.y;
-        const mark = anchored(edgeLayer, qx, qy, { "data-label": `Layer violation: ${from.label} → ${to.label}` });
-        el("circle", { cx: 0, cy: 0, r: 8, fill: color("--violation") }, mark);
-        el("text", { x: 0, y: 4, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "#fff", "pointer-events": "none" }, mark).textContent = "!";
+        const mark = anchored(edgeLayer, qx, qy, { "data-label": `${old ? "Existing layer violation, in the base too" : "Layer violation"}: ${from.label} → ${to.label}` });
+        el("circle", { cx: 0, cy: 0, r: 8, fill: old ? color("--bg") : color("--violation"), stroke: color("--violation"), "stroke-width": old ? 2 : 0 }, mark);
+        el("text", { x: 0, y: 4, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: old ? color("--violation") : "#fff", "pointer-events": "none" }, mark).textContent = "!";
       }
     });
   }

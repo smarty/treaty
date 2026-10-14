@@ -124,21 +124,14 @@ function showState(st) {
   if ((st.tests || 0) !== testState.shown) refreshTests();
 }
 // showView reflects which architecture the map draws: treaty.yaml's, or a
-// preview counting down to replacing it.
+// preview that replaces it only when the person chooses to.
 function showView(view) {
   if (!view || !view.configured) return;
   const select = document.getElementById("architecture");
   for (const option of select.options) option.textContent = option.textContent.replace(/ \(treaty\.yaml\)$/, "") + (option.value === view.configured ? " (treaty.yaml)" : "");
   if (document.activeElement !== select) select.value = view.architecture;
-  document.getElementById("adopt-bar").hidden = !view.adopt_at;
+  document.getElementById("adopt-bar").hidden = !view.previewing;
   document.getElementById("adopt-cancel").textContent = `Keep ${view.configured}`;
-  tickAdopt();
-}
-function tickAdopt() {
-  const view = live.state && live.state.view;
-  if (!view || !view.adopt_at) return;
-  const left = Math.max(0, Math.round((Date.parse(view.adopt_at) - Date.now()) / 1000));
-  document.getElementById("adopt-countdown").textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
 }
 async function postView(path, body, failure) {
   try {
@@ -250,7 +243,6 @@ function startLive() {
   document.getElementById("architecture").addEventListener("change", ev => { setStatus("switching architecture…"); postView("api/view", { architecture: ev.target.value }, "architecture not changed"); });
   document.getElementById("adopt").addEventListener("click", () => postView("api/view/adopt", {}, "treaty.yaml not switched"));
   document.getElementById("adopt-cancel").addEventListener("click", () => postView("api/view", { architecture: live.state.view.configured }, "architecture not changed"));
-  setInterval(tickAdopt, 1000);
   followEvents();
 }
 

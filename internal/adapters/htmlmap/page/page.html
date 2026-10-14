@@ -18,8 +18,8 @@
     <label>Baseline <select id="baseline-mode"><option value="head">HEAD</option><option value="pr">Pull request</option><option value="ref">Ref</option></select></label>
     <input id="baseline-arg" type="text" size="16" spellcheck="false" aria-label="Baseline ref or target branch">
     <button id="baseline-apply" type="button">Apply</button>
-    <label title="Preview the code in another architecture; treaty.yaml switches after 5 minutes or when you choose to use it">Architecture <select id="architecture"><option value="none">None</option><option value="hexagonal">Hexagonal</option><option value="clean">Clean</option><option value="layered">Layered</option><option value="slices">Vertical slices</option><option value="modular">Modular monolith</option></select></label>
-    <span class="adopt" id="adopt-bar" role="status" hidden>treaty.yaml switches in <span id="adopt-countdown"></span> <button id="adopt" type="button">Use this architecture</button> <button id="adopt-cancel" type="button">Keep treaty.yaml</button></span>
+    <label title="Preview the code in another architecture; treaty.yaml changes only when you choose to use it">Architecture <select id="architecture"><option value="none">None</option><option value="hexagonal">Hexagonal</option><option value="clean">Clean</option><option value="layered">Layered</option><option value="slices">Vertical slices</option><option value="modular">Modular monolith</option></select></label>
+    <span class="adopt" id="adopt-bar" role="status" hidden>Previewing; treaty.yaml is unchanged <button id="adopt" type="button">Use this architecture</button> <button id="adopt-cancel" type="button">Keep treaty.yaml</button></span>
     <span class="status" id="status" role="status"></span>
   </span>
   <span class="spacer"></span>

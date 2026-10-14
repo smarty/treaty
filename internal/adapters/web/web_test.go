@@ -260,7 +260,7 @@ func TestArchitectureView(t *testing.T) {
 	post(t, base+"/api/view", "application/json", `{"architecture":"onion"}`, http.StatusBadRequest)
 	post(t, base+"/api/view", "application/json", `{"architecture":"layered"}`, http.StatusOK)
 	state := live.State()
-	if state.View.Architecture != "layered" || state.View.Configured != "hexagonal" || state.View.AdoptAt.IsZero() {
+	if state.View.Architecture != "layered" || state.View.Configured != "hexagonal" || !state.View.Previewing {
 		t.Fatalf("view: %+v", state.View)
 	}
 
@@ -274,7 +274,7 @@ func TestArchitectureView(t *testing.T) {
 
 	// Choosing treaty.yaml's architecture again ends the preview.
 	post(t, base+"/api/view", "application/json", `{"architecture":"hexagonal"}`, http.StatusOK)
-	if view := live.State().View; view.Architecture != "hexagonal" || !view.AdoptAt.IsZero() {
+	if view := live.State().View; view.Architecture != "hexagonal" || view.Previewing {
 		t.Fatalf("view: %+v", view)
 	}
 
@@ -286,20 +286,18 @@ func TestArchitectureView(t *testing.T) {
 		t.Fatalf("treaty.yaml:\n%s", data)
 	}
 
-	if view := live.State().View; view.Configured != "clean" || !view.AdoptAt.IsZero() {
+	if view := live.State().View; view.Configured != "clean" || view.Previewing {
 		t.Fatalf("view: %+v", view)
 	}
 
-	// A preview left alone becomes treaty.yaml.
-	live.SetAdoptAfter(200 * time.Millisecond)
+	// A preview left alone never touches treaty.yaml.
 	post(t, base+"/api/view", "application/json", `{"architecture":"layered"}`, http.StatusOK)
-	waitFor(t, func() bool { return live.State().View.Configured == "layered" })
-	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), "architecture: layered") {
+	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), "architecture: clean") {
 		t.Fatalf("treaty.yaml:\n%s", data)
 	}
 
-	if got := architecture(); got != "layered" {
-		t.Fatalf("the map should draw layered, not %q", got)
+	if view := live.State().View; view.Configured != "clean" || !view.Previewing {
+		t.Fatalf("view: %+v", view)
 	}
 }
 

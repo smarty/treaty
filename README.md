@@ -53,7 +53,8 @@ implementation detail, and it is judged through the contracts that reach it.
 - **Small, hand-written scanners.** Treaty needs contracts, not a full
   parse tree. Each language gets a small hand-written contract scanner
   behind one extractor interface. The tool is pure Go with no cgo, so
-  `go install` just works. Go, JavaScript, TypeScript and Python are supported.
+  `go install` just works. Go, JavaScript, TypeScript (with Vue and Svelte
+  components) and Python are supported.
 - **Treaty passes its own checks.** The tool is hexagonal itself: a pure core
   with every side effect behind a port.
 
@@ -83,7 +84,11 @@ A repository with no `treaty.yaml` is treated the same way. Review and edit
 the draft before you rely on it.
 
 `treaty check` without `--base` checks only the architecture, and says so. Give
-it the ref your work started from to classify contract changes too.
+it the ref your work started from to classify contract changes too. With a
+base, only new violations fail: one whose module edge already broke the rules
+at the base is listed as existing, and drawn on the map with a hollow marker,
+but passes. So a codebase that already breaks its rules can adopt Treaty
+without fixing everything first, while the debt can't grow.
 
 A hexagonal `treaty.yaml` looks like this:
 
@@ -179,9 +184,9 @@ by hand. The server logs to `~/.treaty/daemon.log`.
 
 The header also has an architecture dropdown. Picking another architecture
 previews your code in it, fitted the way `treaty init` would propose. Checks
-and agents keep following `treaty.yaml` until you press *Use this
-architecture*, or until the preview has been left in place for five minutes.
-Then `treaty.yaml` is replaced with the proposal.
+and agents keep following `treaty.yaml`, and the file is never touched,
+until you press *Use this architecture*. Then `treaty.yaml` is replaced
+with the proposal.
 
 The review queue and the inspector are tabs in drawers beside the map. Drag
 a divider to resize a drawer. Drag a tab to move its panel into another

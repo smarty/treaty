@@ -14,7 +14,8 @@ import (
 const maxSourceBytes = 1 << 20
 
 // MapEdge is one module-level dependency on the map. Rule is the rule a
-// violation breaks. Removed marks a dependency the base had and the working
+// violation breaks, and Existing marks a violation the base already had.
+// Removed marks a dependency the base had and the working
 // tree no longer has; Changed marks one both have whose references differ or
 // whose references rely on a contract that changed.
 type MapEdge struct {
@@ -26,6 +27,7 @@ type MapEdge struct {
 	Changed    bool           `json:"changed,omitempty"`
 	Violation  bool           `json:"violation"`
 	Rule       string         `json:"rule,omitempty"`
+	Existing   bool           `json:"existing,omitempty"`
 	References []graph.Edge   `json:"references"`
 	Imports    []graph.Import `json:"imports,omitempty"`
 }
@@ -177,9 +179,10 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 		view.Problems = append(view.Problems, err.Error())
 	}
 
-	violations := map[[2]string]string{}
+	violations, existing := map[[2]string]string{}, map[[2]string]bool{}
 	for _, violation := range analysis.violations {
 		violations[[2]string{violation.From, violation.To}] = violation.Rule
+		existing[[2]string{violation.From, violation.To}] = violation.Existing
 	}
 
 	baseEdges := map[[2]string]bool{}
@@ -202,7 +205,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 
 		view.Edges = append(view.Edges, MapEdge{
 			From: edge.From, To: edge.To, Count: count, References: edge.References, Imports: edge.Imports,
-			Violation: violations[key] != "", Rule: violations[key], New: analysis.base != nil && !baseEdges[key],
+			Violation: violations[key] != "", Rule: violations[key], Existing: existing[key], New: analysis.base != nil && !baseEdges[key],
 		})
 	}
 

@@ -412,3 +412,95 @@ func TestMapShowsCodeChangesAndRemovals(t *testing.T) {
 		t.Errorf("removed references: %+v", view.RemovedLinks)
 	}
 }
+
+func TestExistingViolationsDoNotFail(t *testing.T) {
+	root := t.TempDir()
+	write := func(files map[string]string) {
+		for name, text := range files {
+			file := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	git := func(args ...string) {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+
+	// The base already has store → web, which breaks the layered rules.
+	write(map[string]string{
+		"go.mod":         "module example.com/m\n",
+		"treaty.yaml":    "architecture: layered\nlayers:\n  web:   [\"web/**\"]\n  core:  [\"core/**\"]\n  store: [\"store/**\"]\n",
+		"web/web.go":     "package web\n\nfunc Page() {}\n",
+		"core/core.go":   "package core\n\nfunc Rule() {}\n",
+		"store/store.go": "package store\n\nimport \"example.com/m/web\"\n\nfunc Save() {\n\tweb.Page()\n}\n",
+	})
+	git("init", "-q")
+	git("add", ".")
+	git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "before")
+	service := app.NewService(root, filesystem.NewConfig(root), NewExtractor(), []app.Dialect{NewDialect()},
+		gitvcs.New(root), filesystem.NewWorkspace(t.TempDir()), &viewRecorder{}, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+
+	// Without a base every violation is new, so the existing one fails.
+	report, err := service.Check("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Failures) != 1 || len(report.Violations) != 1 || report.Violations[0].Existing {
+		t.Fatalf("without a base: failures %v, violations %+v", report.Failures, report.Violations)
+	}
+
+	// Against a base that has it, the violation is listed but passes.
+	write(map[string]string{"store/store.go": "package store\n\nimport \"example.com/m/web\"\n\nfunc Save() {\n\tweb.Page()\n\tweb.Page()\n}\n"})
+	if report, err = service.Check("HEAD"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Failures) != 0 || len(report.Violations) != 1 || !report.Violations[0].Existing {
+		t.Fatalf("existing only: failures %v, violations %+v", report.Failures, report.Violations)
+	}
+
+	if !slices.ContainsFunc(report.Notes, func(note string) bool { return strings.Contains(note, "1 violation(s) were already in base HEAD") }) {
+		t.Fatalf("notes: %v", report.Notes)
+	}
+
+	// A violation the change introduces fails, and ranks above the old one.
+	write(map[string]string{"store/store.go": "package store\n\nimport (\n\t\"example.com/m/core\"\n\t\"example.com/m/web\"\n)\n\nfunc Save() {\n\tcore.Rule()\n\tweb.Page()\n}\n"})
+	if report, err = service.Check("HEAD"); err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Equal(report.Failures, []string{"1 layer violation(s)"}) || len(report.Violations) != 2 {
+		t.Fatalf("new and existing: failures %v, violations %+v", report.Failures, report.Violations)
+	}
+
+	for _, violation := range report.Violations {
+		if want := violation.To == "go:web"; violation.Existing != want {
+			t.Fatalf("%s → %s: existing %v", violation.From, violation.To, violation.Existing)
+		}
+	}
+
+	summary := report.Summary()
+	if !strings.Contains(summary, "go:store → go:web (existing)") || strings.Contains(summary, "go:store → go:core (existing)") {
+		t.Fatalf("summary:\n%s", summary)
+	}
+
+	var titles []string
+	for _, finding := range report.Findings {
+		if finding.Kind == rules.FindingLayerViolation {
+			titles = append(titles, finding.Title)
+		}
+	}
+
+	if !slices.Equal(titles, []string{"go:store → go:core breaks a layer rule", "go:store → go:web breaks a layer rule (existing)"}) {
+		t.Fatalf("violation findings: %v", titles)
+	}
+}

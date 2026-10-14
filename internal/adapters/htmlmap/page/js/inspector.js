@@ -350,8 +350,9 @@ function inspect() {
     const p = h("p");
     if (e.removed) p.appendChild(document.createTextNode("Removed: the base had this dependency and the working tree no longer does. Its references are as they were in the base."));
     else {
-      p.appendChild(h("span", { class: "pill " + (e.violation ? "fail" : "pass") }, e.violation ? "Violation" : "Allowed"));
+      p.appendChild(h("span", { class: "pill " + (e.violation ? "fail" : "pass") }, e.violation ? (e.existing ? "Existing violation" : "Violation") : "Allowed"));
       p.appendChild(document.createTextNode(` ${a.layer} → ${b.layer}: ${e.violation ? e.rule || "breaks the architecture's rules" : "allowed by the architecture's rules"}.`));
+      if (e.violation && e.existing) p.appendChild(document.createTextNode(" The base has it too, so it does not fail the check."));
     }
     box.appendChild(p);
     const refs = referenceTable(e);

@@ -51,7 +51,7 @@ func (this *Service) Check(base string) (result Report, err error) {
 	}
 
 	result = analysis.report()
-	result.Notes = this.notes(base, analysis)
+	result.Notes = append(this.notes(base, analysis), result.Notes...)
 	return result, nil
 }
 
@@ -85,6 +85,10 @@ func (this *analysis) report() Report {
 		Failures:   this.failures(),
 	}
 
+	if existing := this.existing(); existing > 0 {
+		result.Notes = append(result.Notes, fmt.Sprintf("%d violation(s) were already in base %s, so they do not fail the check; they are listed as existing", existing, this.baseRef))
+	}
+
 	if result.Violations == nil {
 		result.Violations = []rules.Violation{}
 	}
@@ -104,6 +108,17 @@ func (this *analysis) report() Report {
 		}
 
 		result.Modules = append(result.Modules, entry)
+	}
+
+	return result
+}
+
+// existing counts the violations the base already had.
+func (this *analysis) existing() (result int) {
+	for _, violation := range this.violations {
+		if violation.Existing {
+			result++
+		}
 	}
 
 	return result
@@ -132,7 +147,12 @@ func (this Report) Summary() string {
 		fmt.Fprintf(&builder, "violations (%d):\n", len(this.Violations))
 		for _, violation := range this.Violations {
 			file, line, first := violation.First()
-			fmt.Fprintf(&builder, "  %s → %s: %s; first %s at %s:%d\n", violation.From, violation.To, violation.Rule, first, file, line)
+			existing := ""
+			if violation.Existing {
+				existing = " (existing)"
+			}
+
+			fmt.Fprintf(&builder, "  %s → %s%s: %s; first %s at %s:%d\n", violation.From, violation.To, existing, violation.Rule, first, file, line)
 		}
 	}
 

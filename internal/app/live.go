@@ -12,10 +12,6 @@ import (
 )
 
 const (
-	// AdoptAfter is how long the map may preview another architecture
-	// before treaty.yaml switches to it.
-	AdoptAfter = 5 * time.Minute
-
 	BaselineHead        = "head"
 	BaselinePullRequest = "pr"
 	BaselineRef         = "ref"
@@ -88,8 +84,7 @@ type LiveState struct {
 // View is the architecture the live map draws. Another architecture than
 // the one in treaty.yaml is a preview: the map shows the code fitted to it,
 // as treaty init would propose, while checks and agents keep following
-// treaty.yaml. A preview becomes treaty.yaml when the person adopts it, or
-// after AdoptAfter.
+// treaty.yaml. A preview becomes treaty.yaml only when the person adopts it.
 type View struct {
 	// Architecture is the architecture drawn.
 	Architecture string `json:"architecture"`
@@ -97,9 +92,9 @@ type View struct {
 	// Configured is the architecture in treaty.yaml.
 	Configured string `json:"configured"`
 
-	// AdoptAt is when treaty.yaml switches to the previewed architecture;
-	// zero when nothing is previewed.
-	AdoptAt time.Time `json:"adopt_at,omitzero"`
+	// Previewing is true while the map draws another architecture than
+	// treaty.yaml's.
+	Previewing bool `json:"previewing,omitempty"`
 }
 
 // Pointer is something the agent asked the person to look at. The map
@@ -142,8 +137,6 @@ type Live struct {
 	showEvery   time.Duration
 	configured  string
 	preview     string
-	adoptAt     time.Time
-	adoptAfter  time.Duration
 	positions   sync.Mutex
 	settings    sync.Mutex
 }
@@ -165,7 +158,6 @@ func NewLive(service *Service, watcher Watcher) *Live {
 		bases:       map[string]revision{},
 		subscribers: map[chan LiveState]bool{},
 		showEvery:   ShowEvery,
-		adoptAfter:  AdoptAfter,
 	}
 }
 
@@ -192,7 +184,7 @@ func (this *Live) AdoptView() (path string, err error) {
 
 	this.mutex.Lock()
 	if this.preview == style {
-		this.preview, this.adoptAt = "", time.Time{}
+		this.preview = ""
 	}
 
 	this.mutex.Unlock()
@@ -249,7 +241,7 @@ func (this *Live) Refresh() error {
 		this.baseline, this.analysis, this.payload = resolved, built, payload
 		this.configured = built.config.Architecture.Style
 		if this.preview == this.configured {
-			this.preview, this.adoptAt = "", time.Time{}
+			this.preview = ""
 		}
 	}
 
@@ -312,18 +304,6 @@ func (this *Live) RunTests(ids []string) error {
 	return this.tests.Run(current.head, ids)
 }
 
-// SetAdoptAfter changes how long the map previews another architecture
-// before treaty.yaml switches to it. A preview already counting down keeps
-// its time.
-//
-// Parameters:
-//   - after: the preview's length; AdoptAfter by default.
-func (this *Live) SetAdoptAfter(after time.Duration) {
-	this.mutex.Lock()
-	defer this.mutex.Unlock()
-	this.adoptAfter = after
-}
-
 // SetBaseline changes what the working tree is compared with, and rebuilds.
 //
 // Parameters:
@@ -348,8 +328,7 @@ func (this *Live) SetBaseline(baseline Baseline) error {
 }
 
 // SetView draws another architecture, or treaty.yaml's again, and rebuilds.
-// Another architecture than treaty.yaml's starts the AdoptAfter countdown;
-// choosing again restarts it.
+// Another architecture than treaty.yaml's is a preview until AdoptView.
 //
 // Parameters:
 //   - architecture: one of rules.Styles.
@@ -366,9 +345,9 @@ func (this *Live) SetView(architecture string) error {
 
 	this.mutex.Lock()
 	if architecture == this.configured {
-		this.preview, this.adoptAt = "", time.Time{}
+		this.preview = ""
 	} else {
-		this.preview, this.adoptAt = architecture, time.Now().Add(this.adoptAfter)
+		this.preview = architecture
 	}
 
 	this.mutex.Unlock()
@@ -637,20 +616,6 @@ func (this *Live) poll(stop <-chan struct{}) {
 			}
 		}
 
-		this.mutex.Lock()
-		due := !this.adoptAt.IsZero() && time.Now().After(this.adoptAt)
-		this.mutex.Unlock()
-		if due {
-			if _, err := this.AdoptView(); err != nil && !errors.Is(err, ErrNoPreview) {
-				this.mutex.Lock()
-				this.adoptAt, this.failure = time.Time{}, "treaty.yaml was not switched: "+err.Error()
-				this.notifyLocked()
-				this.mutex.Unlock()
-			}
-
-			continue
-		}
-
 		if changed {
 			_ = this.Refresh()
 		}
@@ -739,9 +704,9 @@ func (this *Live) planned(current *analysis, target string) bool {
 }
 
 func (this *Live) stateLocked() LiveState {
-	view := View{Architecture: this.configured, Configured: this.configured, AdoptAt: this.adoptAt}
+	view := View{Architecture: this.configured, Configured: this.configured}
 	if this.preview != "" {
-		view.Architecture = this.preview
+		view.Architecture, view.Previewing = this.preview, true
 	}
 
 	result := LiveState{Version: this.version, Baseline: this.baseline, View: view, Selection: this.selection, Pointer: this.pointer, Error: this.failure}

@@ -421,3 +421,200 @@ func newService(t *testing.T, root string) *app.Service {
 	return app.NewService(root, filesystem.NewConfig(root), NewExtractor(), []app.Dialect{NewDialect(LanguageJavaScript), NewDialect(LanguageTypeScript)},
 		nil, filesystem.NewWorkspace(t.TempDir()), nil, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
 }
+
+func TestReexportsKeepTheImportedModule(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"treaty.yaml":                   "architecture: modular\ncontexts: [\"src/ctx/*\"]\npublic: [\".\"]\n",
+		"src/ctx/a/index.ts":            "export { helper } from './internal/h';\nexport * from './internal/more';\nexport { default as Widget } from './internal/widget';\nimport { tool } from './internal/h';\nexport { tool };\n",
+		"src/ctx/a/internal/h.ts":       "export function helper(): number { return 1; }\nexport function tool(): number { return 2; }\n",
+		"src/ctx/a/internal/more.ts":    "export const LIMIT = 3;\n",
+		"src/ctx/a/internal/widget.tsx": "export default function Widget() { return <div/>; }\n",
+		"src/ctx/b/u.ts":                "import { helper, LIMIT, Widget, tool } from '../a';\nexport function use(): number { return helper() + LIMIT + tool() + (Widget ? 1 : 0); }\n",
+		"src/ctx/c/index.ts":            "export { helper as leaked } from '../a/internal/h';\n",
+		"src/ctx/d/u.ts":                "import { leaked } from '../c';\nexport const value = leaked();\n",
+	})
+
+	service := newService(t, root)
+	report, err := service.Check("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// b imports only a's public index, so it depends on a alone. c's index
+	// reaches into a's internals itself, and only c breaks the rules.
+	var violations []string
+	for _, violation := range report.Violations {
+		violations = append(violations, violation.From+" -> "+violation.To)
+	}
+
+	if want := []string{"ts:src/ctx/c -> ts:src/ctx/a/internal"}; !slices.Equal(violations, want) {
+		t.Errorf("violations: got %q, want %q", violations, want)
+	}
+
+	g, err := service.Extract()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for id, to := range map[string]string{
+		"ts:src/ctx/a:helper": "ts:src/ctx/a/internal:helper",
+		"ts:src/ctx/a:LIMIT":  "ts:src/ctx/a/internal:LIMIT",
+		"ts:src/ctx/a:Widget": "ts:src/ctx/a/internal:Widget",
+		"ts:src/ctx/a:tool":   "ts:src/ctx/a/internal:tool",
+		"ts:src/ctx/c:leaked": "ts:src/ctx/a/internal:helper",
+	} {
+		symbol := g.Symbol(id)
+		if symbol == nil || !symbol.Contract || !slices.ContainsFunc(g.Edges, func(edge graph.Edge) bool { return edge.From == id && edge.To == to }) {
+			t.Errorf("%s should be a contract standing for %s: %+v", id, to, symbol)
+		}
+	}
+
+	for _, edge := range g.Edges {
+		if strings.HasPrefix(edge.From, "ts:src/ctx/b:") && !strings.HasPrefix(edge.To, "ts:src/ctx/a:") {
+			t.Errorf("b should use only a's index: %s -> %s", edge.From, edge.To)
+		}
+	}
+
+	dumped, err := service.Dump("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsed, err := service.ParseGraph(dumped)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if differences := graph.Compare(g, parsed); len(differences) > 0 {
+		t.Fatalf("round trip lost %d thing(s):\n%s", len(differences), strings.Join(differences, "\n"))
+	}
+}
+
+func writeTree(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for name, text := range files {
+		file := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAliasesFromEveryConfig(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		// Vite's layout: tsconfig.json only references the app's config,
+		// which takes its paths from a shared base.
+		"web/package.json":           `{"name": "web", "imports": {"#internal/*": "./src/internal/*.js", "#config": {"import": "./src/config.ts"}}}`,
+		"web/tsconfig.json":          `{"files": [], "references": [{"path": "./tsconfig.app.json"}, {"path": "./tsconfig.node.json"}]}`,
+		"web/tsconfig.app.json":      "{\n  // comments and trailing commas are allowed\n  \"extends\": \"./tsconfig.base\",\n  \"include\": [\"src\"],\n}",
+		"web/tsconfig.base.json":     `{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["src/*"]}}}`,
+		"web/tsconfig.node.json":     `{"include": ["vite.config.ts"]}`,
+		"web/vite.config.ts":         "import { fileURLToPath, URL } from 'node:url';\nimport path from 'node:path';\nexport default defineConfig({\n  resolve: {\n    alias: [\n      { find: '~lib', replacement: fileURLToPath(new URL('./src/lib', import.meta.url)) },\n      { find: /^#legacy/, replacement: '/src/legacy' },\n    ],\n  },\n});\n",
+		"web/src/main.ts":            "import { hook } from '@/hooks/use';\nimport { lib } from '~lib/thing';\nimport { secret } from '#internal/secret';\nimport { config } from '#config';\nexport const app = hook() + lib() + secret() + config;\n",
+		"web/src/hooks/use.ts":       "export function hook(): number { return 1; }\n",
+		"web/src/lib/thing.ts":       "export function lib(): number { return 2; }\n",
+		"web/src/internal/secret.ts": "export function secret(): number { return 3; }\n",
+		"web/src/config.ts":          "export const config = 4;\n",
+		// webpack's object form, with an exact match and path.resolve.
+		"old/webpack.config.js": "const path = require('path');\nmodule.exports = {\n  resolve: {\n    alias: {\n      Shared: path.resolve(__dirname, '..', 'web', 'src', 'lib'),\n      'config$': path.resolve(__dirname, 'src/settings.js'),\n    },\n  },\n};\n",
+		"old/src/app.js":        "import { lib } from 'Shared/thing';\nimport settings from 'config';\nimport nope from 'config/other';\nexport const run = () => lib() + settings;\n",
+		"old/src/settings.js":   "export default 5;\n",
+	})
+
+	g, err := NewExtractor().Extract(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var edges []string
+	for _, edge := range g.ModuleEdges() {
+		edges = append(edges, edge.From+" -> "+edge.To)
+	}
+
+	want := []string{
+		"js:old/src -> ts:web/src/lib",
+		"ts:web/src -> ts:web/src/hooks",
+		"ts:web/src -> ts:web/src/internal",
+		"ts:web/src -> ts:web/src/lib",
+	}
+
+	if !slices.Equal(edges, want) {
+		t.Errorf("module edges:\n got %q\nwant %q", edges, want)
+	}
+
+	config := slices.ContainsFunc(g.Edges, func(edge graph.Edge) bool { return edge.From == "ts:web/src:app" && edge.To == "ts:web/src:config" })
+	settings := slices.ContainsFunc(g.Edges, func(edge graph.Edge) bool { return edge.From == "js:old/src:run" && edge.To == "js:old/src:default" })
+	if !config || !settings {
+		t.Errorf("#config resolved %v, config$ resolved %v", config, settings)
+	}
+}
+
+func TestComponentsAndGlobs(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"src/App.vue":                     "<template>\n  <MyButton @click=\"go\" />\n  <span>{{ title }}</span>\n</template>\n\n<script setup lang=\"ts\">\nimport MyButton from './ui/my-button.vue';\nimport { title } from './state/title';\nconst routes = import.meta.glob(['./pages/*.vue', '!./pages/Draft.vue']);\nconst locale = (name: string) => import(`./locales/${name}`);\n</script>\n",
+		"src/ui/my-button.vue":            "<template><button><slot /></button></template>\n<script>\nexport default { name: 'MyButton' };\n</script>\n",
+		"src/state/title.ts":              "export const title = 'hi';\n",
+		"src/pages/Home.vue":              "<template><h1>Home</h1></template>\n",
+		"src/locales/en.ts":               "export default { hello: 'hello' };\n",
+		"src/widgets/Card.svelte":         "<script context=\"module\" lang=\"ts\">\n  export const prerender = true;\n</script>\n\n<script lang=\"ts\">\n  import { title } from '../state/title';\n  export let size: number;\n</script>\n\n<p>{title}</p>\n",
+		"src/widgets/legacy/Old.test.vue": "<script>import x from '../../state/title';</script>\n",
+	})
+
+	g, err := NewExtractor().Extract(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var edges []string
+	for _, edge := range g.ModuleEdges() {
+		edges = append(edges, edge.From+" -> "+edge.To)
+	}
+
+	// A component without TypeScript is JavaScript; the glob and the
+	// template-literal import reach pages and locales.
+	want := []string{"ts:src -> js:src/pages", "ts:src -> js:src/ui", "ts:src -> ts:src/locales", "ts:src -> ts:src/state", "ts:src/widgets -> ts:src/state"}
+	if !slices.Equal(edges, want) {
+		t.Errorf("module edges:\n got %q\nwant %q", edges, want)
+	}
+
+	app := g.Symbol("ts:src:App")
+	if app == nil || !app.Contract || app.Line != 1 || app.EndLine != 11 {
+		t.Fatalf("App: %+v", app)
+	}
+
+	for _, to := range []string{"js:src/ui:default", "ts:src/state:title"} {
+		if !slices.ContainsFunc(g.Edges, func(edge graph.Edge) bool { return edge.From == app.ID && edge.To == to }) {
+			t.Errorf("App should use %s", to)
+		}
+	}
+
+	if size := g.Symbol("ts:src/widgets:size"); size == nil || size.Line != 7 || g.Symbol("ts:src/widgets:Card") == nil || g.Symbol("ts:src/widgets:prerender") == nil {
+		t.Errorf("Card.svelte: size %+v", size)
+	}
+
+	if g.Symbol("js:src/pages:Home") == nil {
+		t.Error("a component with no script is still its file's default export")
+	}
+
+	service := newService(t, root)
+	dumped, err := service.Dump("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsed, err := service.ParseGraph(dumped)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if differences := graph.Compare(g, parsed); len(differences) > 0 {
+		t.Fatalf("round trip lost %d thing(s):\n%s", len(differences), strings.Join(differences, "\n"))
+	}
+}

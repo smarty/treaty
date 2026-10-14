@@ -642,3 +642,54 @@ func TestShortNamesSourceAndSummaries(t *testing.T) {
 		t.Fatalf("summary:\n%s", summary)
 	}
 }
+
+func TestNeverBuiltFiles(t *testing.T) {
+	for text, want := range map[string]bool{
+		"//go:build ignore\n\npackage main\n":                  true,
+		"//go:build tools\n\npackage tools\n":                  true,
+		"// +build ignore\n\npackage main\n":                   true,
+		"//go:build ignore && linux\n\npackage main\n":         true,
+		"//go:build !ignore\n\npackage kernel\n":               false,
+		"//go:build linux || ignore\n\npackage kernel\n":       false,
+		"//go:build amd64\n\npackage kernel\n":                 false,
+		"//go:build linux && !linux\n\npackage kernel\n":       true,
+		"package kernel\n\n//go:build ignore\n":                false,
+		"// Copyright.\n\n//go:build ignore\n\npackage main\n": true,
+	} {
+		if got := neverBuilt([]byte(text)); got != want {
+			t.Errorf("%q: got %v, want %v", text, got, want)
+		}
+	}
+
+	root := t.TempDir()
+	for name, text := range map[string]string{
+		"go.mod":      "module example.com/fx\n",
+		"a/a.go":      "package a\n\nfunc A() {}\n",
+		"b/b.go":      "package b\n\nfunc B() {}\n",
+		"gen/main.go": "//go:build ignore\n\npackage main\n\nimport \"example.com/fx/a\"\n\nfunc main() { a.A() }\n",
+		"gen/gen.go":  "package gen\n",
+		"tools/t.go":  "//go:build tools\n\npackage tools\n\nimport _ \"example.com/fx/b\"\n",
+	} {
+		file := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	g, err := NewExtractor().Extract(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if edges := g.ModuleEdges(); len(edges) != 0 {
+		t.Fatalf("files that are never built should add no dependencies: %+v", edges)
+	}
+
+	if g.Module("go:tools") != nil {
+		t.Fatal("a package of only tools files should not be a module")
+	}
+}

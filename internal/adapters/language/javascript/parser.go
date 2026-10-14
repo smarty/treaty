@@ -56,6 +56,7 @@ type importSpec struct {
 	reexport bool
 	all      bool
 	require  bool
+	glob     bool
 }
 
 // sourceFile is everything the extractor needs from one file.
@@ -295,10 +296,37 @@ func (this *parser) decorators() {
 }
 
 // dynamicImports records every require("x") and import("x") call not
-// already read as a binding: each is a dependency, used or not.
+// already read as a binding: each is a dependency, used or not. An import
+// whose path is built at run time, import(`./pages/${name}`) or
+// import("./pages/" + name), and Vite's import.meta.glob("./pages/*.vue"),
+// are globs: a dependency on every file they could load.
 func (this *parser) dynamicImports() {
 	for index := 0; index+3 < len(this.tokens); index++ {
 		current := this.tokens[index]
+		if current.is("import") && this.get(index+1).is(".") && this.get(index+2).is("meta") && this.get(index+3).is(".") && (this.get(index+4).is("glob") || this.get(index+4).is("globEager")) && this.get(index+5).is("(") {
+			arguments := this.tokens[index+6:]
+			if len(arguments) > 0 && arguments[0].is("[") {
+				arguments = arguments[1:matching(this.tokens[index+6:], 0)]
+			} else {
+				arguments = arguments[:min(1, len(arguments))]
+			}
+
+			for _, argument := range arguments {
+				if pattern, ok := unquote(argument); ok && !strings.HasPrefix(pattern, "!") {
+					this.file.imports = append(this.file.imports, importSpec{path: pattern, line: current.line, glob: true})
+				}
+			}
+
+			continue
+		}
+
+		if current.is("import") && this.get(index+1).is("(") && this.get(index+2).kind == tokenString && (index == 0 || !this.tokens[index-1].is(".")) {
+			if prefix, ok := runtimePath(this.get(index+2), this.get(index+3)); ok {
+				this.file.imports = append(this.file.imports, importSpec{path: prefix + "**", line: current.line, glob: true})
+				continue
+			}
+		}
+
 		if !(current.is("require") || current.is("import")) || !this.tokens[index+1].is("(") || this.tokens[index+2].kind != tokenString || !this.tokens[index+3].is(")") {
 			continue
 		}
@@ -311,6 +339,29 @@ func (this *parser) dynamicImports() {
 			this.file.imports = append(this.file.imports, importSpec{path: path, line: current.line})
 		}
 	}
+}
+
+// runtimePath gives the fixed start of a path built at run time: the text
+// of a template literal before its first substitution, or a string a + adds
+// to. Only a relative start, one that names a directory, counts.
+func runtimePath(first, next token) (prefix string, ok bool) {
+	text := first.text
+	switch {
+	case len(text) > 1 && text[0] == '`' && strings.Contains(text, "${"):
+		prefix = text[1:strings.Index(text, "${")]
+	case next.is("+"):
+		if prefix, ok = unquote(first); !ok {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+
+	if !strings.HasPrefix(prefix, "./") && !strings.HasPrefix(prefix, "../") || !strings.Contains(prefix, "/") {
+		return "", false
+	}
+
+	return prefix[:strings.LastIndex(prefix, "/")+1], true
 }
 
 func (this *parser) enum(i int, prefix string, exported bool, docLine int) int {

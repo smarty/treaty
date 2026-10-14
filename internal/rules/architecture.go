@@ -77,16 +77,35 @@ type Placement struct {
 }
 
 // Violation is a module edge that breaks a rule of the architecture. It has
-// at least one reference or import.
+// at least one reference or import. Existing marks one the base already
+// had, which is shown but does not fail the check.
 type Violation struct {
 	Kind       string         `json:"kind"`
 	Rule       string         `json:"rule"`
+	Existing   bool           `json:"existing,omitempty"`
 	From       string         `json:"from"`
 	FromLayer  string         `json:"from_layer"`
 	To         string         `json:"to"`
 	ToLayer    string         `json:"to_layer"`
 	References []graph.Edge   `json:"references"`
 	Imports    []graph.Import `json:"imports,omitempty"`
+}
+
+// MarkExisting marks each violation the base also has, by its module edge,
+// so a check fails only on violations a change introduced.
+//
+// Parameters:
+//   - head: the violations in the working tree, marked in place.
+//   - base: the violations in the base, under the same architecture.
+func MarkExisting(head, base []Violation) {
+	before := map[[2]string]bool{}
+	for _, violation := range base {
+		before[[2]string{violation.From, violation.To}] = true
+	}
+
+	for i := range head {
+		head[i].Existing = before[[2]string{head[i].From, head[i].To}]
+	}
 }
 
 // First locates the violation's first reference, or its first import when

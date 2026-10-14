@@ -103,10 +103,18 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 			title = "%s → %s closes a cycle"
 		}
 
+		// A violation the base already had is debt, not this change's
+		// doing: it ranks below the ones the change introduced.
+		severity, existing := SeverityHigh, ""
+		if violation.Existing {
+			severity, existing = SeverityMedium, "Existing: the base has it too, so it does not fail the check. "
+			title += " (existing)"
+		}
+
 		result = append(result, Finding{
-			Severity: SeverityHigh, Kind: violation.Kind,
+			Severity: severity, Kind: violation.Kind,
 			Title:   fmt.Sprintf(title, violation.From, violation.To),
-			Detail:  fmt.Sprintf("%s; %d reference(s), %d import(s), first %s at %s:%d", violation.Rule, len(violation.References), len(violation.Imports), first, file, line),
+			Detail:  existing + fmt.Sprintf("%s; %d reference(s), %d import(s), first %s at %s:%d", violation.Rule, len(violation.References), len(violation.Imports), first, file, line),
 			Targets: []string{violation.From, violation.To},
 			Blast:   blast[blastTarget],
 		})

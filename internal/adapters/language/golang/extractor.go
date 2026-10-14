@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"go/build/constraint"
 	"io/fs"
 	"os"
 	"path"
@@ -94,6 +95,10 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 		src, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
 		if err != nil {
 			return nil, err
+		}
+
+		if neverBuilt(src) {
+			continue
 		}
 
 		dir := path.Dir(relative)
@@ -509,6 +514,71 @@ func goFiles(root string, tests bool) (files []string, roots moduleRoots, err er
 	sort.Strings(files)
 	sort.Slice(roots, func(i, j int) bool { return len(roots[i].path) > len(roots[j].path) })
 	return files, roots, err
+}
+
+// neverBuilt reports whether a file's build constraints leave it out of
+// every build: a generator run with go run under //go:build ignore, or a
+// //go:build tools file that only pins tool dependencies. Every other tag,
+// such as an operating system, might be set, so a file built only on some
+// platforms stays in as a build variant.
+func neverBuilt(src []byte) bool {
+	for _, line := range strings.Split(string(src), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "package ") {
+			return false
+		}
+
+		if !constraint.IsGoBuild(line) && !constraint.IsPlusBuild(line) {
+			continue
+		}
+
+		expr, err := constraint.Parse(line)
+		if err == nil && !satisfiable(expr) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// satisfiable reports whether some set of tags, never ignore or tools,
+// makes a constraint true. A constraint with too many tags to try every
+// set is taken as satisfiable.
+func satisfiable(expr constraint.Expr) bool {
+	var tags []string
+	var collect func(constraint.Expr)
+	collect = func(expr constraint.Expr) {
+		switch each := expr.(type) {
+		case *constraint.AndExpr:
+			collect(each.X)
+			collect(each.Y)
+		case *constraint.OrExpr:
+			collect(each.X)
+			collect(each.Y)
+		case *constraint.NotExpr:
+			collect(each.X)
+		case *constraint.TagExpr:
+			if each.Tag != "ignore" && each.Tag != "tools" && !slices.Contains(tags, each.Tag) {
+				tags = append(tags, each.Tag)
+			}
+		}
+	}
+
+	collect(expr)
+	if len(tags) > 12 {
+		return true
+	}
+
+	for set := 0; set < 1<<len(tags); set++ {
+		if expr.Eval(func(tag string) bool {
+			index := slices.Index(tags, tag)
+			return index >= 0 && set&(1<<index) != 0
+		}) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func hash(text string) string {

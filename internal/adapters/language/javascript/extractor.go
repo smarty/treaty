@@ -1,17 +1,24 @@
 package javascript
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/smarty/treaty/internal/graph"
+)
+
+var (
+	scriptLang  = regexp.MustCompile(`\blang\s*=\s*["']?tsx?\b`)
+	templateTag = regexp.MustCompile(`<([A-Z][A-Za-z0-9]*)`)
 )
 
 const (
@@ -33,6 +40,7 @@ type fileState struct {
 	bindings  map[string]importBinding
 	reexports []reexport
 	reachable map[string]bool
+	aliases   *aliases
 }
 
 // importBinding is a local name bound to another file's export.
@@ -40,6 +48,7 @@ type importBinding struct {
 	file     *fileState
 	imported string
 	require  bool
+	line     int
 }
 
 // reexport is an export ... from: names, or every name, another file
@@ -48,6 +57,15 @@ type reexport struct {
 	file  *fileState
 	names []binding
 	all   bool
+	line  int
+}
+
+// aliases holds the symbols made for names a file exports from another
+// module, so a consumer depends on the module it imported, such as a
+// context's public index, rather than the one behind it.
+type aliases struct {
+	graph *graph.Graph
+	made  map[string]string
 }
 
 // source is one declaration of a symbol and the file it came from.
@@ -81,6 +99,8 @@ func NewExtractor() *Extractor {
 //     top-level name declared in more than one file of a directory is
 //     qualified by its file's name, as in button/render, or as in
 //     button_mjs/render when button.ts sits beside it.
+//   - A Vue or Svelte component is read through its <script> blocks, as
+//     TypeScript when one has lang="ts".
 //   - Declaration files (.d.ts), tests (.test., .spec., __tests__) and
 //     minified files are skipped, as are node_modules, dist, build and
 //     coverage directories.
@@ -97,10 +117,21 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 		return nil, err
 	}
 
+	sources, scripts, typed := map[string][]byte{}, map[string][]byte{}, map[string]bool{}
 	languages := map[string]string{}
 	for _, file := range found.files {
+		src, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file)))
+		if err != nil {
+			return nil, err
+		}
+
+		sources[file], scripts[file], typed[file] = src, src, typeScript(file)
+		if component(file) {
+			scripts[file], typed[file] = componentScript(src)
+		}
+
 		dir := path.Dir(file)
-		if typeScript(file) {
+		if typed[file] {
 			languages[dir] = LanguageTypeScript
 		} else if languages[dir] == "" {
 			languages[dir] = LanguageJavaScript
@@ -108,24 +139,27 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 	}
 
 	result = graph.New()
+	made := &aliases{graph: result, made: map[string]string{}}
 	var states []*fileState
 	byPath := map[string]*fileState{}
 	declaredIn := map[string]map[string]map[string]bool{}
 	for _, file := range found.files {
-		src, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file)))
-		if err != nil {
-			return nil, err
-		}
-
+		src := sources[file]
 		dir := path.Dir(file)
 		state := &fileState{
-			sourceFile: parseFile(src, !typeScript(file) || strings.HasSuffix(file, ".tsx")),
+			sourceFile: parseFile(scripts[file], !typed[file] || strings.HasSuffix(file, ".tsx")),
 			path:       file,
 			module:     graph.ModuleID(languages[dir], dir),
 			lines:      strings.Split(string(src), "\n"),
 			symbols:    map[string]string{},
 			bindings:   map[string]importBinding{},
 			reachable:  map[string]bool{},
+			aliases:    made,
+		}
+
+		if component(file) && state.exports["default"] == "" {
+			state.declarations = append(state.declarations, componentDeclaration(file, src, scripts[file], typed[file]))
+			state.exports["default"] = state.declarations[len(state.declarations)-1].name
 		}
 
 		states = append(states, state)
@@ -222,6 +256,15 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 		state.resolveImports(result, imports, byPath)
 	}
 
+	// Every name a file exports from another module by name is part of its
+	// module's contract, used or not. A star re-export's names are made as
+	// consumers use them.
+	for _, state := range states {
+		for _, name := range state.exportedNames() {
+			state.export(name, map[string]bool{})
+		}
+	}
+
 	methods := map[string][]*graph.Symbol{}
 	for _, symbol := range order {
 		if symbol.Kind == graph.KindMethod {
@@ -254,7 +297,9 @@ func (this *Extractor) Source(root, file string) (result []byte, err error) {
 }
 
 // export finds the symbol a file exports under a name, following export
-// lists, imports and re-exports, or empty when there is none.
+// lists, imports and re-exports, or empty when there is none. A name the
+// file exports from another module resolves to an alias in the file's own
+// module, which uses the symbol behind it.
 func (this *fileState) export(name string, seen map[string]bool) string {
 	key := this.path + "\x00" + name
 	if seen[key] {
@@ -262,31 +307,94 @@ func (this *fileState) export(name string, seen map[string]bool) string {
 	}
 
 	seen[key] = true
+	found, line := this.exported(name, seen)
+	return this.alias(name, found, line)
+}
+
+// exported finds the symbol behind a name the file exports, and the line
+// that brings it in from another file, if one does.
+func (this *fileState) exported(name string, seen map[string]bool) (id string, line int) {
 	if local, ok := this.exports[name]; ok {
-		return this.lookup(local, seen)
+		return this.lookup(local, seen), this.bindings[local].line
 	}
 
 	for _, each := range this.reexports {
 		for _, item := range each.names {
 			if item.local == name && item.imported != "*" {
-				return each.file.export(item.imported, seen)
+				return each.file.export(item.imported, seen), each.line
 			}
 		}
 	}
 
 	if name == "default" {
-		return ""
+		return "", 0
 	}
 
 	for _, each := range this.reexports {
 		if each.all {
 			if found := each.file.export(name, seen); found != "" {
-				return found
+				return found, each.line
 			}
 		}
 	}
 
-	return ""
+	return "", 0
+}
+
+// exportedNames lists the names the file exports by name, its own and
+// those it re-exports.
+func (this *fileState) exportedNames() (result []string) {
+	for name := range this.exports {
+		result = append(result, name)
+	}
+
+	for _, each := range this.reexports {
+		for _, item := range each.names {
+			if item.imported != "*" {
+				result = append(result, item.local)
+			}
+		}
+	}
+
+	sort.Strings(result)
+	return result
+}
+
+// alias returns target when it is in the file's module, or else a symbol
+// in the file's module that stands for it under the exported name, made on
+// first use with an edge to target. It takes the target's kind, signature
+// and documentation, so a change behind it shows on the module that
+// offers it too.
+func (this *fileState) alias(name, target string, line int) string {
+	other := this.aliases.graph.Symbol(target)
+	if other == nil || other.Module == this.module {
+		return target
+	}
+
+	key := this.path + "\x00" + name
+	if id, ok := this.aliases.made[key]; ok {
+		return id
+	}
+
+	id := graph.SymbolID(this.module, name)
+	if this.aliases.graph.Symbol(id) != nil {
+		id = graph.SymbolID(this.module, stem(this.path)+"/"+name)
+	}
+
+	symbol := this.aliases.graph.AddSymbol(&graph.Symbol{
+		ID: id, Module: this.module, Name: strings.TrimPrefix(id, this.module+":"), Kind: other.Kind,
+		File: this.path, Line: max(line, 1), EndLine: max(line, 1), Contract: true,
+		Signature: renamed(other.Signature, other.Name, name), Fields: other.Fields, Doc: other.Doc, Hash: hash("alias " + other.ID),
+	})
+
+	this.aliases.made[key] = symbol.ID
+	kind := graph.EdgeTypeUse
+	if other.Kind == graph.KindFunction || other.Kind == graph.KindMethod {
+		kind = graph.EdgeCall
+	}
+
+	this.aliases.graph.AddEdge(graph.Edge{From: symbol.ID, To: other.ID, Kind: kind, File: this.path, Line: symbol.Line})
+	return symbol.ID
 }
 
 // lookup resolves a name in a file's scope: its own declaration, else the
@@ -395,6 +503,17 @@ func (this *fileState) references(g *graph.Graph, symbol *graph.Symbol, declarat
 // every other module it reaches, and binds the names it brings in.
 func (this *fileState) resolveImports(g *graph.Graph, imports *resolver, byPath map[string]*fileState) {
 	for _, spec := range this.imports {
+		if spec.glob {
+			for _, found := range imports.glob(this.path, spec.path) {
+				if target := byPath[found]; target.module != this.module {
+					g.AddImport(graph.Import{From: this.module, To: target.module, File: this.path, Line: spec.line})
+					this.reachable[target.module] = true
+				}
+			}
+
+			continue
+		}
+
 		found, ok := imports.resolve(this.path, spec.path)
 		if !ok {
 			continue
@@ -407,12 +526,12 @@ func (this *fileState) resolveImports(g *graph.Graph, imports *resolver, byPath 
 		}
 
 		if spec.reexport {
-			this.reexports = append(this.reexports, reexport{file: target, names: spec.names, all: spec.all})
+			this.reexports = append(this.reexports, reexport{file: target, names: spec.names, all: spec.all, line: spec.line})
 			continue
 		}
 
 		for _, name := range spec.names {
-			this.bindings[name.local] = importBinding{file: target, imported: name.imported, require: spec.require}
+			this.bindings[name.local] = importBinding{file: target, imported: name.imported, require: spec.require, line: spec.line}
 		}
 	}
 }
@@ -443,6 +562,22 @@ func (this *fileState) uniqueMethod(candidates []*graph.Symbol) string {
 	}
 
 	return found[0]
+}
+
+// renamed puts an alias's name in place of its target's in a signature,
+// as export { a as b } from asks, so the signature still declares the
+// alias.
+func renamed(signature, target, name string) string {
+	target = target[strings.LastIndexAny(target, "/.")+1:]
+	if target == name || name == "default" {
+		return signature
+	}
+
+	if found := regexp.MustCompile(`\b` + regexp.QuoteMeta(target) + `\b`).FindStringIndex(signature); found != nil {
+		return signature[:found[0]] + name + signature[found[1]:]
+	}
+
+	return signature
 }
 
 // contract reports whether a declaration is part of its module's contract:
@@ -573,7 +708,7 @@ func skippedDir(name string) bool {
 // source: not a declaration file, test or minified bundle.
 func isSource(name string) bool {
 	extension := path.Ext(name)
-	if !slices.Contains(sourceExtensions, extension) {
+	if !slices.Contains(sourceExtensions, extension) && !component(name) {
 		return false
 	}
 
@@ -588,6 +723,82 @@ func stem(file string) string {
 }
 
 // typeScript reports whether a file is TypeScript.
+// component reports whether a file is a Vue or Svelte single-file
+// component, whose script blocks hold its code.
+func component(name string) bool {
+	return path.Ext(name) == ".vue" || path.Ext(name) == ".svelte"
+}
+
+// componentScript keeps a component's <script> blocks and blanks the rest
+// of each line, so lines keep their numbers. A block with lang="ts" makes
+// the component TypeScript.
+func componentScript(src []byte) (script []byte, typed bool) {
+	result := make([]byte, 0, len(src))
+	lower := strings.ToLower(string(src))
+	at := 0
+	for {
+		open := strings.Index(lower[at:], "<script")
+		if open < 0 {
+			break
+		}
+
+		open += at
+		body := strings.Index(lower[open:], ">")
+		if body < 0 {
+			break
+		}
+
+		body += open + 1
+		end := strings.Index(lower[body:], "</script")
+		if end < 0 {
+			end = len(lower) - body
+		}
+
+		end += body
+		if attributes := lower[open:body]; scriptLang.MatchString(attributes) {
+			typed = true
+		}
+
+		result = append(result, blank(src[at:body])...)
+		result = append(result, src[body:end]...)
+		at = end
+	}
+
+	return append(result, blank(src[at:])...), typed
+}
+
+// componentDeclaration makes the default export of a component whose script
+// has none, as with <script setup> or Svelte: a function named after its
+// file in PascalCase, spanning the file. It references what its script
+// names and the components its template uses by name.
+func componentDeclaration(file string, src, script []byte, typed bool) *declaration {
+	var name strings.Builder
+	for _, part := range strings.FieldsFunc(stem(file), func(r rune) bool { return !isLetter(byte(r)) && !(r >= '0' && r <= '9') }) {
+		name.WriteString(strings.ToUpper(part[:1]) + part[1:])
+	}
+
+	if name.Len() == 0 || name.String()[0] >= '0' && name.String()[0] <= '9' {
+		name.Reset()
+		name.WriteString("Component")
+	}
+
+	result := parseFile([]byte("export default function "+name.String()+"() {}"), false).declarations[0]
+	result.line, result.endLine, result.docLine, result.hashText = 1, max(bytes.Count(src, []byte("\n")), 1), 0, string(src)
+	result.refs = lex(script, !typed)
+	for index, line := range strings.Split(string(src), "\n") {
+		for _, tag := range templateTag.FindAllStringSubmatch(line, -1) {
+			result.refs = append(result.refs, token{kind: tokenIdent, text: tag[1], line: index + 1})
+		}
+	}
+
+	return result
+}
+
+// blank keeps only the line breaks of text.
+func blank(text []byte) []byte {
+	return bytes.Repeat([]byte("\n"), bytes.Count(text, []byte("\n")))
+}
+
 func typeScript(name string) bool {
 	switch path.Ext(name) {
 	case ".ts", ".tsx", ".mts", ".cts":
