@@ -6,7 +6,7 @@
 #
 # The version defaults to the latest release, and the directory to
 # ~/.local/bin. In CI, without a checkout of treaty:
-#   curl -fsSL https://raw.githubusercontent.com/smarty/treaty/master/scripts/install.sh | sh -s v0.3.0
+#   curl -fsSL https://raw.githubusercontent.com/smarty/treaty/master/scripts/install.sh | sh -s v0.4.0
 set -eu
 
 version="${1:-latest}"

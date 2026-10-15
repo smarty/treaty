@@ -53,7 +53,9 @@ type glob struct {
 //     the workspace could not be written.
 //
 // Errors:
-//   - rules.ErrArchitecture: style is not one of rules.Styles.
+//   - rules.ErrArchitecture: style is not one of rules.Styles, or the
+//     code has nothing to propose it from, such as vertical for code with
+//     no directories to make boundaries of; nothing is written.
 func (this *Service) Init(style string) (path string, err error) {
 	if style == "" {
 		style = rules.StyleNone
@@ -63,17 +65,37 @@ func (this *Service) Init(style string) (path string, err error) {
 		return "", fmt.Errorf("%w: unknown architecture %q; use one of %s", rules.ErrArchitecture, style, strings.Join(rules.Styles, ", "))
 	}
 
-	if err := this.workspace.Init(); err != nil {
-		return "", err
-	}
-
 	g, err := this.extractor.Extract(this.root)
 	if err != nil {
 		return "", err
 	}
 
-	_, text := propose(g, style)
+	text, err := proposal(g, style)
+	if err != nil {
+		return "", err
+	}
+
+	if err := this.workspace.Init(); err != nil {
+		return "", err
+	}
+
 	return this.workspace.WriteConfigDraft(text)
+}
+
+// proposal drafts treaty.yaml for an architecture, refusing one Treaty
+// could not load, such as vertical or modular for code with no
+// directories to make boundaries of.
+func proposal(g *graph.Graph, style string) (text string, err error) {
+	architecture, text := propose(g, style)
+	if err := architecture.Validate(); err != nil {
+		if style == rules.StyleVertical || style == rules.StyleModular {
+			return "", fmt.Errorf("%w: found no directory with two or more packages to make boundaries of, so %s does not fit this code; choose another architecture, or write boundaries in treaty.yaml yourself", rules.ErrArchitecture, style)
+		}
+
+		return "", err
+	}
+
+	return text, nil
 }
 
 // adopt replaces treaty.yaml with a config proposed for an architecture, as
@@ -88,7 +110,11 @@ func (this *Service) adopt(style string) (path string, err error) {
 		return "", err
 	}
 
-	_, text := propose(g, style)
+	text, err := proposal(g, style)
+	if err != nil {
+		return "", err
+	}
+
 	return this.workspace.WriteConfig(text)
 }
 

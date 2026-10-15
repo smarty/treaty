@@ -732,3 +732,26 @@ func TestInitWritesTheCurrentVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestInitRefusesWhatItCannotPropose(t *testing.T) {
+	root := t.TempDir()
+	for name, text := range map[string]string{"go.mod": "module example.com/flat\n", "flat.go": "package flat\n\n// Run runs.\nfunc Run() {}\n"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	service := app.NewService(root, filesystem.NewConfig(root), NewExtractor(), []app.Dialect{NewDialect()},
+		nil, filesystem.NewWorkspace(root), nil, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	for _, style := range []string{rules.StyleVertical, rules.StyleModular} {
+		if _, err := service.Init(style); !errors.Is(err, rules.ErrArchitecture) || !strings.Contains(err.Error(), "no directory with two or more packages") {
+			t.Fatalf("%s on one flat package: %v", style, err)
+		}
+	}
+
+	for _, name := range []string{"treaty.yaml", filesystem.Directory} {
+		if _, err := os.Stat(filepath.Join(root, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a refused init must write nothing, yet %s exists", name)
+		}
+	}
+}

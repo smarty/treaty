@@ -66,13 +66,13 @@ macOS and Linux, on Intel and ARM, with SHA-256 checksums.
 latest into `~/.local/bin`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/smarty/treaty/master/scripts/install.sh | sh -s v0.3.0
+curl -fsSL https://raw.githubusercontent.com/smarty/treaty/master/scripts/install.sh | sh -s v0.4.0
 ```
 
 Or put `treaty` anywhere on your `PATH` yourself:
 
 ```sh
-version=v0.2.0 os=darwin arch=arm64   # or linux, and amd64
+version=v0.4.0 os=darwin arch=arm64   # or linux, and amd64
 curl -fsSLO "https://github.com/smarty/treaty/releases/download/$version/treaty_${version}_${os}_${arch}.tar.gz"
 tar -xzf "treaty_${version}_${os}_${arch}.tar.gz"
 mv "treaty_${version}_${os}_${arch}/treaty" /usr/local/bin/
@@ -373,7 +373,7 @@ report on the pull request and keeps the map of the change. On GitHub:
 - uses: actions/checkout@v7
   with:
     fetch-depth: 0
-- uses: smarty/treaty@v0.3.0
+- uses: smarty/treaty@v0.4.0
 ```
 
 On Bitbucket Pipelines it publishes a Code Insights report, with no token

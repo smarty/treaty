@@ -116,6 +116,8 @@ func (this *analysis) report() Report {
 		result.Failures = []string{}
 	}
 
+	result.Modules = []ModuleReport{}
+
 	for _, module := range this.head.Modules {
 		entry := ModuleReport{ID: module.ID, Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Metrics: this.metrics[module.ID]}
 		if before, ok := this.baseMetrics[module.ID]; ok {

@@ -11,7 +11,7 @@ branding:
 inputs:
   version:
     description: >-
-      The Treaty release to run, such as v0.3.0. The default runs the release
+      The Treaty release to run, such as v0.4.0. The default runs the release
       this action is pinned to, or the latest when it is pinned to a branch;
       "source" builds the action's own source with Go.
     default: action

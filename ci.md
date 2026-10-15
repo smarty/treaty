@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # the merge base needs the history
-      - uses: smarty/treaty@v0.3.0
+      - uses: smarty/treaty@v0.4.0
 ```
 
 The action installs the release it is pinned to, checks it against the
@@ -40,7 +40,7 @@ artifact, and fails the job when the check fails. Its inputs:
 
 | Input | Default | Does |
 | --- | --- | --- |
-| `version` | The release the action is pinned to | Another release to run, such as `v0.3.0`; `source` builds the action's own source with Go |
+| `version` | The release the action is pinned to | Another release to run, such as `v0.4.0`; `source` builds the action's own source with Go |
 | `target` | The pull request's base branch | The branch the pull request merges into |
 | `working-directory` | `.` | The directory holding `treaty.yaml`, for a repository that keeps it below the root |
 | `map` | `true` | Keep the map as the `treaty-map` artifact |
@@ -67,7 +67,7 @@ pipelines:
           name: Treaty
           script:
             - git fetch origin "+refs/heads/$BITBUCKET_PR_DESTINATION_BRANCH:refs/remotes/origin/$BITBUCKET_PR_DESTINATION_BRANCH"
-            - curl -fsSL https://raw.githubusercontent.com/smarty/treaty/v0.3.0/scripts/install.sh | sh -s v0.3.0 /usr/local/bin
+            - curl -fsSL https://raw.githubusercontent.com/smarty/treaty/v0.4.0/scripts/install.sh | sh -s v0.4.0 /usr/local/bin
             - treaty ci
           artifacts:
             - .treaty/out/map.html
@@ -87,7 +87,7 @@ report.
 nothing and prints the summary:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/smarty/treaty/v0.3.0/scripts/install.sh | sh -s v0.3.0 /usr/local/bin
+curl -fsSL https://raw.githubusercontent.com/smarty/treaty/v0.4.0/scripts/install.sh | sh -s v0.4.0 /usr/local/bin
 treaty ci --target main
 ```
 
