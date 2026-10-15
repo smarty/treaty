@@ -21,8 +21,16 @@ const usage = `usage: treaty [-C <dir>] <command> [flags]
                                               current directory
 
 commands:
-  check [--base <ref>] [--format json|text|summary]
-                                              run every check; exit 1 on failure
+  check [--base <ref> | --merge-base <branch>] [--format json|text|summary|markdown]
+                                              run every check; exit 1 on failure. A merge
+                                              base compares with where HEAD left branch,
+                                              as a pull request into it does
+  ci [--target <branch>]                      check a pull request in CI against its merge
+                                              base with target (default: the pull
+                                              request's, else the default branch), write
+                                              the map, and show the check on the pull
+                                              request in GitHub Actions or Bitbucket
+                                              Pipelines; exit 1 on failure
   overview [--base <ref>]                     print every module by layer and every module
                                               dependency, in a few kilobytes
   find <query> [--kind <kind>]                list symbols and struct fields whose id contains
@@ -37,7 +45,8 @@ commands:
   dump [--at <ref>]                           print the graph in AutoPen
   design new <name> [--from <target>]...      scaffold a design in .treaty/designs
   design check <name> [--format json|text]    compare a design with the code
-  map [--base <ref>] [--design <name>]...     render a static map to .treaty/out/map.html
+  map [--base <ref> | --merge-base <branch>] [--design <name>]...
+                                              render a static map to .treaty/out/map.html
   serve [--port <n>] [--open]                 keep this directory's live map open until
                                               interrupted
   mcp [--port <n>]                            serve the live graph to an agent over MCP on
@@ -189,6 +198,8 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 	flags.SetOutput(stderr)
 	architecture := flags.String("architecture", "", "architecture for init: clean, hexagonal, layered, modular or vertical")
 	base := flags.String("base", "", "git ref to diff against")
+	mergeBase := flags.String("merge-base", "", "branch whose merge base with HEAD to diff against")
+	target := flags.String("target", "", "branch a pull request merges into")
 	at := flags.String("at", "", "git ref to read instead of the working tree")
 	format := flags.String("format", "json", "json or text")
 	port := flags.Int("port", 7878, "port of the treaty server, the same for every session")
@@ -204,6 +215,17 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 		return ErrUsage
 	}
 
+	// A merge base stands in for --base, for the commands that take one.
+	if *mergeBase != "" {
+		if *base != "" {
+			return ErrUsage
+		}
+
+		if *base, _, err = service.PullRequestBase(*mergeBase); err != nil {
+			return err
+		}
+	}
+
 	switch command {
 	case "check":
 		report, err := service.Check(*base)
@@ -212,8 +234,11 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 		}
 
 		render := func() string { return checkText(report) }
-		if *format == "summary" {
+		switch *format {
+		case "summary":
 			*format, render = "text", report.Summary
+		case "markdown":
+			*format, render = "text", report.Markdown
 		}
 
 		if err := write(stdout, *format, report, render); err != nil {
@@ -222,6 +247,26 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 
 		if len(report.Failures) > 0 {
 			return failure{strings.Join(report.Failures, "; ")}
+		}
+
+		return nil
+	case "ci":
+		if len(positional) != 0 {
+			return ErrUsage
+		}
+
+		// A review that ran but could not be published still prints.
+		review, err := service.Review(*target)
+		if review.Report.Schema != "" {
+			fmt.Fprint(stdout, review.Report.Summary())
+			fmt.Fprintf(stdout, "map: %s\n", review.Map)
+		}
+
+		if err != nil {
+			return err
+		}
+		if len(review.Report.Failures) > 0 {
+			return failure{strings.Join(review.Report.Failures, "; ")}
 		}
 
 		return nil

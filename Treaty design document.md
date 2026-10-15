@@ -411,6 +411,18 @@ A test holds every default theme to the map's meaning: the five signals stay at 
 
 Every inspector view ends with the agent context slice for that selection and a copy button, collapsed. It opens only when the person opens it and stays open until the selection changes; the choice is never saved. Selecting an arrow lists its references as a table of source, reference and destination, each row colored added, removed, or changed when the destination's signature changed since the base; clicking a source or destination selects that symbol. The page supports light and dark themes, keyboard selection of every node, and respects reduced-motion settings.
 
+## Continuous integration
+
+*Decided and built Oct 15, 2026.*
+
+`treaty ci` checks a pull request in CI and shows the check on it; [ci.md](ci.md) is the setup. It compares with the merge base of HEAD and the target branch, as the live map's pull request baseline does, because comparing with the target's tip would blame the branch for whatever the target gained since. The target is the pull request's, from the service's environment, else the default branch, and a branch name is read as the remote's branch when the clone has it. A clone without the target, or too shallow to reach the merge base, fails with the command that fixes it rather than comparing with less.
+
+Each finding carries the file and line it shows at, and a verdict, `fail` or `warn`, when it counts toward the failures or warnings as `fail_on` and `warn_on` say. A removed symbol shows at its old file without a line, since the base's line numbers do not hold, and a finding about a module at its first file. Only findings with a verdict are annotated: annotating every new contract would bury the few that need action. The report itself lists those first and folds the rest away.
+
+The service is a driven port, Pipeline, found from the environment by the composition root. GitHub Actions gets workflow-command annotations, the Markdown report as the job summary, and the map's path as a step output. Bitbucket Pipelines gets a Code Insights report on the built commit with its annotations, sent through the proxy Pipelines provides, so no token is configured; the report is deleted before it is replaced, so an earlier build's annotations go with it. A PR comment was left out: it needs a token with write access, fails on pull requests from forks, and repeats what the summary and annotations show. Outside a service, `treaty ci` publishes nothing and prints the summary.
+
+The repository's `action.yml` installs the release it is pinned to with `scripts/install.sh`, which checks the archive against the release's checksums, runs `treaty ci`, keeps the map as an artifact, and fails the job when the check fails. Treaty's own CI runs the action built from source on each pull request, so the action is tested with the code.
+
 ## Live map and MCP server
 
 *Decided and built Sep 29, 2026.*

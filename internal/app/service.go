@@ -19,6 +19,7 @@ type Service struct {
 	config      ConfigSource
 	dialects    map[string]Dialect
 	extractor   SourceExtractor
+	pipeline    Pipeline
 	renderer    MapRenderer
 	preferences PreferenceStore
 	suites      []TestSuite

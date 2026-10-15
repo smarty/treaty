@@ -61,8 +61,15 @@ implementation detail, and it is judged through the contracts that reach it.
 ## Install
 
 Each [release](https://github.com/smarty/treaty/releases) has a binary for
-macOS and Linux, on Intel and ARM, with SHA-256 checksums. Put `treaty`
-anywhere on your `PATH`:
+macOS and Linux, on Intel and ARM, with SHA-256 checksums.
+`scripts/install.sh` installs one after checking its checksum, by default the
+latest into `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/smarty/treaty/master/scripts/install.sh | sh -s v0.3.0
+```
+
+Or put `treaty` anywhere on your `PATH` yourself:
 
 ```sh
 version=v0.2.0 os=darwin arch=arm64   # or linux, and amd64
@@ -306,7 +313,8 @@ a large repository (20,000 files or more, or one slow to walk).
 | Command | Does |
 | --- | --- |
 | `treaty -C <dir> <command>` | Runs any command on the repository at `dir`, as `git -C` does; `--dir <dir>` also works |
-| `treaty check [--base <ref>] [--format json\|text\|summary]` | Runs every check on the working tree, and on its diff from base when one is given; exits 1 on failure. `summary` lists only the verdict, notes, violations and breaking changes, and counts the rest |
+| `treaty check [--base <ref> \| --merge-base <branch>] [--format json\|text\|summary\|markdown]` | Runs every check on the working tree, and on its diff from base when one is given; exits 1 on failure. `--merge-base main` compares with where HEAD left `main`, as a pull request into it does. `summary` lists only the verdict, notes, violations and breaking changes, and counts the rest; `markdown` is the report a pull request shows |
+| `treaty ci [--target <branch>]` | Checks a pull request against its merge base with the target, writes its map, and shows the check on the pull request in GitHub Actions or Bitbucket Pipelines; exits 1 on failure. See [ci.md](ci.md) |
 | `treaty overview [--base <ref>]` | Prints every module by layer and every module dependency, in a few kilobytes |
 | `treaty find <query> [--kind <kind>]` | Lists symbols and struct fields whose id contains the query, with file:line and signature |
 | `treaty slice <target> [--format text\|json]` | Prints a context slice, one line per entry with file:line; `--format json` for the full form |
@@ -316,7 +324,7 @@ a large repository (20,000 files or more, or one slow to walk).
 | `treaty dump [--at <ref>]` | Prints the graph in AutoPen |
 | `treaty design new <name> [--from <target>]...` | Scaffolds a design in `.treaty/designs/` from current contracts |
 | `treaty design check <name>` | Compares a design with the code |
-| `treaty map [--base <ref>] [--design <name>]...` | Renders a static map to `.treaty/out/map.html` |
+| `treaty map [--base <ref> \| --merge-base <branch>] [--design <name>]...` | Renders a static map to `.treaty/out/map.html` |
 | `treaty serve [--port <n>] [--open]` | Keeps this directory's live map open until interrupted |
 | `treaty mcp [--port <n>]` | Relays an agent session over MCP on stdio to the treaty server, starting it when needed |
 | `treaty restart [--port <n>]` | Stops the treaty server; open sessions start a new one and rejoin |
@@ -324,6 +332,23 @@ a large repository (20,000 files or more, or one slow to walk).
 | `treaty url` | Prints the live map's address for this directory |
 | `treaty here [--force]` | Registers Treaty in this repository's `.mcp.json` |
 | `treaty version` | Prints this build's version: the release's, or for a build from source the module version Go recorded |
+
+## In CI
+
+`treaty ci` checks a pull request against its merge base with the target
+branch, annotates each finding that fails or warns on its line, shows the
+report on the pull request and keeps the map of the change. On GitHub:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+- uses: smarty/treaty@v0.3.0
+```
+
+On Bitbucket Pipelines it publishes a Code Insights report, with no token
+needed. [ci.md](ci.md) has both setups, and what to do when a clone is too
+shallow to compare.
 
 ## AutoPen
 
@@ -347,7 +372,8 @@ questions, is in [Treaty design document.md](Treaty%20design%20document.md).
 ## Releasing
 
 CI runs `gofmt`, `go vet` and the tests on macOS and Linux for every push to
-`master` and every pull request. The tests include one that parses the live
+`master` and every pull request, and checks each pull request with Treaty
+itself, through `action.yml` built from source. The tests include one that parses the live
 map's script with Node, since the page has no build step to catch a syntax
 error.
 

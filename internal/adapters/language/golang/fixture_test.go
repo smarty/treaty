@@ -1,6 +1,7 @@
 package golang
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -569,5 +570,121 @@ func TestUnplacedModulesFailOrWarn(t *testing.T) {
 
 	if summary := report.Summary(); !strings.Contains(summary, "FAIL: 1 unclassified module(s)") {
 		t.Fatalf("summary:\n%s", summary)
+	}
+}
+
+// pipelineRecorder is a CI service that keeps what it is given.
+type pipelineRecorder struct {
+	target  string
+	reviews []app.Review
+}
+
+func (this *pipelineRecorder) Name() string   { return "recorder" }
+func (this *pipelineRecorder) Target() string { return this.target }
+
+func (this *pipelineRecorder) Publish(review app.Review) error {
+	this.reviews = append(this.reviews, review)
+	return nil
+}
+
+func TestReviewComparesWithTheMergeBase(t *testing.T) {
+	root := t.TempDir()
+	write := func(files map[string]string) {
+		for name, text := range files {
+			file := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	git := func(args ...string) {
+		if output, err := exec.Command("git", append([]string{"-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+
+	write(map[string]string{
+		"go.mod":      "module example.com/m\n",
+		"treaty.yaml": "version: 1\narchitecture: layered\nlayers:\n  web: [\"web/**\"]\n  store: [\"store/**\"]\nrules:\n  fail_on: [breaking_changes, layer_violation]\n  warn_on: [unclassified]\n",
+		"web/web.go":  "package web\n\nfunc Page() {}\n\nfunc Old() {}\n",
+		"store/db.go": "package store\n\nfunc Open() {}\n",
+		".gitignore":  ".treaty/\n",
+	})
+	git("init", "-q", "-b", "master")
+	git("add", ".")
+	git("commit", "-q", "-m", "base")
+
+	// The branch removes Old, makes store use web, and adds a module no
+	// layer places.
+	git("checkout", "-q", "-b", "feature")
+	write(map[string]string{
+		"web/web.go":     "package web\n\nfunc Page() {}\n",
+		"store/db.go":    "package store\n\nimport \"example.com/m/web\"\n\nfunc Open() { web.Page() }\n",
+		"tools/tools.go": "package tools\n\nfunc Run() {}\n",
+	})
+	git("add", ".")
+	git("commit", "-q", "-m", "feature")
+
+	// Master moves on after the branch left it: compared with master's tip,
+	// the branch would seem to remove Later.
+	git("checkout", "-q", "master")
+	write(map[string]string{"web/later.go": "package web\n\nfunc Later() {}\n"})
+	git("add", ".")
+	git("commit", "-q", "-m", "later")
+	git("checkout", "-q", "feature")
+
+	service := app.NewService(root, filesystem.NewConfig(root), NewExtractor(), []app.Dialect{NewDialect()},
+		gitvcs.New(root), filesystem.NewWorkspace(root), &viewRecorder{}, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	pipeline := &pipelineRecorder{target: "master"}
+	service.UsePipeline(pipeline)
+
+	review, err := service.Review("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pipeline.reviews) != 1 || review.Target != "master" || review.Map != filepath.Join(".treaty", "out", "map.html") {
+		t.Fatalf("published %d review(s), target %q, map %q", len(pipeline.reviews), review.Target, review.Map)
+	}
+
+	report := review.Report
+	if !slices.Equal(report.Failures, []string{"1 breaking change(s)", "1 layer violation(s)"}) || !slices.Equal(report.Warnings, []string{"1 unclassified module(s)"}) {
+		t.Fatalf("failures %v, warnings %v", report.Failures, report.Warnings)
+	}
+
+	type where struct {
+		kind, verdict, file string
+		line                int
+	}
+
+	var found []where
+	for _, finding := range report.Findings {
+		if finding.Verdict != "" {
+			found = append(found, where{finding.Kind, finding.Verdict, finding.File, finding.Line})
+		}
+	}
+
+	slices.SortFunc(found, func(a, b where) int { return strings.Compare(a.kind, b.kind) })
+	expected := []where{
+		{rules.FindingBreaking, rules.VerdictFail, "web/web.go", 0},
+		{rules.FindingLayerViolation, rules.VerdictFail, "store/db.go", 5},
+		{rules.FindingUnclassified, rules.VerdictWarn, "tools/tools.go", 0},
+	}
+
+	if !slices.Equal(found, expected) {
+		t.Fatalf("judged findings:\n got %+v\nwant %+v", found, expected)
+	}
+
+	if markdown := report.Markdown(); !strings.Contains(markdown, "### Treaty: ❌ fails") || !strings.Contains(markdown, "`store/db.go:5`") {
+		t.Fatalf("markdown:\n%s", markdown)
+	}
+
+	if _, _, err := service.PullRequestBase("nowhere"); !errors.Is(err, app.ErrNoTarget) {
+		t.Fatalf("a missing target: %v", err)
 	}
 }
