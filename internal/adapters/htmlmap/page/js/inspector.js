@@ -360,9 +360,10 @@ function inspect() {
     const p = h("p");
     if (e.removed) p.appendChild(document.createTextNode("Removed: the base had this dependency and the working tree no longer does. Its references are as they were in the base."));
     else {
-      p.appendChild(h("span", { class: "pill " + (e.violation ? "fail" : "pass") }, e.violation ? (e.existing ? "Existing violation" : "Violation") : "Allowed"));
+      p.appendChild(h("span", { class: "pill " + (e.violation ? "fail" : "pass") }, e.violation ? (e.ignored ? "Ignored violation" : e.existing ? "Existing violation" : "Violation") : "Allowed"));
       p.appendChild(document.createTextNode(` ${a.layer} → ${b.layer}: ${e.violation ? e.rule || "breaks the architecture's rules" : "allowed by the architecture's rules"}.`));
-      if (e.violation && e.existing) p.appendChild(document.createTextNode(" The base has it too, so it does not fail the check."));
+      if (e.violation && e.ignored) p.appendChild(document.createTextNode(` treaty.yaml ignores it: ${e.ignored}`));
+      else if (e.violation && e.existing) p.appendChild(document.createTextNode(" The base has it too, so it does not fail the check."));
     }
     box.appendChild(p);
     const refs = referenceTable(e);
@@ -415,15 +416,43 @@ function verdictBlock(q) {
   if (warnings.length) box.appendChild(h("div", { class: "detail" }, `Warns: ${warnings.join("; ")}`));
   q.appendChild(box);
 }
+// QUEUE_TABS are the review queue's tabs: the key, the name and what it
+// holds. All, the first and the default, shows every finding, labelled
+// with the tab it belongs to; each belongs to one of the other three.
+const QUEUE_TABS = [
+  ["all", "All", "Every finding, labelled with the tab it belongs to"],
+  ["new", "New", "What the change brings against the baseline, and what treaty.yaml ignored but has changed since"],
+  ["existing", "Existing", "What the baseline already had, so it does not fail the check"],
+  ["ignored", "Ignored", "What rules.ignore in treaty.yaml ignores, with its reason; it neither fails nor warns"],
+];
+function queueTabOf(f) { return f.ignored ? "ignored" : f.existing ? "existing" : "new"; }
 function buildQueue() {
   const q = document.getElementById("queue"); q.innerHTML = "";
   verdictBlock(q);
-  if (!D.findings.length) { q.appendChild(h("p", { class: "empty" }, "Nothing to review.")); return; }
-  for (const f of D.findings) {
-    const item = h("div", { class: "queue-item", tabindex: 0, role: "button" }); item.dataset.targets = JSON.stringify(f.targets);
+  const current = QUEUE_TABS.some(([key]) => key === state.queueTab) ? state.queueTab : "all";
+  const counts = { all: D.findings.length };
+  for (const f of D.findings) counts[queueTabOf(f)] = (counts[queueTabOf(f)] || 0) + 1;
+  const stale = current === "ignored" || current === "all" ? D.stale || [] : [];
+  const bar = h("div", { class: "queue-tabs", role: "tablist", "aria-label": "Review queue" });
+  for (const [key, name, about] of QUEUE_TABS) {
+    const tab = h("button", { type: "button", class: "map-tab", role: "tab", "aria-selected": String(key === current), title: about }, `${name} (${counts[key] || 0})`);
+    tab.addEventListener("click", () => { state.queueTab = key; buildQueue(); highlightQueue(); saveMapSettings({ queue: key }); });
+    bar.appendChild(tab);
+  }
+  q.appendChild(bar);
+  const shown = D.findings.filter(f => current === "all" || queueTabOf(f) === current);
+  if (!shown.length && !stale.length) { q.appendChild(h("p", { class: "empty" }, { new: "Nothing new to review.", existing: "Nothing the baseline already had.", ignored: "treaty.yaml ignores nothing here.", all: "Nothing to review." }[current])); return; }
+  for (const f of shown) {
+    const item = h("div", { class: "queue-item" + (f.ignored ? " ignored" : ""), tabindex: 0, role: "button" }); item.dataset.targets = JSON.stringify(f.targets);
     item.appendChild(h("span", { class: "sev " + f.severity, "aria-label": f.severity }, f.severity === "high" ? "!" : ""));
     const body = h("div"); body.appendChild(h("div", { class: "title" }, f.title)); body.appendChild(h("div", { class: "detail" }, f.detail));
-    if (f.verdict) body.appendChild(h("span", { class: "verdict-tag " + f.verdict, title: f.verdict === "fail" ? "Counts toward the check's failures: rules.fail_on lists it." : "Counts toward the check's warnings: rules.warn_on lists it." }, f.verdict === "fail" ? "fails the check" : "warns"));
+    const tags = h("div", { class: "queue-tags" });
+    if (current === "all") { const [, name, about] = QUEUE_TABS.find(([key]) => key === queueTabOf(f)); tags.appendChild(h("span", { class: "queue-tab-tag", title: `In the ${name} tab: ${about}` }, name)); }
+    if (f.verdict) tags.appendChild(h("span", { class: "verdict-tag " + f.verdict, title: f.verdict === "fail" ? "Counts toward the check's failures: rules.fail_on lists it." : "Counts toward the check's warnings: rules.warn_on lists it." }, f.verdict === "fail" ? "fails the check" : "warns"));
+    if (f.was_ignored) tags.appendChild(h("span", { class: "was-ignored", title: `treaty.yaml ignored it as “${f.was_ignored}”, but it has changed since, so it counts again until you ignore it anew.` }, "ignored before; changed since"));
+    if (tags.childNodes.length) body.appendChild(tags);
+    if (f.ignored) body.appendChild(h("div", { class: "detail ignored-reason" }, `Ignored: ${f.ignored}`));
+    if (LIVE && f.target && f.kind !== "implementation") body.appendChild(ignoreButton(f));
     item.appendChild(body);
     const pick = () => {
       const t = f.targets;
@@ -431,7 +460,45 @@ function buildQueue() {
       if (symbols.has(t[0])) return select({ type: "symbol", id: t[0] });
       if (modules.has(t[0])) return select({ type: "module", id: t[0] });
     };
-    item.addEventListener("click", pick); item.addEventListener("keydown", ev => { if (ev_is(ev)) { ev.preventDefault(); pick(); } });
+    item.addEventListener("click", pick); item.addEventListener("keydown", ev => { if (ev.target === item && ev_is(ev)) { ev.preventDefault(); pick(); } });
     q.appendChild(item);
+  }
+  for (const entry of stale) {
+    const item = h("div", { class: "queue-item ignored" }); item.dataset.targets = "[]";
+    item.appendChild(h("span", { class: "sev low", "aria-label": "stale" }, ""));
+    const body = h("div");
+    body.appendChild(h("div", { class: "title" }, `${entry.finding} ${entry.target}`));
+    body.appendChild(h("div", { class: "detail" }, `treaty.yaml ignores this${entry.line ? ` at line ${entry.line}` : ""}, but it is no longer in the code. Ignored: ${entry.reason}`));
+    if (LIVE) { const remove = h("button", { type: "button", class: "queue-action" }, "Remove from treaty.yaml"); remove.addEventListener("click", ev => { ev.stopPropagation(); setIgnored(entry.finding, entry.target, null); }); body.appendChild(remove); }
+    item.appendChild(body); q.appendChild(item);
+  }
+}
+// ignoreButton offers to ignore a finding in treaty.yaml, with a reason,
+// to ignore anew one that changed since, or to stop ignoring it.
+function ignoreButton(f) {
+  const label = f.ignored ? "Stop ignoring" : f.was_ignored ? "Ignore again…" : "Ignore…";
+  const title = f.ignored ? "Remove it from rules.ignore in treaty.yaml, so it counts again" : "Add it to rules.ignore in treaty.yaml, with a reason; it then neither fails nor warns until it changes";
+  const button = h("button", { type: "button", class: "queue-action", title }, label);
+  button.addEventListener("click", ev => {
+    ev.stopPropagation();
+    if (f.ignored) { setIgnored(f.kind, f.target, null); return; }
+    const r = button.getBoundingClientRect();
+    openPrompt(r.left, r.bottom + 4, `Why ignore ${f.title}?`, f.was_ignored || "", reason => { if (reason.trim()) setIgnored(f.kind, f.target, reason.trim()); else setStatus("not ignored: a reason is required", true); }, 500);
+  });
+  button.addEventListener("keydown", ev => ev.stopPropagation());
+  return button;
+}
+// setIgnored ignores a finding with a reason, or with null stops ignoring
+// it, in treaty.yaml; the map, the checks and agents follow once the server
+// has rebuilt.
+async function setIgnored(finding, target, reason) {
+  setStatus(reason === null ? `no longer ignoring ${target}…` : `ignoring ${target}…`);
+  try {
+    const response = await fetch(reason === null ? "api/unignore" : "api/ignore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reason === null ? { finding, target } : { finding, target, reason }) });
+    if (!response.ok) throw new Error((await response.text()).trim());
+    setStatus("");
+    showState(await response.json());
+  } catch (err) {
+    setStatus(`not changed: ${err.message}`, true);
   }
 }

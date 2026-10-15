@@ -34,6 +34,7 @@ rules:
 | `public` | list of globs | `modular` | the top of each boundary | The modules other boundaries may use. See [Boundaries](#boundaries). |
 | `rules.fail_on` | list of rule names | all | `[breaking_changes, layer_violation, dependency_cycles]` | Findings that fail `treaty check`. See [Rules](#rules). |
 | `rules.warn_on` | list of rule names | all | `[unclassified, ambiguous_boundaries]` | Findings that `treaty check` reports as warnings without failing. A rule in both lists fails. |
+| `rules.ignore` | list of entries, each with `finding`, `target`, `fingerprint` and `reason` | all | none | Single findings that neither fail nor warn, each with the reason. See [Ignoring a finding](#ignoring-a-finding). |
 
 Every other key is an error.
 
@@ -159,6 +160,52 @@ without fixing everything first, while the debt can't grow.
 `fail_on`: `breaking_changes` alone for `none`; adding `layer_violation` and
 `unclassified` for the layer architectures; adding `ambiguous_boundaries` for
 `vertical`, and `dependency_cycles` too for `modular`.
+
+## Ignoring a finding
+
+`rules.ignore` lists single findings that are expected, each with why:
+
+```yaml
+rules:
+  fail_on: [breaking_changes, layer_violation]
+  ignore:
+    - finding: variant_mismatch
+      target: go:internal/nn:block
+      fingerprint: "d1b1a6491c0d"
+      reason: The amd64 and arm64 kernels each use their own block size
+    - finding: layer_violation
+      target: go:internal/adapters/htmlmap -> go:internal/adapters/gitvcs
+      fingerprint: "4b0e8d1c22f9"
+      reason: Shared timestamp helper; moving it inward next quarter
+```
+
+- `finding` is the finding's kind, as reports name it: `breaking`,
+  `implementers`, `moved`, `compatible`, `new_contract`, `new_module`,
+  `layer_violation`, `cycle`, `unclassified`, `ambiguous_boundary` or
+  `variant_mismatch`. Implementation-only changes gather many symbols and
+  cannot be ignored.
+- `target` is the symbol or module the finding is about, by its id, or for a
+  dependency between modules `from -> to`. Kind and target identify the
+  finding however the code around it moves.
+- `fingerprint` sums up what the finding said when it was ignored, from the
+  data behind it, never its lines: the signatures for a breaking change, the
+  declarations for a variant mismatch, the module dependency for a
+  violation. When the finding changes, such as a constant's value or a
+  signature changing again, the fingerprint no longer matches, and the
+  finding counts again, as its kind, marked as ignored before, until it is
+  ignored anew.
+- `reason` is required, so a reviewer can judge it.
+
+An ignored finding neither fails nor warns, in `treaty check`, in CI or on
+the map, where the review queue lists it under Ignored with its reason. An
+entry whose target is no longer in the code is reported, so it can be
+removed. One whose target is still there but has no finding, such as a
+breaking change that has since merged, stays quietly: a later change to the
+same symbol is a different finding.
+
+You rarely write entries by hand. On the live map, every finding in the
+review queue has *Ignore…*, which asks for the reason and writes the entry
+with the fingerprint as it stands; *Stop ignoring* removes it.
 
 ## Versions
 

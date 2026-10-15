@@ -142,6 +142,14 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: v
 .verdict.fail { border-left-color: var(--high); }
 .verdict .title { font-weight: 600; word-break: break-word; }
 .verdict .detail { color: var(--muted); font-size: 12px; word-break: break-word; margin-top: 2px; }
+.queue-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; }
+.queue-item.ignored { opacity: .62; }
+.queue-item.ignored:hover, .queue-item.ignored.active { opacity: 1; }
+.queue-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.queue-tab-tag, .was-ignored { display: inline-block; margin-top: 4px; padding: 0 6px; border-radius: 9px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); }
+.was-ignored { border-style: dashed; border-color: var(--medium); color: var(--ink); }
+.ignored-reason { font-style: italic; }
+.queue-action { margin-top: 4px; font-size: 11px; padding: 1px 8px; }
 .verdict-tag { display: inline-block; margin-top: 4px; padding: 0 6px; border-radius: 9px; font-size: 11px; font-weight: 600; border: 1px solid var(--medium); color: var(--ink); }
 .verdict-tag.fail { border-color: var(--high); }
 .sev { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 700; margin-top: 2px; }

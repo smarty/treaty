@@ -44,6 +44,9 @@ type analysis struct {
 	baseMetrics map[string]rules.Metric
 	findings    []rules.Finding
 
+	// stale are the entries of rules.ignore whose target is gone.
+	stale []Ignore
+
 	// proofs is what the head tree's tests show about each contract.
 	proofs map[string]rules.ContractProof
 
@@ -149,7 +152,7 @@ func (this *Service) analyzeGraphs(config Config, head, base revision, baseRef s
 		rules.MarkExisting(result.violations, config.Architecture.Violations(base.graph))
 	}
 
-	result.findings = rules.Rank(head.graph, base.graph, result.changes, result.violations)
+	result.findings, result.stale = applyIgnores(rules.Rank(head.graph, base.graph, result.changes, result.violations), config.Ignores, head.graph)
 	return result
 }
 
@@ -214,97 +217,79 @@ func (this *analysis) warnings() []string {
 // problems describes, for each of the given kinds of finding, how many the
 // change brought: violations and cycle edges the base did not have,
 // breaking changes, and modules newly unclassified or claimed by two
-// boundaries.
+// boundaries, leaving out what treaty.yaml ignores. They are counted from
+// the findings, so the counts and the findings that fail or warn agree.
 func (this *analysis) problems(kinds []string) []string {
 	var result []string
 	counts := map[string]int{}
-	for _, violation := range this.violations {
-		if !violation.Existing {
-			counts[violation.Kind]++
-		}
-	}
-
-	for _, module := range this.head.Modules {
-		if kind := unplaced(module); kind != "" && !this.unplacedInBase(module.ID, kind) {
-			counts[kind]++
+	moved := 0
+	for _, finding := range this.findings {
+		kind := this.counted(finding)
+		counts[kind]++
+		if kind == rules.FindingBreaking && finding.Kind == rules.FindingMoved {
+			moved++
 		}
 	}
 
 	for _, kind := range kinds {
+		count := counts[kind]
+		if count == 0 {
+			continue
+		}
+
 		switch kind {
 		case rules.FindingLayerViolation:
-			if counts[kind] > 0 {
-				result = append(result, fmt.Sprintf("%d layer violation(s)", counts[kind]))
-			}
+			result = append(result, fmt.Sprintf("%d layer violation(s)", count))
 		case rules.FindingCycle:
-			if counts[kind] > 0 {
-				result = append(result, fmt.Sprintf("%d cycle edge(s) between boundaries", counts[kind]))
-			}
+			result = append(result, fmt.Sprintf("%d cycle edge(s) between boundaries", count))
 		case rules.FindingUnclassified:
-			if counts[kind] > 0 {
-				result = append(result, fmt.Sprintf("%d unclassified module(s)", counts[kind]))
-			}
+			result = append(result, fmt.Sprintf("%d unclassified module(s)", count))
 		case rules.FindingAmbiguous:
-			if counts[kind] > 0 {
-				result = append(result, fmt.Sprintf("%d module(s) claimed equally by two or more boundaries", counts[kind]))
-			}
+			result = append(result, fmt.Sprintf("%d module(s) claimed equally by two or more boundaries", count))
 		case rules.FindingBreaking:
-			if text := this.breaking(); text != "" {
-				result = append(result, text)
-			}
+			result = append(result, breakingText(count-moved, moved))
 		}
 	}
 
 	return result
 }
 
-// breaking counts the breaking changes, moved contracts among them.
-func (this *analysis) breaking() string {
-	changed, moved := 0, 0
-	for _, change := range this.changes {
-		switch {
-		case change.Kind == rules.ChangeBreaking || change.Kind == rules.ChangeRemoved:
-			changed++
-		case change.Kind == rules.ChangeMoved && !this.fromEntry(change):
-			moved++
-		}
-	}
-
-	// A moved contract breaks its importers like a removed one, so it
-	// counts, and the count says how many of each so it matches what the
-	// findings list.
+// breakingText counts the breaking changes, saying how many are moved
+// contracts so it matches what the findings list.
+func breakingText(changed, moved int) string {
 	switch {
-	case moved == 0 && changed > 0:
+	case moved == 0:
 		return fmt.Sprintf("%d breaking change(s)", changed)
-	case moved > 0 && changed == 0:
+	case changed == 0:
 		return fmt.Sprintf("%d breaking change(s), all moved contracts", moved)
-	case moved > 0:
-		return fmt.Sprintf("%d breaking change(s): %d changed or removed, %d moved", changed+moved, changed, moved)
 	}
 
-	return ""
+	return fmt.Sprintf("%d breaking change(s): %d changed or removed, %d moved", changed+moved, changed, moved)
 }
 
-// unplacedInBase reports whether the base had the module unplaced the same
-// way, so the change did not cause it.
-func (this *analysis) unplacedInBase(moduleID, kind string) bool {
-	if this.base == nil {
-		return false
+// counted names the kind of problem a finding counts as, the kind fail_on
+// and warn_on name, or empty when it counts as none: a violation or
+// unplaced module the base already had, a moved contract that left an
+// entry module nothing could import, anything treaty.yaml ignores, and
+// every kind that is no problem, such as a new contract.
+func (this *analysis) counted(finding rules.Finding) string {
+	if finding.Ignored != "" || finding.Existing {
+		return ""
 	}
 
-	before := this.base.Module(moduleID)
-	return before != nil && unplaced(before) == kind
-}
+	switch finding.Kind {
+	case rules.FindingBreaking, rules.FindingImplementers:
+		return rules.FindingBreaking
+	case rules.FindingMoved:
+		for _, change := range this.changes {
+			if change.Symbol == finding.Target && change.Kind == rules.ChangeMoved && this.fromEntry(change) {
+				return ""
+			}
+		}
 
-// unplaced names the kind of finding a module raises by not being placed:
-// ambiguous when boundaries tie for it, unclassified when nothing places
-// it, or empty when it is placed.
-func unplaced(module *graph.Module) string {
-	switch {
-	case len(module.Ambiguous) > 0:
-		return rules.FindingAmbiguous
-	case module.Layer == graph.LayerUnclassified:
-		return rules.FindingUnclassified
+		return rules.FindingBreaking
+	case rules.FindingLayerViolation, rules.FindingCycle, rules.FindingUnclassified, rules.FindingAmbiguous:
+		return finding.Kind
 	}
 
 	return ""

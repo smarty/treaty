@@ -221,6 +221,7 @@ async function loadMapSettings() {
   if (typeof saved.internals === "boolean") { setInternals(saved.internals); storeOption("internals", saved.internals); }
   else if (state.internals) saveMapSettings({ internals: true });
   state.regionNames = saved.names || {};
+  if (saved.queue) { state.queueTab = saved.queue; if (D) buildQueue(); }
   if (modules) render();
 }
 function startLive() {

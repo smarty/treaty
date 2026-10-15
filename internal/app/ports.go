@@ -71,6 +71,9 @@ type Config struct {
 	FailOn       []string
 	WarnOn       []string
 
+	// Ignores are the findings rules.ignore lists.
+	Ignores []Ignore
+
 	// Unversioned is true when treaty.yaml has no version line, which
 	// makes it version 0, the format from before versions.
 	Unversioned bool
@@ -102,6 +105,18 @@ type ConfigSource interface {
 	//   - path: where the config was written.
 	//   - err: there is no such boundary, or the new name is taken.
 	RenameBoundary(from, to string) (path string, err error)
+
+	// Ignore adds an entry to rules.ignore, or updates the one that names
+	// the same finding and target, keeping the rest of the file as it is.
+	//
+	// Returns:
+	//   - path: where the config was written.
+	//   - err: there is no config, or the entry is not one it would load.
+	Ignore(ignore Ignore) (path string, err error)
+
+	// Unignore removes the entry of rules.ignore that names a finding and
+	// target, if there is one.
+	Unignore(finding, target string) (path string, err error)
 
 	// Text reads the config file as it is, for a person to edit.
 	//
@@ -200,6 +215,10 @@ type MapSettings struct {
 	Follow    *bool                        `json:"follow,omitempty"`
 	Internals *bool                        `json:"internals,omitempty"`
 	Names     map[string]map[string]string `json:"names,omitempty"`
+
+	// Queue is the review queue's tab: all, the default, new, existing or
+	// ignored.
+	Queue string `json:"queue,omitempty"`
 }
 
 // Position is where a person put a module on the map, in map units.

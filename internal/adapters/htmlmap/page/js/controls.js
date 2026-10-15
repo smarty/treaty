@@ -226,11 +226,12 @@ function openMenu(x, y, title, items) {
   const first = enabled()[0];
   if (first) first.focus();
 }
-// openPrompt asks for a line of text at a screen point. Enter or Save hands
-// it to onDone; Escape, Cancel or a press elsewhere drops it.
-function openPrompt(x, y, title, value, onDone) {
+// openPrompt asks for a line of text at a screen point, of at most limit
+// characters, 128 unless given. Enter or Save hands it to onDone; Escape,
+// Cancel or a press elsewhere drops it.
+function openPrompt(x, y, title, value, onDone, limit = 128) {
   const node = h("form", { class: "popup prompt", role: "dialog", "aria-label": title });
-  const input = h("input", { type: "text", value, spellcheck: "false", "aria-label": title, maxlength: 128 });
+  const input = h("input", { type: "text", value, spellcheck: "false", "aria-label": title, maxlength: limit });
   const cancel = h("button", { type: "button" }, "Cancel");
   const actions = h("div", { class: "prompt-actions" });
   actions.append(cancel, h("button", { type: "submit" }, "Save"));

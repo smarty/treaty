@@ -58,6 +58,7 @@ func (this *Service) Check(base string) (result Report, err error) {
 func (this *Service) checkReport(base string, analysis *analysis) (result Report) {
 	result = analysis.report()
 	result.Notes = append(this.notes(base, analysis), result.Notes...)
+	result.Notes = append(result.Notes, staleNotes(analysis.stale)...)
 	if analysis.config.Unversioned {
 		result.Notes = append(result.Notes, unversionedNote)
 	}
@@ -127,10 +128,8 @@ func (this *analysis) report() Report {
 	return result
 }
 
-// judge marks each finding that counts toward the failures or warnings,
-// counted as problems counts them: a violation or unplaced module the base
-// did not have, or a breaking change, such as a moved contract unless it
-// left an entry module nothing could import.
+// judge marks each finding that counts toward the failures or warnings, as
+// problems counts them.
 func (this *analysis) judge(findings []rules.Finding) []rules.Finding {
 	verdicts := map[string]string{}
 	for _, kind := range this.config.WarnOn {
@@ -141,38 +140,9 @@ func (this *analysis) judge(findings []rules.Finding) []rules.Finding {
 		verdicts[kind] = rules.VerdictFail
 	}
 
-	harmless := map[string]bool{}
-	for _, change := range this.changes {
-		if change.Kind == rules.ChangeMoved && this.fromEntry(change) {
-			harmless[change.Symbol] = true
-		}
-	}
-
 	result := make([]rules.Finding, len(findings))
 	for i, finding := range findings {
-		kind := finding.Kind
-		switch finding.Kind {
-		case rules.FindingBreaking:
-		case rules.FindingImplementers:
-			kind = rules.FindingBreaking
-		case rules.FindingMoved:
-			kind = rules.FindingBreaking
-			if harmless[finding.Targets[0]] {
-				kind = ""
-			}
-		case rules.FindingLayerViolation, rules.FindingCycle:
-			if finding.Existing {
-				kind = ""
-			}
-		case rules.FindingUnclassified, rules.FindingAmbiguous:
-			if this.unplacedInBase(finding.Targets[0], finding.Kind) {
-				kind = ""
-			}
-		default:
-			kind = ""
-		}
-
-		finding.Verdict = verdicts[kind]
+		finding.Verdict = verdicts[this.counted(finding)]
 		result[i] = finding
 	}
 
@@ -213,6 +183,13 @@ func (this Report) Summary() string {
 		fmt.Fprintf(&builder, "note: %s\n", note)
 	}
 
+	ignoredEdges := map[string]bool{}
+	for _, finding := range this.Findings {
+		if finding.Ignored != "" {
+			ignoredEdges[finding.Target] = true
+		}
+	}
+
 	if len(this.Violations) > 0 {
 		fmt.Fprintf(&builder, "violations (%d):\n", len(this.Violations))
 		for _, violation := range this.Violations {
@@ -222,14 +199,23 @@ func (this Report) Summary() string {
 				existing = " (existing)"
 			}
 
+			if ignoredEdges[rules.EdgeTarget(violation.From, violation.To)] {
+				existing += " (ignored)"
+			}
+
 			fmt.Fprintf(&builder, "  %s → %s%s: %s; first %s at %s:%d\n", violation.From, violation.To, existing, violation.Rule, first, file, line)
 		}
 	}
 
 	counts := map[string]int{}
 	var breaking []rules.Finding
-	moved := 0
+	moved, ignored := 0, 0
 	for _, finding := range this.Findings {
+		if finding.Ignored != "" {
+			ignored++
+			continue
+		}
+
 		switch finding.Kind {
 		case rules.FindingBreaking, rules.FindingImplementers:
 			breaking = append(breaking, finding)
@@ -269,6 +255,10 @@ func (this Report) Summary() string {
 		}
 
 		fmt.Fprintf(&builder, "other findings: %s\n", strings.Join(parts, ", "))
+	}
+
+	if ignored > 0 {
+		fmt.Fprintf(&builder, "ignored: %d finding(s), by rules.ignore in treaty.yaml\n", ignored)
 	}
 
 	return builder.String()

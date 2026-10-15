@@ -261,7 +261,12 @@ the line of each glob that places it, which the inspector also lists under
 
 Above the review queue, the map says what `treaty check` would against the
 baseline: what fails the check and what warns. Each finding that counts is
-tagged *fails the check* or *warns*.
+tagged *fails the check* or *warns*. The queue's tabs are **All**, the default,
+which labels each item with the tab it belongs to; **New**, what the change
+brings; **Existing**, what the baseline already had; and **Ignored**. *Ignore…* on
+an item asks why and adds it to `rules.ignore` in `treaty.yaml`, so it
+neither fails nor warns until it changes; then it returns to New, marked as
+ignored before. See [Ignoring a finding](configuration.md#ignoring-a-finding).
 
 Right-click a band, boundary or area (`layered`, `vertical`, `modular` and
 `none`) for its menu: *Rename…* gives it another name on this map,

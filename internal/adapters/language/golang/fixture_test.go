@@ -694,3 +694,117 @@ func TestReviewComparesWithTheMergeBase(t *testing.T) {
 		t.Fatalf("a missing target: %v", err)
 	}
 }
+
+func TestIgnoredFindings(t *testing.T) {
+	root := t.TempDir()
+	write := func(files map[string]string) {
+		for name, text := range files {
+			file := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	git := func(args ...string) {
+		if output, err := exec.Command("git", append([]string{"-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+
+	write(map[string]string{
+		"go.mod":      "module example.com/m\n",
+		"treaty.yaml": "version: 1\narchitecture: layered\nlayers:\n  web: [\"web/**\"]\n  store: [\"store/**\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
+		"web/web.go":  "package web\n\nfunc Page() {}\n",
+		"store/db.go": "package store\n\nfunc Open() {}\n",
+		".gitignore":  ".treaty/\n",
+	})
+	git("init", "-q")
+	git("add", ".")
+	git("commit", "-q", "-m", "base")
+
+	// The change breaks Page, makes store use web, and adds tools, which no
+	// layer places.
+	write(map[string]string{
+		"web/web.go":     "package web\n\nfunc Page(title string) {}\n",
+		"store/db.go":    "package store\n\nimport \"example.com/m/web\"\n\nfunc Open() { web.Page(\"\") }\n",
+		"tools/tools.go": "package tools\n\nfunc Run() {}\n",
+	})
+
+	config := filesystem.NewConfig(root)
+	service := app.NewService(root, config, NewExtractor(), []app.Dialect{NewDialect()},
+		gitvcs.New(root), filesystem.NewWorkspace(root), &viewRecorder{}, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	check := func() app.Report {
+		t.Helper()
+		report, err := service.Check("HEAD")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return report
+	}
+
+	find := func(report app.Report, kind string) rules.Finding {
+		t.Helper()
+		for _, finding := range report.Findings {
+			if finding.Kind == kind {
+				return finding
+			}
+		}
+
+		t.Fatalf("no %s finding in %+v", kind, report.Findings)
+		return rules.Finding{}
+	}
+
+	report := check()
+	if !slices.Equal(report.Failures, []string{"1 breaking change(s)", "1 layer violation(s)", "1 unclassified module(s)"}) {
+		t.Fatalf("before ignoring: %v", report.Failures)
+	}
+
+	for _, kind := range []string{rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingUnclassified} {
+		finding := find(report, kind)
+		if _, err := config.Ignore(app.Ignore{Finding: kind, Target: finding.Target, Fingerprint: finding.Fingerprint, Reason: "expected: " + kind}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report = check()
+	if len(report.Failures) != 0 || find(report, rules.FindingLayerViolation).Ignored != "expected: layer_violation" || !strings.Contains(report.Summary(), "ignored: 3 finding(s)") {
+		t.Fatalf("ignored: failures %v\n%s", report.Failures, report.Summary())
+	}
+
+	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), "target: go:store -> go:web") || !strings.Contains(string(data), "reason: 'expected: layer_violation'") {
+		t.Fatalf("treaty.yaml:\n%s", data)
+	}
+
+	// Breaking Page another way changes the finding: it counts again,
+	// marked as once ignored.
+	write(map[string]string{"web/web.go": "package web\n\nfunc Page(title string, size int) {}\n", "store/db.go": "package store\n\nimport \"example.com/m/web\"\n\nfunc Open() { web.Page(\"\", 0) }\n"})
+	report = check()
+	if breaking := find(report, rules.FindingBreaking); breaking.Ignored != "" || breaking.WasIgnored != "expected: breaking" || breaking.Verdict != rules.VerdictFail || !slices.Equal(report.Failures, []string{"1 breaking change(s)"}) {
+		t.Fatalf("changed since ignored: %+v, failures %v", breaking, report.Failures)
+	}
+
+	// An entry whose target is gone is stale.
+	if err := os.RemoveAll(filepath.Join(root, "tools")); err != nil {
+		t.Fatal(err)
+	}
+
+	if report = check(); !slices.ContainsFunc(report.Notes, func(note string) bool {
+		return strings.Contains(note, "ignores unclassified go:tools at line") && strings.Contains(note, "no longer in the code")
+	}) {
+		t.Fatalf("notes: %v", report.Notes)
+	}
+
+	if _, err := config.Unignore(rules.FindingUnclassified, "go:tools"); err != nil {
+		t.Fatal(err)
+	}
+
+	if report = check(); slices.ContainsFunc(report.Notes, func(note string) bool { return strings.Contains(note, "go:tools") }) {
+		t.Fatalf("unignored, the note must go: %v", report.Notes)
+	}
+}

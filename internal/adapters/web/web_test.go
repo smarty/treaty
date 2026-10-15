@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -514,6 +515,55 @@ func TestMoveModulesBetweenBoundaries(t *testing.T) {
 
 	post(t, base+"/api/boundary", "application/json", `{"from":"sales","to":"billing"}`, http.StatusBadRequest)
 	post(t, base+"/api/boundary", "application/json", `{"from":"returns","to":"refunds"}`, http.StatusBadRequest)
+}
+
+func TestIgnoreFindings(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/shop\n")
+	write(t, root, "treaty.yaml", "version: 1\narchitecture: layered\nlayers:\n  web: [\"web/**\"]\nrules:\n  fail_on: [unclassified] # strict\n")
+	write(t, root, "web/web.go", "package web\n\nfunc Page() {}\n")
+	write(t, root, "tools/tools.go", "package tools\n\nfunc Run() {}\n")
+	git(t, root, "init", "-q")
+
+	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	live := app.NewLive(service, filesystem.NewWatcher(root))
+	stop := make(chan struct{})
+	defer close(stop)
+	live.Start(stop)
+	_, base := listen(t, root, live)
+	view := func() (result struct {
+		Failures []string        `json:"failures"`
+		Findings []rules.Finding `json:"findings"`
+	}) {
+		_ = json.Unmarshal(get(t, base+"/api/view", http.StatusOK), &result)
+		return result
+	}
+
+	if got := view(); len(got.Failures) != 1 {
+		t.Fatalf("tools is unclassified and fails: %v", got.Failures)
+	}
+
+	post(t, base+"/api/ignore", "application/json", `{"finding":"unclassified","target":"go:tools","reason":"  "}`, http.StatusBadRequest)
+	post(t, base+"/api/ignore", "application/json", `{"finding":"unclassified","target":"go:nowhere","reason":"x"}`, http.StatusBadRequest)
+	post(t, base+"/api/ignore", "application/json", `{"finding":"unclassified","target":"go:tools","reason":"Scripts nobody imports"}`, http.StatusOK)
+	got := view()
+	if len(got.Failures) != 0 || !slices.ContainsFunc(got.Findings, func(finding rules.Finding) bool {
+		return finding.Target == "go:tools" && finding.Ignored == "Scripts nobody imports"
+	}) {
+		t.Fatalf("ignored: %+v", got)
+	}
+
+	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), "# strict") || !strings.Contains(string(data), "reason: Scripts nobody imports") {
+		t.Fatalf("treaty.yaml:\n%s", data)
+	}
+
+	post(t, base+"/api/unignore", "application/json", `{"finding":"unclassified","target":"go:tools"}`, http.StatusOK)
+	if got := view(); len(got.Failures) != 1 {
+		t.Fatalf("unignored, tools fails again: %v", got.Failures)
+	}
+
+	post(t, base+"/api/map-settings", "application/json", `{"queue":"ignored"}`, http.StatusOK)
+	post(t, base+"/api/map-settings", "application/json", `{"queue":"later"}`, http.StatusBadRequest)
 }
 
 func TestRunTests(t *testing.T) {

@@ -7,10 +7,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/smarty/treaty/internal/app"
 	"github.com/smarty/treaty/internal/graph"
 	"github.com/smarty/treaty/internal/rules"
 )
@@ -131,6 +133,113 @@ func (this *Config) RenameBoundary(from, to string) (path string, err error) {
 	}
 
 	return path, os.WriteFile(path, text, 0o644)
+}
+
+// Ignore adds an entry to rules.ignore, or, when one already names the
+// finding and target, gives it the new fingerprint and reason in place.
+// Comments and everything else in the file are kept.
+//
+// Parameters:
+//   - ignore: the entry; its Line is not used.
+//
+// Returns:
+//   - path: where treaty.yaml was written.
+//   - err: treaty.yaml is missing or invalid, or the entry is not one it
+//     would load.
+//
+// Errors:
+//   - ErrNoConfig: there is no treaty.yaml to edit.
+//   - ErrIgnore: the entry is incomplete or names a finding that cannot be
+//     ignored.
+func (this *Config) Ignore(ignore app.Ignore) (path string, err error) {
+	path, document, _, err := this.document()
+	if err != nil {
+		return "", err
+	}
+
+	list := child(child(document.Content[0], "rules", yaml.MappingNode, ""), "ignore", yaml.SequenceNode, "")
+	if len(list.Content) == 0 {
+		list.Style = 0
+	}
+
+	text := func(value string, style yaml.Style) *yaml.Node {
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value, Style: style}
+	}
+
+	entry := ignoreEntry(list, ignore.Finding, ignore.Target)
+	if entry == nil {
+		entry = &yaml.Node{Kind: yaml.MappingNode}
+		for _, key := range ignoreKeys {
+			entry.Content = append(entry.Content, text(key, 0), text("", 0))
+		}
+
+		list.Content = append(list.Content, entry)
+	}
+
+	// A fingerprint of digits alone would read as a number, so it is
+	// always quoted.
+	for key, value := range map[string]*yaml.Node{"finding": text(ignore.Finding, 0), "target": text(ignore.Target, 0), "fingerprint": text(ignore.Fingerprint, yaml.DoubleQuotedStyle), "reason": text(ignore.Reason, 0)} {
+		for i := 0; i+1 < len(entry.Content); i += 2 {
+			if entry.Content[i].Value == key {
+				value.LineComment = entry.Content[i+1].LineComment
+				entry.Content[i+1] = value
+			}
+		}
+	}
+
+	data, _, err := encodeConfig(document)
+	if err != nil {
+		return "", err
+	}
+
+	return path, os.WriteFile(path, data, 0o644)
+}
+
+// Unignore removes the entry of rules.ignore that names a finding and
+// target, if there is one.
+//
+// Returns:
+//   - path: where treaty.yaml was written.
+//   - err: treaty.yaml is missing or invalid.
+//
+// Errors:
+//   - ErrNoConfig: there is no treaty.yaml to edit.
+func (this *Config) Unignore(finding, target string) (path string, err error) {
+	path, document, _, err := this.document()
+	if err != nil {
+		return "", err
+	}
+
+	list := mappingValue(mappingValue(document.Content[0], "rules"), "ignore")
+	entry := ignoreEntry(list, finding, target)
+	if entry == nil {
+		return path, nil
+	}
+
+	list.Content = slices.DeleteFunc(list.Content, func(item *yaml.Node) bool { return item == entry })
+	data, _, err := encodeConfig(document)
+	if err != nil {
+		return "", err
+	}
+
+	return path, os.WriteFile(path, data, 0o644)
+}
+
+// ignoreEntry finds the entry of rules.ignore for a finding and target.
+func ignoreEntry(list *yaml.Node, finding, target string) *yaml.Node {
+	if list == nil || list.Kind != yaml.SequenceNode {
+		return nil
+	}
+
+	for _, entry := range list.Content {
+		if entry.Kind == yaml.MappingNode {
+			if kind, at := mappingValue(entry, "finding"), mappingValue(entry, "target"); kind != nil && at != nil && kind.Value == finding && at.Value == target {
+				return entry
+			}
+		}
+	}
+
+	return nil
 }
 
 // document reads treaty.yaml as a YAML tree to edit, with the architecture

@@ -14,6 +14,11 @@ const maxRegionName = 128
 
 var ErrMapSettings = errors.New("invalid map settings")
 
+// QueueTabs are the review queue's tabs: everything, the default, then
+// what the change brings, what the baseline already had and what
+// treaty.yaml ignores.
+var QueueTabs = []string{"all", "new", "existing", "ignored"}
+
 // MapSettings reads the person's choices on this repository's map.
 //
 // Returns:
@@ -41,6 +46,10 @@ func (this *Live) MapSettings() (result MapSettings, err error) {
 //   - ErrMapSettings: a region name is for an unknown architecture, or a
 //     label or name is too long or holds control characters.
 func (this *Live) SaveMapSettings(update MapSettings) (result MapSettings, err error) {
+	if update.Queue != "" && !slices.Contains(QueueTabs, update.Queue) {
+		return MapSettings{}, fmt.Errorf("%w: the review queue has no tab %q", ErrMapSettings, update.Queue)
+	}
+
 	for architecture, names := range update.Names {
 		if !slices.Contains(rules.Styles, architecture) {
 			return MapSettings{}, fmt.Errorf("%w: unknown architecture %q", ErrMapSettings, architecture)
@@ -70,6 +79,10 @@ func (this *Live) SaveMapSettings(update MapSettings) (result MapSettings, err e
 
 	if update.Internals != nil {
 		result.Internals = update.Internals
+	}
+
+	if update.Queue != "" {
+		result.Queue = update.Queue
 	}
 
 	for architecture, names := range update.Names {

@@ -333,6 +333,13 @@ func TestLoadRejectsWhatItCannotRead(t *testing.T) {
 		{"an old rule name", "version: 1\nrules:\n  fail_on: [breaking]\n", ErrUnknownRule, `line 3: fail_on: unknown rule "breaking"; since version 1 it is "breaking_changes"`},
 		{"a rule name from before version 1", "rules:\n  fail_on: [cycle]\n", ErrUnknownRule, `line 2: fail_on: unknown rule "cycle"; since version 1 it is "dependency_cycles"`},
 		{"slices from before boundaries", "architecture: modular\nslices: [\"internal/*\"]\n", ErrUnknownKey, `unknown key "slices"`},
+		{"an ignore without a reason", "rules:\n  ignore:\n    - finding: unclassified\n      target: go:web\n      fingerprint: \"0a1b2c3d4e5f\"\n", ErrIgnore, "line 3: invalid ignore entry: the entry has no reason: say why it is ignored"},
+		{"an ignore with an empty reason", "rules:\n  ignore:\n    - finding: unclassified\n      target: go:web\n      fingerprint: \"0a1b2c3d4e5f\"\n      reason: \" \"\n", ErrIgnore, "line 6: invalid ignore entry: reason must be text, and not empty"},
+		{"a misspelled finding", "rules:\n  ignore:\n    - finding: unclasified\n      target: go:web\n      fingerprint: \"0a1b2c3d4e5f\"\n      reason: scratch\n", ErrIgnore, `"unclasified" is not a kind of finding that can be ignored; did you mean "unclassified"?`},
+		{"an implementation finding", "rules:\n  ignore:\n    - finding: implementation\n      target: go:web\n      fingerprint: \"0a1b2c3d4e5f\"\n      reason: scratch\n", ErrIgnore, `"implementation" is not a kind of finding that can be ignored`},
+		{"a misspelled ignore key", "rules:\n  ignore:\n    - finding: unclassified\n      target: go:web\n      fingerprnt: \"0a1b2c3d4e5f\"\n      reason: scratch\n", ErrUnknownKey, `unknown key "fingerprnt" under rules.ignore; did you mean "fingerprint"?`},
+		{"an ignore given twice", "rules:\n  ignore:\n    - {finding: unclassified, target: go:web, fingerprint: \"1\", reason: a}\n    - {finding: unclassified, target: go:web, fingerprint: \"2\", reason: b}\n", ErrIgnore, "line 4: invalid ignore entry: line 3 already ignores unclassified go:web"},
+		{"ignore that is not a list", "rules:\n  ignore: go:web\n", ErrIgnore, "rules.ignore must be a list of entries"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()

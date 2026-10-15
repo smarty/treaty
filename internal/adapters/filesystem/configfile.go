@@ -11,12 +11,17 @@ import (
 
 	"github.com/smarty/treaty/internal/app"
 	"github.com/smarty/treaty/internal/graph"
+	"github.com/smarty/treaty/internal/rules"
 )
 
 var (
 	ErrConfigVersion = errors.New("unsupported treaty.yaml version")
 	ErrUnknownKey    = errors.New("unknown key")
 	ErrUnknownRule   = errors.New("unknown rule")
+	ErrIgnore        = errors.New("invalid ignore entry")
+
+	// ignoreKeys are the keys of each entry of rules.ignore, all required.
+	ignoreKeys = []string{"finding", "target", "fingerprint", "reason"}
 
 	// renamedRules maps rule names from before version 1 to their names
 	// since, so the error for an old name can give the new one.
@@ -26,7 +31,7 @@ var (
 	// path of keys that leads to it.
 	configKeys = map[string][]string{
 		"":               {"version", "architecture", "composition", "layers", "shared", "boundaries", "public", "rules"},
-		"rules":          {"fail_on", "warn_on"},
+		"rules":          {"fail_on", "warn_on", "ignore"},
 		"layers.adapter": {graph.SideDriving, graph.SideDriven},
 	}
 )
@@ -88,6 +93,10 @@ func decodeConfig(data []byte) (result configFile, versioned bool, err error) {
 			if err := checkRules(value(rulesNode, key), key); err != nil {
 				return result, versioned, err
 			}
+		}
+
+		if err := checkIgnores(value(rulesNode, "ignore")); err != nil {
+			return result, versioned, err
 		}
 	}
 
@@ -223,4 +232,84 @@ func editDistance(a, b string) int {
 	}
 
 	return previous[len(b)]
+}
+
+// checkIgnores refuses an entry of rules.ignore that is not a mapping of
+// exactly the ignore keys to text, names a kind of finding that cannot be
+// ignored, has no reason, or repeats another entry's finding and target.
+func checkIgnores(list *yaml.Node) error {
+	if list == nil || list.Tag == "!!null" {
+		return nil
+	}
+
+	if list.Kind != yaml.SequenceNode {
+		return fmt.Errorf("line %d: %w: rules.ignore must be a list of entries, each with %s", list.Line, ErrIgnore, strings.Join(ignoreKeys, ", "))
+	}
+
+	var kinds []string
+	for _, kind := range rules.FindingKinds {
+		if app.Ignorable(kind) {
+			kinds = append(kinds, kind)
+		}
+	}
+
+	seen := map[[2]string]int{}
+	for _, entry := range list.Content {
+		if entry.Kind != yaml.MappingNode {
+			return fmt.Errorf("line %d: %w: each entry of rules.ignore maps %s", entry.Line, ErrIgnore, strings.Join(ignoreKeys, ", "))
+		}
+
+		for i := 0; i+1 < len(entry.Content); i += 2 {
+			key, text := entry.Content[i], entry.Content[i+1]
+			if !slices.Contains(ignoreKeys, key.Value) {
+				return fmt.Errorf("line %d: %w %q under rules.ignore; %s", key.Line, ErrUnknownKey, key.Value, suggest(key.Value, ignoreKeys, "an entry has "+strings.Join(ignoreKeys, ", ")))
+			}
+
+			if text.Kind != yaml.ScalarNode || strings.TrimSpace(text.Value) == "" {
+				return fmt.Errorf("line %d: %w: %s must be text, and not empty", text.Line, ErrIgnore, key.Value)
+			}
+		}
+
+		for _, key := range ignoreKeys {
+			if value(entry, key) == nil {
+				why := ""
+				if key == "reason" {
+					why = ": say why it is ignored, so a reviewer can judge it"
+				}
+
+				return fmt.Errorf("line %d: %w: the entry has no %s%s", entry.Line, ErrIgnore, key, why)
+			}
+		}
+
+		finding := value(entry, "finding")
+		if !slices.Contains(kinds, finding.Value) {
+			return fmt.Errorf("line %d: %w: %q is not a kind of finding that can be ignored; %s", finding.Line, ErrIgnore, finding.Value, suggest(finding.Value, kinds, "it is one of "+strings.Join(kinds, ", ")))
+		}
+
+		key := [2]string{finding.Value, value(entry, "target").Value}
+		if line, repeated := seen[key]; repeated {
+			return fmt.Errorf("line %d: %w: line %d already ignores %s %s", entry.Line, ErrIgnore, line, key[0], key[1])
+		}
+
+		seen[key] = entry.Line
+	}
+
+	return nil
+}
+
+// ignores reads the entries of rules.ignore, which checkIgnores has
+// checked.
+func ignores(list *yaml.Node) (result []app.Ignore) {
+	if list.Kind != yaml.SequenceNode {
+		return nil
+	}
+
+	for _, entry := range list.Content {
+		result = append(result, app.Ignore{
+			Finding: value(entry, "finding").Value, Target: value(entry, "target").Value,
+			Fingerprint: value(entry, "fingerprint").Value, Reason: value(entry, "reason").Value, Line: entry.Line,
+		})
+	}
+
+	return result
 }

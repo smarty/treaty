@@ -28,6 +28,7 @@ type MapEdge struct {
 	Violation  bool           `json:"violation"`
 	Rule       string         `json:"rule,omitempty"`
 	Existing   bool           `json:"existing,omitempty"`
+	Ignored    string         `json:"ignored,omitempty"`
 	References []graph.Edge   `json:"references"`
 	Imports    []graph.Import `json:"imports,omitempty"`
 }
@@ -125,8 +126,12 @@ type MapView struct {
 	// it: what fails it, as rules.fail_on says, and what warns.
 	Failures []string `json:"failures,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
-	Designs  []string `json:"designs,omitempty"`
-	Themes   []Theme  `json:"themes"`
+
+	// Stale are the entries of rules.ignore whose target is no longer in
+	// the code, to remove.
+	Stale   []Ignore `json:"stale,omitempty"`
+	Designs []string `json:"designs,omitempty"`
+	Themes  []Theme  `json:"themes"`
 
 	// Sources holds each file's text, keyed by path, so the inspector can
 	// show a whole file or cut a symbol's code from it. A file larger than
@@ -188,7 +193,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 	architecture := analysis.config.Architecture
 	view := MapView{
 		Title: "Treaty", Root: filepath.Base(filepath.Clean(this.root)), Architecture: architecture.Style, Layers: architecture.LayerNames(), Summary: architecture.Summary(),
-		Base: analysis.baseRef, Findings: analysis.judge(analysis.findings), Failures: analysis.failures(), Warnings: analysis.warnings(),
+		Base: analysis.baseRef, Findings: analysis.judge(analysis.findings), Failures: analysis.failures(), Warnings: analysis.warnings(), Stale: analysis.stale,
 		Designs: designs, Links: analysis.head.Edges,
 	}
 
@@ -196,6 +201,15 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 	view.Themes = themes
 	if err != nil {
 		view.Problems = append(view.Problems, err.Error())
+	}
+
+	// ignored holds the reason treaty.yaml gives for each module edge whose
+	// violation it ignores.
+	ignored := map[string]string{}
+	for _, finding := range analysis.findings {
+		if finding.Ignored != "" && (finding.Kind == rules.FindingLayerViolation || finding.Kind == rules.FindingCycle) {
+			ignored[finding.Target] = finding.Ignored
+		}
 	}
 
 	violations, existing := map[[2]string]string{}, map[[2]string]bool{}
@@ -224,7 +238,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 
 		view.Edges = append(view.Edges, MapEdge{
 			From: edge.From, To: edge.To, Count: count, References: edge.References, Imports: edge.Imports,
-			Violation: violations[key] != "", Rule: violations[key], Existing: existing[key], New: analysis.base != nil && !baseEdges[key],
+			Violation: violations[key] != "", Rule: violations[key], Existing: existing[key], Ignored: ignored[rules.EdgeTarget(edge.From, edge.To)], New: analysis.base != nil && !baseEdges[key],
 		})
 	}
 

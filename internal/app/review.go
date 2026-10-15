@@ -169,9 +169,11 @@ func (this Report) Markdown() string {
 	}
 
 	var judged, rest []rules.Finding
-	low := 0
+	low, ignored := 0, 0
 	for _, finding := range this.Findings {
 		switch {
+		case finding.Ignored != "":
+			ignored++
 		case finding.Verdict != "":
 			judged = append(judged, finding)
 		case finding.Severity == rules.SeverityLow:
@@ -198,6 +200,10 @@ func (this Report) Markdown() string {
 		fmt.Fprintf(&builder, "\n%d low finding(s), such as compatible or implementation-only changes, are not listed.\n", low)
 	}
 
+	if ignored > 0 {
+		fmt.Fprintf(&builder, "\n%d finding(s) ignored by rules.ignore in treaty.yaml are not listed.\n", ignored)
+	}
+
 	return builder.String()
 }
 
@@ -218,7 +224,12 @@ func writeRows(builder *strings.Builder, findings []rules.Finding, lead func(rul
 			}
 		}
 
-		fmt.Fprintf(builder, "| %s**%s**<br>%s | %s |\n", lead(finding), cell(finding.Title), cell(finding.Detail), where)
+		detail := cell(finding.Detail)
+		if finding.WasIgnored != "" {
+			detail += "<br>_Ignored before, as “" + cell(finding.WasIgnored) + "”, but it has changed since._"
+		}
+
+		fmt.Fprintf(builder, "| %s**%s**<br>%s | %s |\n", lead(finding), cell(finding.Title), detail, where)
 	}
 }
 

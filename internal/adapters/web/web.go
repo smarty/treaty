@@ -153,6 +153,8 @@ func Listen(projects *app.Projects, sessions Sessions, version string, port int)
 		"GET /api/preferences":   result.preferences,
 		"POST /api/reclassify":   result.reclassify,
 		"POST /api/boundary":     result.renameBoundary,
+		"POST /api/ignore":       result.ignore,
+		"POST /api/unignore":     result.unignore,
 		"POST /api/preferences":  result.savePreferences,
 		"POST /api/view":         result.setView,
 		"POST /api/view/adopt":   result.adopt,
@@ -623,6 +625,47 @@ func (this *Server) reclassify(live *app.Live, writer http.ResponseWriter, reque
 	default:
 		this.state(live, writer, request)
 	}
+}
+
+// ignore ignores a finding in treaty.yaml, with a reason.
+func (this *Server) ignore(live *app.Live, writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Finding string `json:"finding"`
+		Target  string `json:"target"`
+		Reason  string `json:"reason"`
+	}
+
+	if !decode(writer, request, &body) {
+		return
+	}
+
+	switch _, err := live.Ignore(body.Finding, body.Target, body.Reason); {
+	case errors.Is(err, app.ErrNotIgnorable), errors.Is(err, app.ErrNotReady):
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+	case err != nil:
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	default:
+		this.state(live, writer, request)
+	}
+}
+
+// unignore stops ignoring a finding.
+func (this *Server) unignore(live *app.Live, writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Finding string `json:"finding"`
+		Target  string `json:"target"`
+	}
+
+	if !decode(writer, request, &body) {
+		return
+	}
+
+	if _, err := live.Unignore(body.Finding, body.Target); err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	this.state(live, writer, request)
 }
 
 // renameBoundary renames a boundary in treaty.yaml.

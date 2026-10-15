@@ -65,8 +65,9 @@ type configFile struct {
 	Boundaries   yaml.Node `yaml:"boundaries"`
 	Public       []string  `yaml:"public"`
 	Rules        struct {
-		FailOn []string `yaml:"fail_on"`
-		WarnOn []string `yaml:"warn_on"`
+		FailOn []string  `yaml:"fail_on"`
+		WarnOn []string  `yaml:"warn_on"`
+		Ignore yaml.Node `yaml:"ignore"`
 	} `yaml:"rules"`
 }
 
@@ -144,6 +145,7 @@ func (this *Config) Load() (config app.Config, found bool, err error) {
 		config.WarnOn = ruleKinds(file.Rules.WarnOn)
 	}
 
+	config.Ignores = ignores(&file.Rules.Ignore)
 	return config, true, nil
 }
 
