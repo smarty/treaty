@@ -340,7 +340,7 @@ branch, annotates each finding that fails or warns on its line, shows the
 report on the pull request and keeps the map of the change. On GitHub:
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
   with:
     fetch-depth: 0
 - uses: smarty/treaty@v0.3.0

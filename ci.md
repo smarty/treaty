@@ -28,7 +28,7 @@ jobs:
   treaty:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # the merge base needs the history
       - uses: smarty/treaty@v0.3.0

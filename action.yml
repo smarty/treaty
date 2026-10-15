@@ -69,7 +69,7 @@ runs:
         echo "code=$?" >> "$GITHUB_OUTPUT"
     - name: Keep the map
       if: inputs.map == 'true' && steps.check.outputs.map != ''
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: treaty-map
         path: ${{ steps.check.outputs.map }}
