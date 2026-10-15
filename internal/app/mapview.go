@@ -74,6 +74,7 @@ type MapSymbol struct {
 	ID        string `json:"id"`
 	Module    string `json:"module"`
 	Name      string `json:"name"`
+	Parent    string `json:"parent,omitempty"`
 	Kind      string `json:"kind"`
 	Contract  bool   `json:"contract"`
 	Signature string `json:"signature"`
@@ -260,7 +261,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 	view.Sources = this.sources(analysis.head)
 	for _, symbol := range analysis.head.Symbols {
 		entry := MapSymbol{
-			ID: symbol.ID, Module: symbol.Module, Name: symbol.Name, Kind: symbol.Kind, Contract: symbol.Contract,
+			ID: symbol.ID, Module: symbol.Module, Name: symbol.Name, Parent: symbol.Parent, Kind: symbol.Kind, Contract: symbol.Contract,
 			Signature: symbol.Signature, File: symbol.File, Line: symbol.Line, EndLine: symbol.EndLine, Doc: symbol.Doc,
 			Change: changes[symbol.ID].Kind, Before: changes[symbol.ID].Before,
 		}

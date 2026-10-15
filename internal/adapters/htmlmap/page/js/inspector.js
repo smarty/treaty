@@ -85,6 +85,15 @@ const METRICS = [
   ["undeclared", "Undeclared", "", "Errors a function or method can return that its Errors section does not list: behavior its contract does not state. Document them, or stop returning them.", x => unmeasured(x) ? "—" : x.errors ? String(x.undeclared) : "none", "Errors"],
   ["unreturned", "Declared, not returned", "", "Errors an Errors section lists that the code cannot return: a claim it cannot meet. Errors from outside the repository, such as io.EOF, are not checked.", x => unmeasured(x) ? "—" : x.errors ? String(x.unreturned) : "none", "Errors"],
 ];
+// GROUP_METRICS are a group's metrics, its modules measured as one: the key,
+// the name, the abbreviation and what it measures.
+const GROUP_METRICS = [
+  ["ca", "Afferent", "Ca", "How many modules outside the group depend on a module inside it. Dependencies between its own modules do not count."],
+  ["ce", "Efferent", "Ce", "How many modules outside the group a module inside it depends on. Dependencies between its own modules do not count."],
+  ["instability", "Instability", "I", "Ce ÷ (Ca + Ce), from 0 to 1. Near 0 the group is stable: the rest of the code depends on it and it depends on little. Near 1 it is unstable and free to change."],
+  ["abstractness", "Abstractness", "A", "Interfaces ÷ top-level contracts, over all its modules, from 0 to 1."],
+  ["distance", "Distance from the main sequence", "D", "|A + I − 1|, from 0 to 1. Near 0 the group is balanced; near 1 it is stable and concrete, or unstable and abstract."],
+];
 const UNMEASURED = "Treaty can't find this language's tests yet, so it is not measured.";
 // RUNS are what test runs reached: the name, what it measures, and the
 // reached and total counts in a measure from the test report.
@@ -374,8 +383,18 @@ function inspect() {
     const toggle = h("button", { type: "button" }, collapsed ? "Expand" : "Collapse");
     toggle.addEventListener("click", () => toggleGroup(g.id));
     box.appendChild(toggle);
-    box.appendChild(h("p", { class: "empty" }, "A group is a directory, drawn for orientation only. Layer rules and metrics apply to each module inside it."));
-    box.appendChild(h("h2", {}, "Modules"));
+    box.appendChild(h("p", { class: "empty" }, "A group is a directory, drawn for orientation. Layer rules apply to each module inside it; the metrics below measure its modules taken together, so only dependencies across its edge count."));
+    if (g.metrics) {
+      const t = h("table", { class: "metrics" }); t.innerHTML = "<tr><th>Metric</th><th colspan=\"2\">Now</th></tr>";
+      for (const [key, name, abbr, about] of GROUP_METRICS) {
+        const label = `${name} (${abbr})`, row = h("tr", { title: `${label}: ${about}` });
+        row.appendChild(h("td", { class: "metric-name" }, label)); row.appendChild(h("td", { colspan: 2 }, String(g.metrics[key]))); t.appendChild(row);
+      }
+      box.appendChild(t);
+    }
+    const outside = (title, ids) => { if (!ids || !ids.length) return; box.appendChild(h("h2", {}, `${title} (${ids.length})`)); const c = h("div", { class: "chips" }); ids.forEach(id => chip(id, c)); box.appendChild(c); };
+    outside("Uses", g.uses); outside("Used by", g.used_by);
+    box.appendChild(h("h2", {}, `Modules (${g.modules.length})`));
     const c = h("div", { class: "chips" }); g.modules.forEach(id => chip(id, c)); box.appendChild(c);
   }
 }

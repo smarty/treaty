@@ -222,6 +222,11 @@ interfaces, methods, then functions, each by name: the contracts clockwise
 from the left end of the file's bracket on the border, and the internals
 across the file's cell. A package that holds a `go.mod` shows it in the first
 cell of its ring, at 12:00; click it to read the file.
+Directories with several packages are drawn as groups, which collapse when
+they are small on screen. Select a group to see its modules measured as one:
+its coupling across its edge, instability, abstractness and distance, and the
+modules outside it that it uses and that use it. Groups never change the
+rules, which apply to each package.
 Hide the key at the top of the map with its *Hide* button or `k`, and bring it
 back with *Key* or `k` again. Selecting never moves the map. A selection
 hidden in a collapsed group lights that group, and the inspector's *Go to*

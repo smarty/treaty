@@ -44,17 +44,23 @@ type Cell struct {
 }
 
 // Group is a directory drawn as a hexagon around the modules beneath it.
-// Groups are visual only: rules and metrics stay per module.
+// Groups never change the rules or a module's identity: rules stay per
+// module. Metrics measure the group's modules taken together, as of the
+// working tree, and Uses and UsedBy name the modules outside it on either
+// side of its edge.
 type Group struct {
-	ID      string   `json:"id"`
-	Path    string   `json:"path"`
-	Layer   string   `json:"layer"`
-	Parent  string   `json:"parent,omitempty"`
-	Depth   int      `json:"depth"`
-	X       float64  `json:"x"`
-	Y       float64  `json:"y"`
-	Radius  float64  `json:"radius"`
-	Modules []string `json:"modules"`
+	ID      string       `json:"id"`
+	Path    string       `json:"path"`
+	Layer   string       `json:"layer"`
+	Parent  string       `json:"parent,omitempty"`
+	Depth   int          `json:"depth"`
+	X       float64      `json:"x"`
+	Y       float64      `json:"y"`
+	Radius  float64      `json:"radius"`
+	Modules []string     `json:"modules"`
+	Metrics rules.Metric `json:"metrics"`
+	Uses    []string     `json:"uses"`
+	UsedBy  []string     `json:"used_by"`
 }
 
 // Label is text placed on the map, such as the side of an adapter ring.
@@ -310,7 +316,52 @@ func ComputeLayout(view app.MapView) (result Layout) {
 	}
 
 	placeFiles(&result, view)
+	measureGroups(&result, view)
 	return result
+}
+
+// measureGroups measures each group's modules taken together, leaving out
+// what the working tree lacks: removed and planned modules, their edges
+// and their contracts.
+func measureGroups(result *Layout, view app.MapView) {
+	absent := map[string]bool{}
+	for _, module := range view.Modules {
+		if module.Removed || module.Design {
+			absent[module.ID] = true
+		}
+	}
+
+	var edges []graph.ModuleEdge
+	for _, edge := range view.Edges {
+		if !edge.Removed && !absent[edge.From] && !absent[edge.To] {
+			edges = append(edges, graph.ModuleEdge{From: edge.From, To: edge.To})
+		}
+	}
+
+	contracts, interfaces := map[string]int{}, map[string]int{}
+	for _, symbol := range view.Symbols {
+		if symbol.Contract && symbol.Parent == "" && !symbol.Removed && !symbol.Design {
+			contracts[symbol.Module]++
+			if symbol.Kind == graph.KindInterface {
+				interfaces[symbol.Module]++
+			}
+		}
+	}
+
+	for i := range result.Groups {
+		group := &result.Groups[i]
+		var members []string
+		pooled, abstract := 0, 0
+		for _, id := range group.Modules {
+			if !absent[id] {
+				members = append(members, id)
+				pooled += contracts[id]
+				abstract += interfaces[id]
+			}
+		}
+
+		group.Metrics, group.Uses, group.UsedBy = rules.GroupMetric(edges, members, pooled, abstract)
+	}
 }
 
 // ringLayout places modules in concentric rings, innermost first, with

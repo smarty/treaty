@@ -2,6 +2,7 @@ package rules
 
 import (
 	"math"
+	"sort"
 
 	"github.com/smarty/treaty/internal/graph"
 )
@@ -53,11 +54,6 @@ func Metrics(g *graph.Graph) map[string]Metric {
 
 	result := map[string]Metric{}
 	for _, module := range g.Modules {
-		metric := Metric{Afferent: afferent[module.ID], Efferent: efferent[module.ID]}
-		if total := metric.Afferent + metric.Efferent; total > 0 {
-			metric.Instability = round(float64(metric.Efferent) / float64(total))
-		}
-
 		interfaces, contracts := 0, 0
 		for _, symbol := range g.SymbolsIn(module.ID) {
 			if !symbol.Contract || symbol.Parent != "" {
@@ -70,14 +66,70 @@ func Metrics(g *graph.Graph) map[string]Metric {
 			}
 		}
 
-		if contracts > 0 {
-			metric.Abstractness = round(float64(interfaces) / float64(contracts))
-		}
-
-		metric.Distance = round(math.Abs(metric.Abstractness + metric.Instability - 1))
-		result[module.ID] = metric
+		result[module.ID] = measure(afferent[module.ID], efferent[module.ID], contracts, interfaces)
 	}
 
+	return result
+}
+
+// GroupMetric measures several modules taken together as one, as Metrics
+// measures a module: coupling counts the distinct modules outside the group
+// that depend on it and that it depends on, and abstractness pools the
+// members' top-level contracts. Edges between members do not count.
+//
+// Parameters:
+//   - edges: every module edge.
+//   - members: the ids of the group's modules.
+//   - contracts: the members' top-level contracts.
+//   - interfaces: how many of those are interfaces.
+//
+// Returns:
+//   - metric: the group's coupling, instability, abstractness and distance.
+//   - uses: the modules outside the group it depends on, sorted.
+//   - usedBy: the modules outside the group that depend on it, sorted.
+func GroupMetric(edges []graph.ModuleEdge, members []string, contracts, interfaces int) (metric Metric, uses, usedBy []string) {
+	inside := map[string]bool{}
+	for _, id := range members {
+		inside[id] = true
+	}
+
+	out, in := map[string]bool{}, map[string]bool{}
+	for _, edge := range edges {
+		switch {
+		case inside[edge.From] && !inside[edge.To]:
+			out[edge.To] = true
+		case inside[edge.To] && !inside[edge.From]:
+			in[edge.From] = true
+		}
+	}
+
+	uses, usedBy = sortedSet(out), sortedSet(in)
+	return measure(len(usedBy), len(uses), contracts, interfaces), uses, usedBy
+}
+
+// measure computes the stability metrics from coupling and contract
+// counts.
+func measure(afferent, efferent, contracts, interfaces int) Metric {
+	metric := Metric{Afferent: afferent, Efferent: efferent}
+	if total := afferent + efferent; total > 0 {
+		metric.Instability = round(float64(efferent) / float64(total))
+	}
+
+	if contracts > 0 {
+		metric.Abstractness = round(float64(interfaces) / float64(contracts))
+	}
+
+	metric.Distance = round(math.Abs(metric.Abstractness + metric.Instability - 1))
+	return metric
+}
+
+func sortedSet(set map[string]bool) []string {
+	result := make([]string, 0, len(set))
+	for key := range set {
+		result = append(result, key)
+	}
+
+	sort.Strings(result)
 	return result
 }
 

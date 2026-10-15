@@ -448,3 +448,46 @@ func TestPageScriptParses(t *testing.T) {
 		t.Fatalf("the page's script does not parse: %v\n%s", err, output)
 	}
 }
+
+func TestGroupMetrics(t *testing.T) {
+	var modules []app.MapModule
+	for _, path := range []string{"domain/billing", "domain/billing/invoice", "domain/billing/payment", "domain/catalog/core", "domain/catalog/pricing"} {
+		modules = append(modules, app.MapModule{ID: "go:" + path, Path: path, Layer: graph.LayerDomain})
+	}
+
+	modules = append(modules, app.MapModule{ID: "go:app", Path: "app", Layer: graph.LayerApplication}, app.MapModule{ID: "go:old", Path: "old", Layer: graph.LayerApplication, Removed: true})
+	view := app.MapView{
+		Modules: modules,
+		Edges: []app.MapEdge{
+			{From: "go:app", To: "go:domain/billing"},
+			{From: "go:app", To: "go:domain/billing/invoice"},
+			{From: "go:domain/billing", To: "go:domain/billing/invoice"},
+			{From: "go:domain/billing/payment", To: "go:domain/catalog/core"},
+			{From: "go:domain/catalog/pricing", To: "go:domain/billing", Removed: true},
+			{From: "go:old", To: "go:domain/billing"},
+		},
+		Symbols: []app.MapSymbol{
+			{ID: "go:domain/billing:Store", Module: "go:domain/billing", Kind: graph.KindInterface, Contract: true},
+			{ID: "go:domain/billing:New", Module: "go:domain/billing", Kind: graph.KindFunction, Contract: true},
+			{ID: "go:domain/billing/invoice:Invoice", Module: "go:domain/billing/invoice", Kind: graph.KindType, Contract: true},
+			{ID: "go:domain/billing/invoice:Invoice.Total", Module: "go:domain/billing/invoice", Parent: "Invoice", Kind: graph.KindMethod, Contract: true},
+			{ID: "go:domain/billing/payment:charge", Module: "go:domain/billing/payment", Kind: graph.KindFunction},
+			{ID: "go:domain/billing:Gone", Module: "go:domain/billing", Kind: graph.KindInterface, Contract: true, Removed: true},
+		},
+	}
+
+	var billing Group
+	for _, group := range ComputeLayout(view).Groups {
+		if group.Path == "domain/billing" {
+			billing = group
+		}
+	}
+
+	// One module outside uses the group and it uses one; edges inside it,
+	// removed edges and removed modules do not count. Of its three
+	// top-level contracts, one is an interface.
+	expected := rules.Metric{Afferent: 1, Efferent: 1, Instability: 0.5, Abstractness: 0.33, Distance: 0.17}
+	if billing.Metrics != expected || !slices.Equal(billing.Uses, []string{"go:domain/catalog/core"}) || !slices.Equal(billing.UsedBy, []string{"go:app"}) {
+		t.Fatalf("billing: %+v", billing)
+	}
+}
