@@ -19,6 +19,10 @@ import (
 var (
 	scriptLang  = regexp.MustCompile(`\blang\s*=\s*["']?tsx?\b`)
 	templateTag = regexp.MustCompile(`<([A-Z][A-Za-z0-9]*)`)
+
+	// kebabTag is a component tag in kebab case, such as <my-widget>, which
+	// Vue reads as MyWidget.
+	kebabTag = regexp.MustCompile(`<([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`)
 )
 
 const (
@@ -504,7 +508,7 @@ func (this *fileState) references(g *graph.Graph, symbol *graph.Symbol, declarat
 func (this *fileState) resolveImports(g *graph.Graph, imports *resolver, byPath map[string]*fileState) {
 	for _, spec := range this.imports {
 		if spec.glob {
-			for _, found := range imports.glob(this.path, spec.path) {
+			for _, found := range imports.glob(this.path, spec.path, spec.exclude) {
 				if target := byPath[found]; target.module != this.module {
 					g.AddImport(graph.Import{From: this.module, To: target.module, File: this.path, Line: spec.line})
 					this.reachable[target.module] = true
@@ -770,7 +774,8 @@ func componentScript(src []byte) (script []byte, typed bool) {
 // componentDeclaration makes the default export of a component whose script
 // has none, as with <script setup> or Svelte: a function named after its
 // file in PascalCase, spanning the file. It references what its script
-// names and the components its template uses by name.
+// names and the components its template uses by name, in PascalCase or,
+// as Vue allows, in kebab case.
 func componentDeclaration(file string, src, script []byte, typed bool) *declaration {
 	var name strings.Builder
 	for _, part := range strings.FieldsFunc(stem(file), func(r rune) bool { return !isLetter(byte(r)) && !(r >= '0' && r <= '9') }) {
@@ -789,9 +794,25 @@ func componentDeclaration(file string, src, script []byte, typed bool) *declarat
 		for _, tag := range templateTag.FindAllStringSubmatch(line, -1) {
 			result.refs = append(result.refs, token{kind: tokenIdent, text: tag[1], line: index + 1})
 		}
+
+		for _, tag := range kebabTag.FindAllStringSubmatch(line, -1) {
+			result.refs = append(result.refs, token{kind: tokenIdent, text: pascal(tag[1]), line: index + 1})
+		}
 	}
 
 	return result
+}
+
+// pascal turns a kebab-case name, such as my-widget, into PascalCase.
+func pascal(kebab string) string {
+	var result strings.Builder
+	for _, part := range strings.Split(kebab, "-") {
+		if part != "" {
+			result.WriteString(strings.ToUpper(part[:1]) + part[1:])
+		}
+	}
+
+	return result.String()
 }
 
 // blank keeps only the line breaks of text.

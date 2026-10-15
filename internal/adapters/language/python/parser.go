@@ -69,6 +69,10 @@ type sourceFile struct {
 	hasAll       bool
 	main         bool
 	declarations []*declaration
+
+	// sysPaths are the path arguments of the file's sys.path additions,
+	// worked out once the file's place in the tree is known.
+	sysPaths [][]token
 }
 
 // parseFile reads the contract-level structure of one file.
@@ -83,6 +87,7 @@ func parseFile(src []byte) *sourceFile {
 	this := &parser{src: src, lines: logicalLines(tokens), file: &sourceFile{src: src}}
 	this.imports()
 	this.block(0, len(this.lines))
+	this.file.sysPaths = sysPathArguments(tokens)
 	for index := 0; index+2 < len(tokens); index++ {
 		if tokens[index].is("__name__") && tokens[index+1].is("==") && tokens[index+2].kind == tokenString && strings.Contains(tokens[index+2].text, "__main__") {
 			this.file.main = true

@@ -57,6 +57,10 @@ type importSpec struct {
 	all      bool
 	require  bool
 	glob     bool
+
+	// exclude lists the patterns a glob leaves out, those an
+	// import.meta.glob array gives with a leading !.
+	exclude []string
 }
 
 // sourceFile is everything the extractor needs from one file.
@@ -299,7 +303,8 @@ func (this *parser) decorators() {
 // already read as a binding: each is a dependency, used or not. An import
 // whose path is built at run time, import(`./pages/${name}`) or
 // import("./pages/" + name), and Vite's import.meta.glob("./pages/*.vue"),
-// are globs: a dependency on every file they could load.
+// are globs: a dependency on every file they could load. A pattern in an
+// import.meta.glob array that starts with ! leaves out what it matches.
 func (this *parser) dynamicImports() {
 	for index := 0; index+3 < len(this.tokens); index++ {
 		current := this.tokens[index]
@@ -311,10 +316,19 @@ func (this *parser) dynamicImports() {
 				arguments = arguments[:min(1, len(arguments))]
 			}
 
+			var patterns, exclude []string
 			for _, argument := range arguments {
-				if pattern, ok := unquote(argument); ok && !strings.HasPrefix(pattern, "!") {
-					this.file.imports = append(this.file.imports, importSpec{path: pattern, line: current.line, glob: true})
+				if pattern, ok := unquote(argument); ok {
+					if excluded, ok := strings.CutPrefix(pattern, "!"); ok {
+						exclude = append(exclude, excluded)
+					} else {
+						patterns = append(patterns, pattern)
+					}
 				}
+			}
+
+			for _, pattern := range patterns {
+				this.file.imports = append(this.file.imports, importSpec{path: pattern, line: current.line, glob: true, exclude: exclude})
 			}
 
 			continue

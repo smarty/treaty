@@ -618,3 +618,38 @@ func TestComponentsAndGlobs(t *testing.T) {
 		t.Fatalf("round trip lost %d thing(s):\n%s", len(differences), strings.Join(differences, "\n"))
 	}
 }
+
+func TestAliasedGlobsExclusionsAndKebabTags(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"tsconfig.json":             `{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["src/*"]}}}`,
+		"src/App.vue":               "<template>\n  <my-widget :size=\"2\" />\n  <router-view />\n</template>\n\n<script setup lang=\"ts\">\nimport MyWidget from './widgets/my-widget.vue';\nconst pages = import.meta.glob('@/pages/*.vue');\nconst views = import.meta.glob(['./views/**/*.ts', '!./views/draft/**']);\n</script>\n",
+		"src/widgets/my-widget.vue": "<template><b>widget</b></template>\n<script>\nexport default { name: 'MyWidget' };\n</script>\n",
+		"src/pages/Home.vue":        "<template><h1>Home</h1></template>\n",
+		"src/views/live/live.ts":    "export const live = 1;\n",
+		"src/views/draft/draft.ts":  "export const draft = 2;\n",
+	})
+
+	g, err := NewExtractor().Extract(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var edges []string
+	for _, edge := range g.ModuleEdges() {
+		edges = append(edges, edge.From+" -> "+edge.To)
+	}
+
+	// The aliased glob reaches pages, and the excluded drafts stay out.
+	want := []string{"ts:src -> js:src/pages", "ts:src -> js:src/widgets", "ts:src -> ts:src/views/live"}
+	if !slices.Equal(edges, want) {
+		t.Errorf("module edges:\n got %q\nwant %q", edges, want)
+	}
+
+	// <my-widget> on line 2 uses MyWidget, as <MyWidget> would.
+	if !slices.ContainsFunc(g.Edges, func(edge graph.Edge) bool {
+		return edge.From == "ts:src:App" && edge.To == "js:src/widgets:default" && edge.Line == 2
+	}) {
+		t.Errorf("the kebab-case tag should use the component: %+v", g.Edges)
+	}
+}
