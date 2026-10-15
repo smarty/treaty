@@ -14,7 +14,10 @@ import (
 // session that reconnects or restarts keeps its tab.
 const ProjectGrace = 30 * time.Second
 
-var ErrUnknownProject = errors.New("no such project is open")
+var (
+	ErrUnknownProject = errors.New("no such project is open")
+	ErrProjectInUse   = errors.New("an agent session is working in the project")
+)
 
 // unsafeSlug matches what a project's URL segment leaves out.
 var unsafeSlug = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
@@ -31,7 +34,8 @@ var unsafeSlug = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 type Opener func(root string) (live *Live, close func(), err error)
 
 // Project is one repository the shared server keeps a live graph of, open
-// while at least one session works in it.
+// while at least one agent session works in it or while the person keeps
+// it open, from treaty open until they close its tab.
 type Project struct {
 	// Live is the repository's live graph.
 	Live *Live
@@ -51,14 +55,18 @@ type Project struct {
 	expire   *time.Timer
 	ready    chan struct{}
 	sessions int
+	pinned   bool
 }
 
-// ProjectInfo describes an open project.
+// ProjectInfo describes an open project: Sessions counts the agent
+// sessions working in it, and Pinned says the person opened it, with treaty
+// open, so it stays open until they close it.
 type ProjectInfo struct {
 	Name     string `json:"name"`
 	Root     string `json:"root"`
 	Slug     string `json:"slug"`
 	Sessions int    `json:"sessions"`
+	Pinned   bool   `json:"pinned"`
 }
 
 // Projects is every repository the shared server keeps open, one per
@@ -112,6 +120,93 @@ func NewProjects(open Opener, grace time.Duration) *Projects {
 //   - detach: leaves the project; call it once, when the session ends.
 //   - err: the directory could not be resolved or its graph built.
 func (this *Projects) Attach(root string) (project *Project, joined bool, detach func(), err error) {
+	project, joined, err = this.hold(root, func(project *Project) { project.sessions++ })
+	if project == nil {
+		return nil, false, nil, err
+	}
+
+	var once sync.Once
+	detach = func() { once.Do(func() { this.detach(project) }) }
+	if err != nil {
+		detach()
+		return nil, false, nil, err
+	}
+
+	return project, joined, detach, nil
+}
+
+// Open keeps the project of a directory open for the person, without an
+// agent session, until Close: what treaty open does.
+//
+// Parameters:
+//   - root: the repository's directory.
+//
+// Returns:
+//   - project: the project.
+//   - opened: the person had not kept it open already.
+//   - err: the directory could not be resolved or its graph built.
+func (this *Projects) Open(root string) (project *Project, opened bool, err error) {
+	project, _, err = this.hold(root, func(project *Project) { opened = !project.pinned; project.pinned = true })
+	if err != nil {
+		if project != nil {
+			this.mutex.Lock()
+			project.pinned = false
+			this.releaseLocked(project)
+			this.mutex.Unlock()
+		}
+
+		return nil, false, err
+	}
+
+	return project, opened, nil
+}
+
+// Close closes a project the person kept open, once no agent session works
+// in it. Closing the last project lets the server stop after its grace.
+//
+// Parameters:
+//   - slug: the project's URL segment.
+//
+// Returns:
+//   - err: no such project is open, or an agent works in it.
+//
+// Errors:
+//   - ErrUnknownProject: no open project has that slug.
+//   - ErrProjectInUse: an agent session works in it; it closes when the
+//     session ends.
+func (this *Projects) Close(slug string) error {
+	this.mutex.Lock()
+	defer this.mutex.Unlock()
+	for _, project := range this.byRoot {
+		if project.Slug != slug {
+			continue
+		}
+
+		if project.sessions > 0 {
+			return ErrProjectInUse
+		}
+
+		project.pinned = false
+		if project.expire != nil {
+			project.expire.Stop()
+			project.expire = nil
+		}
+
+		this.removeLocked(project)
+		return nil
+	}
+
+	return ErrUnknownProject
+}
+
+// hold opens the project of a directory when it is not open yet, applies
+// claim to it, and waits for its graph.
+//
+// Returns:
+//   - project: the project, nil when root could not be used.
+//   - joined: the project was already open.
+//   - err: its graph could not be built.
+func (this *Projects) hold(root string, claim func(*Project)) (project *Project, joined bool, err error) {
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
@@ -126,7 +221,7 @@ func (this *Projects) Attach(root string) (project *Project, joined bool, detach
 		this.order = append(this.order, root)
 	}
 
-	project.sessions++
+	claim(project)
 	if project.expire != nil {
 		project.expire.Stop()
 		project.expire = nil
@@ -149,14 +244,7 @@ func (this *Projects) Attach(root string) (project *Project, joined bool, detach
 	}
 
 	<-project.ready
-	var once sync.Once
-	detach = func() { once.Do(func() { this.detach(project) }) }
-	if project.err != nil {
-		detach()
-		return nil, false, nil, project.err
-	}
-
-	return project, joined, detach, nil
+	return project, joined, project.err
 }
 
 // Find looks up an open project by its slug.
@@ -244,7 +332,7 @@ func (this *Projects) List() (result []ProjectInfo) {
 	result = []ProjectInfo{}
 	for _, root := range this.order {
 		project := this.byRoot[root]
-		result = append(result, ProjectInfo{Name: project.Name, Root: project.Root, Slug: project.Slug, Sessions: project.sessions})
+		result = append(result, ProjectInfo{Name: project.Name, Root: project.Root, Slug: project.Slug, Sessions: project.sessions, Pinned: project.pinned})
 	}
 
 	return result
@@ -267,12 +355,18 @@ func (this *Projects) armIdleLocked() {
 }
 
 // detach ends one session, and closes the project after the grace when it
-// was the last.
+// was the last and the person does not keep the project open.
 func (this *Projects) detach(project *Project) {
 	this.mutex.Lock()
 	defer this.mutex.Unlock()
 	project.sessions--
-	if project.sessions > 0 {
+	this.releaseLocked(project)
+}
+
+// releaseLocked closes a project nothing holds any more: at once when it
+// failed to build, else after the grace.
+func (this *Projects) releaseLocked(project *Project) {
+	if project.sessions > 0 || project.pinned || this.byRoot[project.Root] != project {
 		return
 	}
 
@@ -284,7 +378,7 @@ func (this *Projects) detach(project *Project) {
 	project.expire = time.AfterFunc(this.grace, func() {
 		this.mutex.Lock()
 		defer this.mutex.Unlock()
-		if project.sessions == 0 && this.byRoot[project.Root] == project {
+		if project.sessions == 0 && !project.pinned && this.byRoot[project.Root] == project {
 			this.removeLocked(project)
 		}
 	})

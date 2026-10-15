@@ -52,6 +52,11 @@ func (this *Config) Place(modulePath string, placement rules.Placement) (path st
 		return "", err
 	}
 
+	// A module already where the move puts it needs no edit.
+	if fits(architecture, architecture.Resolve(modulePath), placement) {
+		return path, nil
+	}
+
 	root := document.Content[0]
 	for _, list := range placementLists(root, architecture.Style) {
 		removeScalar(list, modulePath)
@@ -78,7 +83,7 @@ func (this *Config) Place(modulePath string, placement rules.Placement) (path st
 		return "", fmt.Errorf("%w: %s would be placed in %s, not %s", rules.ErrArchitecture, modulePath, describe(got), describe(placement))
 	}
 
-	return path, os.WriteFile(path, text, 0o644)
+	return path, writeChanged(path, text)
 }
 
 // RenameBoundary renames a boundary in treaty.yaml, keeping its globs, its
@@ -122,6 +127,10 @@ func (this *Config) RenameBoundary(from, to string) (path string, err error) {
 		return "", fmt.Errorf("%w: no boundary %q in %s", rules.ErrArchitecture, from, ConfigFile)
 	}
 
+	if from == to {
+		return path, nil
+	}
+
 	if strings.TrimSpace(to) == "" || strings.TrimSpace(to) != to {
 		return "", fmt.Errorf("%w: a boundary's name may not be empty or start or end with a space", rules.ErrArchitecture)
 	}
@@ -132,7 +141,7 @@ func (this *Config) RenameBoundary(from, to string) (path string, err error) {
 		return "", err
 	}
 
-	return path, os.WriteFile(path, text, 0o644)
+	return path, writeChanged(path, text)
 }
 
 // Ignore adds an entry to rules.ignore, or, when one already names the
@@ -192,7 +201,7 @@ func (this *Config) Ignore(ignore app.Ignore) (path string, err error) {
 		return "", err
 	}
 
-	return path, os.WriteFile(path, data, 0o644)
+	return path, writeChanged(path, data)
 }
 
 // Unignore removes the entry of rules.ignore that names a finding and
@@ -222,7 +231,7 @@ func (this *Config) Unignore(finding, target string) (path string, err error) {
 		return "", err
 	}
 
-	return path, os.WriteFile(path, data, 0o644)
+	return path, writeChanged(path, data)
 }
 
 // ignoreEntry finds the entry of rules.ignore for a finding and target.
@@ -240,6 +249,17 @@ func ignoreEntry(list *yaml.Node, finding, target string) *yaml.Node {
 	}
 
 	return nil
+}
+
+// writeChanged writes treaty.yaml only when its text would change, so an
+// edit that changes nothing leaves the file, and the repository, as they
+// were.
+func writeChanged(path string, data []byte) error {
+	if current, err := os.ReadFile(path); err == nil && bytes.Equal(current, data) {
+		return nil
+	}
+
+	return os.WriteFile(path, data, 0o644)
 }
 
 // document reads treaty.yaml as a YAML tree to edit, with the architecture

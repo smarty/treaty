@@ -34,6 +34,12 @@ nav h1 svg { width: 18px; height: 18px; }
 .tab .mark { width: 7px; height: 7px; border-radius: 50%; background: var(--claude); }
 .tab .mark.new { background: var(--accent); }
 .tab .mark[hidden] { display: none; }
+/* Left of the name, whether an agent works in the project through MCP; on
+   the right, a close button while none does. */
+.tab .agent { font-size: 13px; line-height: 1; }
+.tab .close { width: 16px; height: 16px; margin-right: -4px; border-radius: 4px; display: inline-grid; place-items: center; font-size: 14px; line-height: 1; color: var(--muted); }
+.tab .close:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 16%, transparent); }
+.tab .close[hidden] { display: none; }
 /* Dragging a tab shows it under the pointer and a line where it would land. */
 .ghost { position: fixed; z-index: 20; pointer-events: none; font-size: 13px; padding: 4px 10px; border-radius: 6px; background: var(--panel); color: var(--ink); border: 1px solid var(--focus); box-shadow: 0 4px 12px rgba(0,0,0,.3); }
 .insert { position: fixed; z-index: 20; pointer-events: none; width: 3px; border-radius: 2px; background: var(--focus); }
@@ -71,7 +77,7 @@ iframe[hidden] { display: block; visibility: hidden; }
 </nav>
 <div class="insert" id="insert" hidden></div>
 <main id="frames">
-  <p class="empty" id="empty">No project is open. Start Claude Code in a repository where treaty here has run, or run treaty serve there.</p>
+  <p class="empty" id="empty">No project is open. Run treaty open in a repository, or start Claude Code where treaty here has run. With nothing open, treaty stops in half a minute.</p>
 </main>
 <script>
 // A tab per open project, in the order they opened until the person drags
@@ -118,15 +124,49 @@ function show(slug) {
 }
 
 function add(info) {
-  const tab = document.createElement("button"), mark = document.createElement("span"), label = document.createElement("span");
-  tab.type = "button"; tab.className = "tab"; tab.setAttribute("role", "tab"); tab.title = info.root; tab.tabIndex = -1;
+  const tab = document.createElement("button"), agent = document.createElement("span"), mark = document.createElement("span"), label = document.createElement("span"), close = document.createElement("span");
+  tab.type = "button"; tab.className = "tab"; tab.setAttribute("role", "tab"); tab.tabIndex = -1;
+  agent.className = "agent";
   mark.className = "mark new"; mark.hidden = firstList; mark.setAttribute("aria-label", "new");
   label.textContent = info.name;
-  tab.append(mark, label);
+  close.className = "close"; close.textContent = "×"; close.setAttribute("role", "button"); close.setAttribute("aria-label", "Close " + info.name);
+  tab.append(agent, mark, label, close);
   tab.addEventListener("click", ev => { show(info.slug); if (ev.detail > 0) open.get(info.slug).frame.focus(); });
-  tab.addEventListener("pointerdown", ev => drag(ev, info.slug));
+  tab.addEventListener("pointerdown", ev => { if (ev.target !== close) drag(ev, info.slug); });
+  tab.addEventListener("keydown", ev => { if ((ev.key === "Delete" || ev.key === "Backspace") && !close.hidden) { ev.preventDefault(); closeProject(info.slug); } });
+  close.addEventListener("click", ev => { ev.stopPropagation(); closeProject(info.slug); });
   tabs.appendChild(tab);
-  open.set(info.slug, { info, tab, mark, frame: null, theme: null });
+  open.set(info.slug, { info, tab, agent, close, mark, frame: null, theme: null });
+  update(info);
+}
+
+// update shows whether an agent works in a project: a brain while one is
+// connected through MCP, a page while none is, and then a close button.
+function update(info) {
+  const project = open.get(info.slug);
+  project.info = info;
+  const agents = info.sessions || 0;
+  project.agent.textContent = agents ? "🧠" : "📄";
+  project.agent.title = agents ? `${agents} agent session${agents === 1 ? "" : "s"} connected through MCP` : "No agent is connected; close the tab to close the project";
+  project.close.hidden = agents > 0;
+  project.close.title = "Close " + info.name;
+  project.tab.title = info.root + (agents ? "" : " · Delete closes it");
+}
+
+// closeProject closes a project no agent works in. Closing the last one
+// lets the treaty server stop.
+async function closeProject(slug) {
+  const status = document.getElementById("status");
+  try {
+    const response = await fetch("api/close", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slug }) });
+    if (!response.ok) throw new Error((await response.text()).trim());
+    status.textContent = "";
+    if (active === slug) active = "";
+    remove(slug);
+    sync([...open.values()].map(project => project.info));
+  } catch (err) {
+    status.textContent = "not closed: " + err.message;
+  }
 }
 
 function remove(slug) {
@@ -141,7 +181,7 @@ function remove(slug) {
 function sync(list) {
   const slugs = new Set(list.map(p => p.slug));
   for (const slug of [...open.keys()]) if (!slugs.has(slug)) remove(slug);
-  for (const info of list) if (!open.has(info.slug)) add(info);
+  for (const info of list) if (open.has(info.slug)) update(info); else add(info);
   arrange();
   firstList = false;
   document.getElementById("empty").hidden = open.size > 0;

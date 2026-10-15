@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -171,4 +173,103 @@ func sessions(projects *app.Projects) (result int) {
 	}
 
 	return result
+}
+
+func TestOpenAndCloseProjects(t *testing.T) {
+	projects := app.NewProjects(func(string) (*app.Live, func(), error) { return app.NewLive(nil, nil), func() {}, nil }, 50*time.Millisecond)
+	server, err := Listen(projects, echo{}, "test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = server.Close() }()
+	root := filepath.Join(t.TempDir(), "shop")
+	write(t, root, "go.mod", "module example.com/shop\n")
+
+	if shown, err := Pages(server.URL()); err != nil || shown {
+		t.Fatalf("no page has asked yet: %t %v", shown, err)
+	}
+
+	opened, err := Open(server.URL(), root)
+	if err != nil || !opened.Opened || opened.Slug != "shop" || opened.URL != server.URL()+"/?p=shop" {
+		t.Fatalf("open: %+v %v", opened, err)
+	}
+
+	if again, err := Open(server.URL(), root); err != nil || again.Opened {
+		t.Fatalf("opening it again: %+v %v", again, err)
+	}
+
+	if _, err := Open(server.URL(), filepath.Join(root, "go.mod")); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a file is no project: %v", err)
+	}
+
+	// The page's poll for every project counts as a page; a lookup by
+	// directory does not.
+	if _, err := FindMap(server.URL(), root); err != nil {
+		t.Fatal(err)
+	}
+
+	if shown, _ := Pages(server.URL()); shown {
+		t.Fatal("a lookup by directory is no page")
+	}
+
+	list := get(t, server.URL()+"/api/projects", http.StatusOK)
+	if shown, _ := Pages(server.URL()); !shown || !strings.Contains(string(list), `"sessions":0,"pinned":true`) {
+		t.Fatalf("after the page's poll: %t %s", shown, list)
+	}
+
+	// An agent session in it keeps it from closing until the session ends.
+	session, err := Attach(server.URL(), root)
+	if err != nil || !session.Joined {
+		t.Fatalf("attach: %+v %v", session, err)
+	}
+
+	if err := Close(server.URL(), "shop"); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "agent session") {
+		t.Fatalf("closing while an agent works in it: %v", err)
+	}
+
+	_ = session.Close()
+	waitFor(t, func() bool { return sessions(projects) == 0 })
+	time.Sleep(150 * time.Millisecond)
+	if len(projects.List()) != 1 {
+		t.Fatal("a project the person opened outlives its agent")
+	}
+
+	if err := Close(server.URL(), "shop"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Close(server.URL(), "shop"); !errors.Is(err, ErrRefused) {
+		t.Fatalf("closing it twice: %v", err)
+	}
+
+	if len(projects.List()) != 0 {
+		t.Fatalf("closed: %+v", projects.List())
+	}
+
+	// A caller of another protocol is refused, so it replaces the server.
+	request, _ := http.NewRequest(http.MethodPost, server.URL()+"/api/open", strings.NewReader(`{"root":"`+root+`"}`))
+	request.Header.Set(protocolHeader, "0")
+	if response, err := http.DefaultClient.Do(request); err != nil || response.StatusCode != http.StatusConflict {
+		t.Fatalf("another protocol: %v %v", response, err)
+	}
+}
+
+// TestShellScriptParses checks the project page's script with Node, since
+// it has no build step to catch a syntax error.
+func TestShellScriptParses(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+
+	start, end := strings.Index(shell, "<script>"), strings.Index(shell, "</script>")
+	file := filepath.Join(t.TempDir(), "shell.js")
+	if err := os.WriteFile(file, []byte(strings.Replace(shell[start+len("<script>"):end], `/*LATEST*/""`, `""`, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if output, err := exec.Command(node, "--check", file).CombinedOutput(); err != nil {
+		t.Fatalf("the shell's script does not parse: %v\n%s", err, output)
+	}
 }

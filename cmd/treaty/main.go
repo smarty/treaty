@@ -47,6 +47,10 @@ const (
 	// answer.
 	startup = 10 * time.Second
 
+	// settle is how long a newly started server waits for a page left open
+	// by the server it replaced to reconnect, before opening a browser.
+	settle = 3 * time.Second
+
 	// maxLog is how large ~/.treaty/daemon.log grows before a new server
 	// starts it over.
 	maxLog = 1024 * 1024
@@ -138,32 +142,119 @@ func (this launcher) Restart(port int, stderr io.Writer) error {
 	return nil
 }
 
-// Serve keeps this directory's live map open until interrupted, as a
-// session that sends nothing.
+// Open opens a directory's project on the treaty server, starting the
+// server when none runs, and keeps it open without an agent session until
+// the person closes its tab. A browser opens on the map when no page shows
+// the server's projects.
+func (this launcher) Open(port int, dir string, stderr io.Writer) error {
+	opened, err := this.open(port, dir, false)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(stderr, "treaty: live map at %s; close its tab to close it\n", opened.URL)
+	return nil
+}
+
+// Serve opens this directory's project as Open does, and closes it again
+// when interrupted, unless it was open already.
 func (this launcher) Serve(port int, open bool, stderr io.Writer) error {
-	first := true
-	connect := this.connect(port, func(session *web.Session) {
-		if !first {
-			fmt.Fprintln(stderr, "treaty: rejoined the treaty server")
-			return
-		}
-
-		first = false
-		fmt.Fprintf(stderr, "treaty: live map at %s (Ctrl-C to stop)\n", session.Map)
-		if open {
-			browse(session.Map)
-		}
-	})
-
-	in, done := io.Pipe()
 	interrupted := make(chan os.Signal, 1)
 	signal.Notify(interrupted, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-interrupted
-		_ = done.Close()
-	}()
+	opened, err := this.open(port, "", open)
+	if err != nil {
+		return err
+	}
 
-	return mcp.NewShim(connect, patience).Serve(in, io.Discard)
+	fmt.Fprintf(stderr, "treaty: live map at %s (Ctrl-C to close it)\n", opened.URL)
+	<-interrupted
+	if opened.Opened {
+		_ = web.Close(baseURL(port), opened.Slug)
+	}
+
+	return nil
+}
+
+// open opens a directory's project, the root when dir is empty, starting
+// or replacing the server as connect does, and opens a browser on its map
+// when no page shows the server's projects, or always when force is set.
+func (this launcher) open(port int, dir string, force bool) (result web.OpenedProject, err error) {
+	root := this.root
+	if dir != "" {
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(this.root, dir)
+		}
+
+		if root, err = filepath.Abs(dir); err != nil {
+			return result, err
+		}
+	}
+
+	if info, err := os.Stat(root); err != nil {
+		return result, err
+	} else if !info.IsDir() {
+		return result, fmt.Errorf("%s is not a directory", root)
+	}
+
+	base := baseURL(port)
+	started := false
+	result, err = web.Open(base, root)
+	if errors.Is(err, web.ErrProtocol) {
+		_ = web.Stop(base)
+		err = web.ErrNoServer
+	}
+
+	if errors.Is(err, web.ErrNoServer) {
+		if err := this.startServer(port); err != nil {
+			return result, err
+		}
+
+		started = true
+		result, err = web.Open(base, root)
+	}
+
+	if err != nil {
+		return result, err
+	}
+
+	if force {
+		browse(result.URL)
+	} else {
+		browseUnlessShown(base, result.URL, started)
+	}
+
+	return result, nil
+}
+
+// startServer spawns the treaty server and waits until it answers.
+func (this launcher) startServer(port int) error {
+	if err := spawn(port); err != nil {
+		return err
+	}
+
+	base, deadline := baseURL(port), time.Now().Add(startup)
+	for {
+		time.Sleep(100 * time.Millisecond)
+		if _, err := web.Pages(base); err == nil {
+			return nil
+		} else if time.Now().After(deadline) {
+			return err
+		}
+	}
+}
+
+// browseUnlessShown opens a browser on a map unless a page already shows
+// the server's projects. A server that was just started waits a moment
+// first, since a page left open by the server it replaced reconnects
+// within seconds.
+func browseUnlessShown(base, url string, started bool) {
+	if started {
+		time.Sleep(settle)
+	}
+
+	if shown, err := web.Pages(base); err == nil && !shown {
+		browse(url)
+	}
 }
 
 // URL finds this directory's live map.
@@ -187,16 +278,24 @@ func (this launcher) connect(port int, attached func(*web.Session)) func() (io.R
 			session, err = this.await(base)
 		}
 
+		started := false
 		if errors.Is(err, web.ErrNoServer) {
 			if err := spawn(port); err != nil {
 				return nil, err
 			}
 
+			started = true
 			session, err = this.await(base)
 		}
 
 		if err != nil {
 			return nil, err
+		}
+
+		// A session that started the server shows its map, unless a page
+		// left open from before finds the new server.
+		if started {
+			go browseUnlessShown(base, session.Map, true)
 		}
 
 		attached(session)

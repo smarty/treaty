@@ -97,7 +97,7 @@ In the root of a Go repository:
 ```sh
 treaty init --architecture layered   # propose a treaty.yaml from the import graph
 treaty check --base main             # check the rules and contract changes; exits 1 on failure
-treaty serve --open
+treaty open                          # open the live map in your browser
 ```
 
 `treaty init` fits the code to the architecture you name, using the shape of
@@ -182,8 +182,16 @@ repository you work in. Its one page, `http://127.0.0.1:7878/`, has a tab for
 each open repository, so a single browser tab follows them all;
 `http://127.0.0.1:7878/?p=<folder>` opens with that repository's tab shown. It
 watches each working tree and pushes
-every rebuild to the browser. `treaty serve` keeps the current directory's map
-open; Claude Code sessions open it too (see below). The map lays modules
+every rebuild to the browser. `treaty open` opens the current directory's map,
+or `treaty open <dir>` another's, without an agent; Claude Code sessions open
+it too (see below). Whichever starts the server opens a browser on the map,
+unless a page already shows it. Each tab shows 🧠 left of its name while an
+agent works in it through MCP and 📄 while none does, and then × on its right:
+closing the tab closes the project, and closing the last one stops the
+server. Opening a repository writes nothing to it: no `treaty.yaml` appears
+unless you change the architecture, and an edit that changes nothing leaves
+the file alone, so you can review any repository without leaving Treaty
+behind in `git status`. The map lays modules
 out to match the architecture. Each module holds a ring of cells, one per file,
 darker for files with more symbols, so crowded files stand out. The module's
 contracts stay on its border, each on the stretch facing its file; zoom in and
@@ -346,7 +354,8 @@ a large repository (20,000 files or more, or one slow to walk).
 | `treaty design new <name> [--from <target>]...` | Scaffolds a design in `.treaty/designs/` from current contracts |
 | `treaty design check <name>` | Compares a design with the code |
 | `treaty map [--base <ref> \| --merge-base <branch>] [--design <name>]...` | Renders a static map to `.treaty/out/map.html` |
-| `treaty serve [--port <n>] [--open]` | Keeps this directory's live map open until interrupted |
+| `treaty open [<dir>] [--port <n>]` | Opens this directory's live map, or dir's, without an agent, until you close its tab; starts the treaty server, and a browser when no page shows it |
+| `treaty serve [--port <n>] [--open]` | Opens this directory's live map until interrupted |
 | `treaty mcp [--port <n>]` | Relays an agent session over MCP on stdio to the treaty server, starting it when needed |
 | `treaty restart [--port <n>]` | Stops the treaty server; open sessions start a new one and rejoin |
 | `treaty init [--architecture <name>]` | Creates `.treaty/` and proposes a `treaty.yaml` for `none` (default), `hexagonal`, `clean`, `layered`, `vertical` or `modular` |

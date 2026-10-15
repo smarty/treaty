@@ -47,7 +47,11 @@ commands:
   design check <name> [--format json|text]    compare a design with the code
   map [--base <ref> | --merge-base <branch>] [--design <name>]...
                                               render a static map to .treaty/out/map.html
-  serve [--port <n>] [--open]                 keep this directory's live map open until
+  open [<dir>] [--port <n>]                   open this directory's live map, or dir's,
+                                              without an agent, until you close its tab;
+                                              starts the treaty server, and a browser when
+                                              no page shows it
+  serve [--port <n>] [--open]                 open this directory's live map until
                                               interrupted
   mcp [--port <n>]                            serve the live graph to an agent over MCP on
                                               stdio, and the live map to the person
@@ -81,6 +85,10 @@ type Launcher interface {
 
 	// Version names this build of treaty.
 	Version() string
+
+	// Open opens a directory's live map, this one when dir is empty,
+	// without an agent session, until the person closes its tab.
+	Open(port int, dir string, stderr io.Writer) error
 
 	// Serve keeps this directory's live map open until interrupted.
 	Serve(port int, open bool, stderr io.Writer) error
@@ -395,6 +403,17 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 
 		fmt.Fprint(stdout, hereText(report))
 		return nil
+	case "open":
+		if len(positional) > 1 {
+			return ErrUsage
+		}
+
+		dir := ""
+		if len(positional) == 1 {
+			dir = positional[0]
+		}
+
+		return launcher.Open(*port, dir, stderr)
 	case "serve":
 		return launcher.Serve(*port, *open, stderr)
 	case "mcp":

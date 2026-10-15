@@ -165,6 +165,107 @@ func FindMap(base, root string) (result string, err error) {
 	return projects[0].URL, nil
 }
 
+// OpenedProject is a project opened for the person: where its map is, its
+// URL segment, and whether this opened it rather than finding it open.
+type OpenedProject struct {
+	URL    string `json:"url"`
+	Slug   string `json:"slug"`
+	Opened bool   `json:"opened"`
+}
+
+// Open keeps a directory's project open on the server for the person,
+// without an agent session, until they close its tab.
+//
+// Parameters:
+//   - base: the server's base URL.
+//   - root: the directory, absolute.
+//
+// Returns:
+//   - result: the project.
+//   - err: the project could not be opened.
+//
+// Errors:
+//   - ErrNoServer: nothing listens at base.
+//   - ErrProtocol: the server is a treaty of another protocol.
+//   - ErrRefused: the server refused, such as when the graph failed to build.
+func Open(base, root string) (result OpenedProject, err error) {
+	data, _ := json.Marshal(map[string]string{"root": root})
+	request, err := http.NewRequest(http.MethodPost, base+"/api/open", strings.NewReader(string(data)))
+	if err != nil {
+		return result, err
+	}
+
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(protocolHeader, strconv.Itoa(Protocol))
+	response, err := (&http.Client{}).Do(request)
+	if err != nil {
+		return result, fmt.Errorf("%w at %s: %v", ErrNoServer, base, err)
+	}
+
+	defer func() { _ = response.Body.Close() }()
+	switch {
+	case response.StatusCode == http.StatusConflict, response.StatusCode == http.StatusNotFound:
+		return result, fmt.Errorf("%w at %s", ErrProtocol, base)
+	case response.StatusCode != http.StatusOK:
+		text, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return result, fmt.Errorf("%w: %s", ErrRefused, strings.TrimSpace(string(text)))
+	}
+
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return result, fmt.Errorf("%w at %s", ErrNotTreaty, base)
+	}
+
+	return result, nil
+}
+
+// Close closes a project the person kept open.
+//
+// Parameters:
+//   - base: the server's base URL.
+//   - slug: the project's URL segment.
+//
+// Returns:
+//   - err: no treaty server answered, or it refused.
+func Close(base, slug string) error {
+	data, _ := json.Marshal(map[string]string{"slug": slug})
+	response, err := (&http.Client{Timeout: dialTimeout}).Post(base+"/api/close", "application/json", strings.NewReader(string(data)))
+	if err != nil {
+		return fmt.Errorf("%w at %s: %v", ErrNoServer, base, err)
+	}
+
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusNoContent {
+		text, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("%w: %s", ErrRefused, strings.TrimSpace(string(text)))
+	}
+
+	return nil
+}
+
+// Pages reports whether a page shows the server's projects, so a process
+// that opens one knows whether a browser is needed.
+//
+// Parameters:
+//   - base: the server's base URL.
+//
+// Returns:
+//   - shown: a page asked for the projects in the last few seconds.
+//   - err: no treaty server answered.
+func Pages(base string) (shown bool, err error) {
+	response, err := (&http.Client{Timeout: dialTimeout}).Get(base + "/api/hello")
+	if err != nil {
+		return false, fmt.Errorf("%w at %s: %v", ErrNoServer, base, err)
+	}
+
+	defer func() { _ = response.Body.Close() }()
+	var answer hello
+	if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&answer) != nil || answer.App != "treaty" {
+		return false, fmt.Errorf("%w at %s", ErrNotTreaty, base)
+	}
+
+	return answer.Pages, nil
+}
+
 // Stop asks the server to stop. Its sessions' shims start a new one, which
 // is how a newly built treaty takes over.
 //

@@ -199,7 +199,7 @@ func (this *Config) Save(text, expected string) (path string, err error) {
 	}
 
 	path = filepath.Join(this.root, ConfigFile)
-	return path, os.WriteFile(path, []byte(text), 0o644)
+	return path, writeChanged(path, []byte(text))
 }
 
 // Fingerprint hashes the path, size and modification time of every file
@@ -406,7 +406,7 @@ func (this *Workspace) ReadDesign(name string) (result string, err error) {
 //   - err: the write failed.
 func (this *Workspace) WriteConfig(text string) (path string, err error) {
 	path = filepath.Join(this.root, ConfigFile)
-	return path, os.WriteFile(path, []byte(text), 0o644)
+	return path, writeChanged(path, []byte(text))
 }
 
 // WriteConfigDraft writes treaty.yaml, or a draft beside the existing

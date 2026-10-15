@@ -495,3 +495,30 @@ func TestRenameBoundary(t *testing.T) {
 		t.Fatalf("after the rename: %v %+v", err, loaded.Architecture.Resolve("orders/cart"))
 	}
 }
+
+func TestEditsThatChangeNothingDoNotWrite(t *testing.T) {
+	// Written the way no encoder would write it, so any rewrite shows.
+	const original = "version: 1\narchitecture:   layered\nlayers:\n  web:   [ 'web/**' ]   # top\n  store: [ \"store/**\" ]\n"
+	root := t.TempDir()
+	file := filepath.Join(root, ConfigFile)
+	if err := os.WriteFile(file, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	config := NewConfig(root)
+	if _, err := config.Place("web/home", rules.Placement{Layer: "web"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := config.Save(original, original); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := config.Unignore("unclassified", "go:tools"); err != nil {
+		t.Fatal(err)
+	}
+
+	if data, _ := os.ReadFile(file); string(data) != original {
+		t.Fatalf("an edit that changes nothing rewrote treaty.yaml:\n%s", data)
+	}
+}

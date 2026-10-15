@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -25,9 +26,17 @@ import (
 )
 
 const (
-	// Protocol is the version of the attach stream between a shim and the
-	// server; a shim and a server that disagree refuse each other.
+	// Protocol is the version of what a treaty process asks of the server:
+	// the attach stream between a shim and the server, and opening and
+	// closing projects. A process and a server that disagree refuse each
+	// other, and the process replaces the server. A server from before
+	// projects could be opened has no /api/open, which treaty open takes
+	// the same way, so opening needed no new version.
 	Protocol = 1
+
+	// pageWindow is how recently a page must have asked for the projects to
+	// count as open; pages ask every two seconds.
+	pageWindow = 5 * time.Second
 
 	// Upgrade names the attach stream in the HTTP upgrade.
 	Upgrade = "treaty-mcp"
@@ -81,15 +90,19 @@ type Server struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 
-	mutex sync.Mutex
-	conns map[net.Conn]bool
+	mutex    sync.Mutex
+	conns    map[net.Conn]bool
+	lastPage time.Time
 }
 
-// hello is how a treaty server identifies itself.
+// hello is how a treaty server identifies itself, and says whether a page
+// shows its projects, so a process that opens one knows whether to open a
+// browser.
 type hello struct {
 	App      string `json:"app"`
 	Version  string `json:"version"`
 	Protocol int    `json:"protocol"`
+	Pages    bool   `json:"pages"`
 }
 
 // projectInfo is an open project, with where its map is.
@@ -134,6 +147,8 @@ func Listen(projects *app.Projects, sessions Sessions, version string, port int)
 	mux.HandleFunc("GET /api/hello", result.hello)
 	mux.HandleFunc("GET /api/projects", result.list)
 	mux.HandleFunc("POST /api/attach", result.attach)
+	mux.HandleFunc("POST /api/open", result.openProject)
+	mux.HandleFunc("POST /api/close", result.closeProject)
 	mux.HandleFunc("POST /api/shutdown", result.shutdown)
 	mux.HandleFunc("GET /p/{project}", result.slash)
 	mux.HandleFunc("GET /p/{project}/{$}", result.page)
@@ -381,7 +396,68 @@ func (this *Server) guard(next http.Handler) http.Handler {
 
 // hello tells a shim that a treaty server answers here, and which.
 func (this *Server) hello(writer http.ResponseWriter, _ *http.Request) {
-	respond(writer, hello{App: "treaty", Version: this.version, Protocol: Protocol})
+	this.mutex.Lock()
+	pages := time.Since(this.lastPage) < pageWindow
+	this.mutex.Unlock()
+	respond(writer, hello{App: "treaty", Version: this.version, Protocol: Protocol, Pages: pages})
+}
+
+// openProject keeps a directory's project open for the person, without an
+// agent session, until they close its tab.
+func (this *Server) openProject(writer http.ResponseWriter, request *http.Request) {
+	if got := request.Header.Get(protocolHeader); got != strconv.Itoa(Protocol) {
+		http.Error(writer, fmt.Sprintf("this server speaks protocol %d, the caller %q", Protocol, got), http.StatusConflict)
+		return
+	}
+
+	var body struct {
+		Root string `json:"root"`
+	}
+
+	if !decode(writer, request, &body) {
+		return
+	}
+
+	if !filepath.IsAbs(body.Root) {
+		http.Error(writer, "root must be an absolute directory", http.StatusBadRequest)
+		return
+	}
+
+	if info, err := os.Stat(body.Root); err != nil || !info.IsDir() {
+		http.Error(writer, body.Root+" is not a directory", http.StatusBadRequest)
+		return
+	}
+
+	project, opened, err := this.projects.Open(body.Root)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	respond(writer, OpenedProject{URL: this.MapURL(project.Slug), Slug: project.Slug, Opened: opened})
+}
+
+// closeProject closes a project the person kept open, once no agent works
+// in it.
+func (this *Server) closeProject(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Slug string `json:"slug"`
+	}
+
+	if !decode(writer, request, &body) {
+		return
+	}
+
+	switch err := this.projects.Close(body.Slug); {
+	case errors.Is(err, app.ErrUnknownProject):
+		http.Error(writer, err.Error(), http.StatusNotFound)
+	case errors.Is(err, app.ErrProjectInUse):
+		http.Error(writer, err.Error()+"; it closes when the session ends", http.StatusConflict)
+	case err != nil:
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	default:
+		writer.WriteHeader(http.StatusNoContent)
+	}
 }
 
 // home serves the page with a tab per open project, showing the one a
@@ -398,6 +474,13 @@ func (this *Server) home(writer http.ResponseWriter, _ *http.Request) {
 func (this *Server) list(writer http.ResponseWriter, request *http.Request) {
 	result := []projectInfo{}
 	root := request.URL.Query().Get("root")
+	if root == "" {
+		// Only the page asks for every project.
+		this.mutex.Lock()
+		this.lastPage = time.Now()
+		this.mutex.Unlock()
+	}
+
 	if root != "" {
 		if project, err := this.projects.FindRoot(root); err == nil {
 			root = project.Root

@@ -138,3 +138,57 @@ func waitUntil(t *testing.T, done func() bool) {
 
 	t.Fatal("timed out")
 }
+
+func TestProjectsThePersonOpens(t *testing.T) {
+	root := t.TempDir()
+	var opened, closed atomic.Int32
+	projects := NewProjects(func(string) (*Live, func(), error) {
+		opened.Add(1)
+		return NewLive(nil, nil), func() { closed.Add(1) }, nil
+	}, 50*time.Millisecond)
+
+	project, first, err := projects.Open(root)
+	if err != nil || !first {
+		t.Fatalf("open: %+v %t %v", project, first, err)
+	}
+
+	if _, again, _ := projects.Open(root); again {
+		t.Fatal("opening an open project again opens nothing new")
+	}
+
+	// An agent session comes and goes; the project the person opened stays.
+	_, joined, leave, err := projects.Attach(root)
+	if err != nil || !joined || opened.Load() != 1 {
+		t.Fatalf("attach: %t %v, opened %d", joined, err, opened.Load())
+	}
+
+	if list := projects.List(); len(list) != 1 || list[0].Sessions != 1 || !list[0].Pinned {
+		t.Fatalf("list: %+v", list)
+	}
+
+	if err := projects.Close(project.Slug); !errors.Is(err, ErrProjectInUse) {
+		t.Fatalf("closing while an agent works in it: %v", err)
+	}
+
+	leave()
+	time.Sleep(150 * time.Millisecond)
+	if closed.Load() != 0 {
+		t.Fatal("a project the person opened outlives its agent sessions")
+	}
+
+	if err := projects.Close("nowhere"); !errors.Is(err, ErrUnknownProject) {
+		t.Fatalf("closing an unknown project: %v", err)
+	}
+
+	// Closing it closes it at once, and with nothing open the server idles.
+	if err := projects.Close(project.Slug); err != nil {
+		t.Fatal(err)
+	}
+
+	waitUntil(t, func() bool { return closed.Load() == 1 })
+	select {
+	case <-projects.Idle():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the registry did not go idle once the last project closed")
+	}
+}
