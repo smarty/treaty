@@ -13,7 +13,7 @@ import (
 var (
 	ErrRevision = errors.New("a revision may not start with a dash")
 
-	knownFlag = map[string]bool{"--quiet": true, "--short": true, "--verify": true}
+	knownFlag = map[string]bool{"--quiet": true, "--short": true, "--show-prefix": true, "--verify": true}
 )
 
 // Git reads trees out of a repository with the git command.
@@ -113,6 +113,13 @@ func (this *Git) DefaultBranch() (branch string, err error) {
 //   - err: git failed or the revisions share no history.
 func (this *Git) MergeBase(a, b string) (commit string, err error) {
 	return this.git("merge-base", a, b)
+}
+
+// Prefix finds the repository directory's path within its git checkout,
+// such as services/api/, or empty at the checkout's root or outside git.
+func (this *Git) Prefix() string {
+	prefix, _ := this.git("rev-parse", "--show-prefix")
+	return prefix
 }
 
 // Resolve turns a revision into a commit id.

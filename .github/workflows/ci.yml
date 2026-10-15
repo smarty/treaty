@@ -38,3 +38,19 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./...
+
+  # Checks the pull request with Treaty itself, through this repository's
+  # action built from its own source, so the action is tested with it.
+  treaty:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: ./
+        with:
+          version: source

@@ -152,6 +152,12 @@ func (this *Service) Map(base string, designs []string) (path string, err error)
 		return "", err
 	}
 
+	return this.renderMap(analysis, designs)
+}
+
+// renderMap writes the static map of an analysis, with the named designs
+// overlaid, to .treaty/out/map.html.
+func (this *Service) renderMap(analysis *analysis, designs []string) (path string, err error) {
 	view, err := this.buildView(analysis, designs, false)
 	if err != nil {
 		return "", err

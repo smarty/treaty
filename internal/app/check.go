@@ -51,13 +51,18 @@ func (this *Service) Check(base string) (result Report, err error) {
 		return Report{}, err
 	}
 
+	return this.checkReport(base, analysis), nil
+}
+
+// checkReport turns an analysis against base into the check's report.
+func (this *Service) checkReport(base string, analysis *analysis) (result Report) {
 	result = analysis.report()
 	result.Notes = append(this.notes(base, analysis), result.Notes...)
 	if analysis.config.Unversioned {
 		result.Notes = append(result.Notes, unversionedNote)
 	}
 
-	return result, nil
+	return result
 }
 
 // unversionedNote asks for a version line in a treaty.yaml without one.
@@ -89,7 +94,7 @@ func (this *analysis) report() Report {
 		Base:       this.baseRef,
 		Changes:    this.changes,
 		Violations: this.violations,
-		Findings:   this.findings,
+		Findings:   this.judge(this.findings),
 		Failures:   this.failures(),
 		Warnings:   this.warnings(),
 	}
@@ -117,6 +122,58 @@ func (this *analysis) report() Report {
 		}
 
 		result.Modules = append(result.Modules, entry)
+	}
+
+	return result
+}
+
+// judge marks each finding that counts toward the failures or warnings,
+// counted as problems counts them: a violation or unplaced module the base
+// did not have, or a breaking change, such as a moved contract unless it
+// left an entry module nothing could import.
+func (this *analysis) judge(findings []rules.Finding) []rules.Finding {
+	verdicts := map[string]string{}
+	for _, kind := range this.config.WarnOn {
+		verdicts[kind] = rules.VerdictWarn
+	}
+
+	for _, kind := range this.config.FailOn {
+		verdicts[kind] = rules.VerdictFail
+	}
+
+	harmless := map[string]bool{}
+	for _, change := range this.changes {
+		if change.Kind == rules.ChangeMoved && this.fromEntry(change) {
+			harmless[change.Symbol] = true
+		}
+	}
+
+	result := make([]rules.Finding, len(findings))
+	for i, finding := range findings {
+		kind := finding.Kind
+		switch finding.Kind {
+		case rules.FindingBreaking:
+		case rules.FindingImplementers:
+			kind = rules.FindingBreaking
+		case rules.FindingMoved:
+			kind = rules.FindingBreaking
+			if harmless[finding.Targets[0]] {
+				kind = ""
+			}
+		case rules.FindingLayerViolation, rules.FindingCycle:
+			if finding.Existing {
+				kind = ""
+			}
+		case rules.FindingUnclassified, rules.FindingAmbiguous:
+			if this.unplacedInBase(finding.Targets[0], finding.Kind) {
+				kind = ""
+			}
+		default:
+			kind = ""
+		}
+
+		finding.Verdict = verdicts[kind]
+		result[i] = finding
 	}
 
 	return result

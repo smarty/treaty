@@ -1,0 +1,78 @@
+# Checks a pull request with treaty ci: each finding that fails or warns is
+# annotated on its line, the report becomes the job's summary, and the map
+# of the change is kept as the treaty-map artifact. The job fails when the
+# check does. Check out with fetch-depth: 0, so the merge base is there.
+name: Treaty
+description: Check a pull request's architecture and contracts, annotate the findings on their lines, and keep a map of the change.
+branding:
+  icon: map
+  color: blue
+
+inputs:
+  version:
+    description: >-
+      The Treaty release to run, such as v0.3.0. The default runs the release
+      this action is pinned to, or the latest when it is pinned to a branch;
+      "source" builds the action's own source with Go.
+    default: action
+  target:
+    description: The branch the pull request merges into. The default is the pull request's base branch.
+    default: ""
+  working-directory:
+    description: The directory holding treaty.yaml.
+    default: .
+  map:
+    description: Keep the map of the change as the treaty-map artifact.
+    default: "true"
+
+outputs:
+  result:
+    description: pass or fail.
+    value: ${{ steps.check.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Treaty
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        directory="$RUNNER_TEMP/treaty-bin"
+        mkdir -p "$directory"
+        version="$VERSION"
+        if [ "$version" = action ]; then
+          case "$ACTION_REF" in
+            v[0-9]*) version="$ACTION_REF" ;;
+            *) version=latest ;;
+          esac
+        fi
+
+        if [ "$version" = source ]; then
+          (cd "$GITHUB_ACTION_PATH" && go build -o "$directory/treaty" ./cmd/treaty)
+        else
+          sh "$GITHUB_ACTION_PATH/scripts/install.sh" "$version" "$directory"
+        fi
+
+        echo "$directory" >> "$GITHUB_PATH"
+    - name: Check
+      id: check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set +e
+        treaty version
+        treaty ci ${TARGET:+--target "$TARGET"}
+        echo "code=$?" >> "$GITHUB_OUTPUT"
+    - name: Keep the map
+      if: inputs.map == 'true' && steps.check.outputs.map != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: treaty-map
+        path: ${{ steps.check.outputs.map }}
+    - name: Verdict
+      shell: bash
+      run: exit ${{ steps.check.outputs.code }}

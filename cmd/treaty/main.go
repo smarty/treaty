@@ -29,6 +29,7 @@ import (
 	"github.com/smarty/treaty/internal/adapters/language/javascript"
 	"github.com/smarty/treaty/internal/adapters/language/python"
 	"github.com/smarty/treaty/internal/adapters/mcp"
+	"github.com/smarty/treaty/internal/adapters/pipeline"
 	"github.com/smarty/treaty/internal/adapters/web"
 	"github.com/smarty/treaty/internal/app"
 )
@@ -79,6 +80,7 @@ func main() {
 	}
 
 	service, _ := build(root)
+	service.UsePipeline(pipeline.Detect(os.Getenv, gitvcs.New(root).Prefix, os.Stdout))
 	os.Exit(cli.Run(args, service, launcher{root: root}, os.Stdin, os.Stdout, os.Stderr))
 }
 

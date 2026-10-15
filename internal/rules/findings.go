@@ -2,6 +2,7 @@ package rules
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -22,6 +23,9 @@ const (
 	FindingUnclassified   = "unclassified"
 	FindingVariants       = "variant_mismatch"
 
+	VerdictFail = "fail"
+	VerdictWarn = "warn"
+
 	SeverityHigh   = "high"
 	SeverityLow    = "low"
 	SeverityMedium = "medium"
@@ -35,7 +39,11 @@ var (
 	Failable = []string{FindingBreaking, FindingLayerViolation, FindingCycle, FindingUnclassified, FindingAmbiguous}
 )
 
-// Finding is one item in the review queue.
+// Finding is one item in the review queue. File and Line say where it
+// shows in the code, when it has one place: a file alone for a module or a
+// removed symbol. Existing marks a violation the base already had. Verdict
+// is fail or warn when the finding counts toward the check's failures or
+// warnings, as rules.fail_on and rules.warn_on say.
 type Finding struct {
 	Severity string   `json:"severity"`
 	Kind     string   `json:"kind"`
@@ -43,6 +51,10 @@ type Finding struct {
 	Detail   string   `json:"detail"`
 	Targets  []string `json:"targets"`
 	Blast    int      `json:"blast_radius"`
+	File     string   `json:"file,omitempty"`
+	Line     int      `json:"line,omitempty"`
+	Existing bool     `json:"existing,omitempty"`
+	Verdict  string   `json:"verdict,omitempty"`
 }
 
 // BlastRadius counts the contract symbols that transitively depend on each
@@ -126,6 +138,7 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 			Detail:  existing + fmt.Sprintf("%s; %d reference(s), %d import(s), first %s at %s:%d", violation.Rule, len(violation.References), len(violation.Imports), first, file, line),
 			Targets: []string{violation.From, violation.To},
 			Blast:   blast[blastTarget],
+			File:    file, Line: line, Existing: violation.Existing,
 		})
 	}
 
@@ -136,6 +149,7 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 				Title:   fmt.Sprintf("%s is claimed by boundaries %s", module.ID, strings.Join(module.Ambiguous, " and ")),
 				Detail:  "Their globs match it equally well, so it is in no boundary and its dependencies are not checked. Name its path exactly in the boundary it belongs to.",
 				Targets: []string{module.ID},
+				File:    firstFile(module),
 			})
 		} else if module.Layer == graph.LayerUnclassified {
 			result = append(result, Finding{
@@ -143,6 +157,7 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 				Title:   fmt.Sprintf("%s matches no layer", module.ID),
 				Detail:  "No glob in treaty.yaml matches this module, so its dependencies are not checked.",
 				Targets: []string{module.ID},
+				File:    firstFile(module),
 			})
 		}
 
@@ -157,6 +172,7 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 				Title:   fmt.Sprintf("New module %s", module.ID),
 				Detail:  detail,
 				Targets: []string{module.ID},
+				File:    firstFile(module),
 			})
 		}
 	}
@@ -173,6 +189,7 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 				Detail:  fmt.Sprintf("%s:%d declares %s; %s:%d declares %s", symbol.File, symbol.Line, symbol.Signature, variant.File, variant.Line, variant.Signature),
 				Targets: []string{symbol.ID},
 				Blast:   blast[symbol.ID],
+				File:    symbol.File, Line: symbol.Line,
 			})
 		}
 	}
@@ -180,6 +197,7 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 	var implementation []string
 	for _, change := range changes {
 		symbol := head.Symbol(change.Symbol)
+		file, line := locate(head, base, change.Symbol)
 		switch change.Kind {
 		case ChangeBreaking, ChangeRemoved:
 			finding := Finding{
@@ -188,6 +206,7 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 				Detail:  describe(change),
 				Targets: []string{change.Symbol},
 				Blast:   blast[change.Symbol],
+				File:    file, Line: line,
 			}
 
 			if symbol != nil && symbol.Kind == graph.KindInterface && change.Before == "" {
@@ -211,6 +230,7 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 					Detail:  symbol.Signature,
 					Targets: []string{change.Symbol},
 					Blast:   blast[change.Symbol],
+					File:    file, Line: line,
 				})
 			}
 		case ChangeMoved:
@@ -225,6 +245,7 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 				Detail:  describe(change),
 				Targets: []string{change.Symbol},
 				Blast:   blast[change.Symbol],
+				File:    file, Line: line,
 			})
 		case ChangeContract:
 			result = append(result, Finding{
@@ -233,6 +254,7 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 				Detail:  describe(change),
 				Targets: []string{change.Symbol},
 				Blast:   blast[change.Symbol],
+				File:    file, Line: line,
 			})
 		case ChangeImplementation:
 			implementation = append(implementation, change.Symbol)
@@ -260,6 +282,33 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 		return result[i].Title < result[j].Title
 	})
 	return result
+}
+
+// locate finds where a changed symbol is: its line in head, or, for a
+// symbol head no longer has, just the file the base had it in, since the
+// base's line numbers do not hold in head.
+func locate(head, base *graph.Graph, id string) (file string, line int) {
+	if symbol := head.Symbol(id); symbol != nil {
+		return symbol.File, symbol.Line
+	}
+
+	if base != nil {
+		if symbol := base.Symbol(id); symbol != nil {
+			return symbol.File, 0
+		}
+	}
+
+	return "", 0
+}
+
+// firstFile names a module's first file, where a finding about the whole
+// module shows.
+func firstFile(module *graph.Module) string {
+	if len(module.Files) == 0 {
+		return ""
+	}
+
+	return slices.Min(module.Files)
 }
 
 func describe(change Change) string {
