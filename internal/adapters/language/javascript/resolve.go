@@ -208,18 +208,80 @@ func (this *resolver) resolve(from, specifier string) (result string, found bool
 	return "", false
 }
 
-// glob lists the source files a relative glob matches from the importing
-// file, sorted: * and ? within a name, ** across directories, and {a,b}
-// for alternatives.
-func (this *resolver) glob(from, pattern string) (result []string) {
-	if !strings.HasPrefix(pattern, "./") && !strings.HasPrefix(pattern, "../") {
+// glob lists the source files a glob matches, sorted, leaving out those
+// any of exclude matches: * and ? within a name, ** across directories,
+// and {a,b} for alternatives. A glob relative to the importing file starts
+// with ./ or ../; any other is resolved through the compiler config's paths
+// and the bundler's aliases, as an import is, such as @/pages/*.vue.
+func (this *resolver) glob(from, pattern string, exclude []string) (result []string) {
+	excluded := map[string]bool{}
+	for _, each := range exclude {
+		for _, file := range this.expand(from, each) {
+			excluded[file] = true
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, file := range this.expand(from, pattern) {
+		if !excluded[file] && !seen[file] {
+			seen[file] = true
+			result = append(result, file)
+		}
+	}
+
+	sort.Strings(result)
+	return result
+}
+
+// expand lists the source files one glob matches, from every place it can
+// resolve to.
+func (this *resolver) expand(from, pattern string) (result []string) {
+	for _, full := range this.globPaths(from, pattern) {
+		result = append(result, this.match(full)...)
+	}
+
+	return result
+}
+
+// globPaths turns a glob into globs from the repository root: one for a
+// relative glob, and one for each target of the first path rule or alias
+// that fits, else one under the config's baseUrl.
+func (this *resolver) globPaths(from, pattern string) []string {
+	dir := path.Dir(from)
+	if strings.HasPrefix(pattern, "./") || strings.HasPrefix(pattern, "../") {
+		return []string{path.Join(dir, pattern)}
+	}
+
+	config := this.config(dir)
+	if config == nil {
 		return nil
 	}
 
+	for _, rule := range config.paths {
+		rest, ok := rule.match(pattern)
+		if !ok {
+			continue
+		}
+
+		var result []string
+		for _, target := range rule.targets {
+			result = append(result, path.Clean(strings.Replace(target, "*", rest, 1)))
+		}
+
+		return result
+	}
+
+	if config.baseURL != "" && !strings.HasPrefix(pattern, "/") {
+		return []string{path.Join(config.baseURL, pattern)}
+	}
+
+	return nil
+}
+
+// match lists the source files a glob from the repository root matches.
+func (this *resolver) match(full string) (result []string) {
 	var expression strings.Builder
 	expression.WriteString("^")
-	full := path.Join(path.Dir(from), pattern)
-
 	for index := 0; index < len(full); index++ {
 		switch c := full[index]; {
 		case strings.HasPrefix(full[index:], "**/"):
@@ -254,7 +316,6 @@ func (this *resolver) glob(from, pattern string) (result []string) {
 		}
 	}
 
-	sort.Strings(result)
 	return result
 }
 

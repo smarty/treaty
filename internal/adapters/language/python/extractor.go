@@ -159,7 +159,7 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 		}
 	}
 
-	imports.roots = sourceRoots(found, imports.dirs)
+	imports.roots = sourceRoots(found, imports.dirs, states)
 	imports.packages = map[string][]string{}
 	for file := range imports.byPath {
 		if path.Base(file) == "__init__.py" {
@@ -801,8 +801,9 @@ func isSource(name string) bool {
 }
 
 // sourceRoots lists where absolute imports start: the repository root, src
-// when it holds packages, and each project's directory and its src.
-func sourceRoots(found tree, dirs map[string]bool) []string {
+// when it holds packages, each project's directory and its src, and each
+// directory of the tree a file adds to sys.path at run time.
+func sourceRoots(found tree, dirs map[string]bool, states []*fileState) []string {
 	seen := map[string]bool{".": true}
 	result := []string{"."}
 	add := func(dir string) {
@@ -822,6 +823,14 @@ func sourceRoots(found tree, dirs map[string]bool) []string {
 	for _, dir := range projects {
 		add(dir)
 		add(path.Join(dir, "src"))
+	}
+
+	for _, state := range states {
+		for _, argument := range state.sysPaths {
+			for _, dir := range searchDirs(state.path, argument) {
+				add(dir)
+			}
+		}
 	}
 
 	sort.SliceStable(result, func(i, j int) bool { return len(result[i]) > len(result[j]) })

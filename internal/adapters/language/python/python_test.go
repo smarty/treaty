@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -314,6 +315,47 @@ func TestVendoredPackages(t *testing.T) {
 	// A package found in one place resolves; one found in two does not.
 	if want := []string{"py:plugin:run -> py:plugin/vendored:Client"}; !slices.Equal(edges, want) {
 		t.Errorf("edges: got %q, want %q", edges, want)
+	}
+}
+
+func TestSysPathAdditions(t *testing.T) {
+	root := t.TempDir()
+	for name, text := range map[string]string{
+		// util is a package in two places, and shared too, so only the
+		// directory each file puts on sys.path tells which it means.
+		"plugin/a/util/__init__.py": "def help(): pass\n",
+		"plugin/b/util/__init__.py": "def help(): pass\n",
+		"libs/shared/__init__.py":   "def tool(): pass\n",
+		"other/shared/__init__.py":  "def tool(): pass\n",
+		"vendor/tiny.py":            "def tiny(): pass\n",
+		"tools/run.py":              "import os, sys\nsys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), \"..\", \"plugin\", \"a\"))\nsys.path.insert(0, os.environ[\"EXTRA\"])\nimport util\n\ndef go():\n    return util.help()\n",
+		"scripts/build.py":          "import sys\nfrom pathlib import Path\nsys.path.append(str(Path(__file__).resolve().parents[1] / \"libs\"))\nfrom shared import tool\n\ndef build():\n    return tool()\n",
+		"app/main.py":               "import site\nsite.addsitedir(\"vendor\")\nimport tiny\n\ndef main():\n    return tiny.tiny()\n",
+	} {
+		file := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	g, err := NewExtractor().Extract(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var edges []string
+	for _, edge := range g.Edges {
+		edges = append(edges, edge.From+" -> "+edge.To)
+	}
+
+	sort.Strings(edges)
+	want := []string{"py:app:main -> py:vendor:tiny", "py:scripts:build -> py:libs/shared:tool", "py:tools:go -> py:plugin/a/util:help"}
+	if !slices.Equal(edges, want) {
+		t.Errorf("edges:\n got %q\nwant %q", edges, want)
 	}
 }
 
