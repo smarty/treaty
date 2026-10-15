@@ -30,10 +30,14 @@ type Service struct {
 
 // analysis is everything one run computes, kept in memory only.
 type analysis struct {
-	config      Config
-	head        *graph.Graph
-	base        *graph.Graph
-	baseRef     string
+	config  Config
+	head    *graph.Graph
+	base    *graph.Graph
+	baseRef string
+
+	// previewed marks an analysis under an architecture treaty.yaml does
+	// not declare, whose placements no line of the file explains.
+	previewed   bool
 	changes     []rules.Change
 	violations  []rules.Violation
 	metrics     map[string]rules.Metric

@@ -28,7 +28,8 @@ func (this *Live) Positions() (result Positions, err error) {
 //
 // Parameters:
 //   - module: the module id.
-//   - placement: the layer, and for a hexagonal adapter its side.
+//   - placement: the layer, and for a hexagonal adapter its side; for
+//     vertical and modular, the boundary, or shared or composition.
 //
 // Returns:
 //   - path: where treaty.yaml was written.
@@ -37,8 +38,8 @@ func (this *Live) Positions() (result Positions, err error) {
 // Errors:
 //   - ErrPreviewing: the map shows a previewed architecture, not
 //     treaty.yaml's.
-//   - ErrPlacement: the architecture does not place modules by layer, the
-//     layer is not one of its layers, or the module is unknown.
+//   - ErrPlacement: there is no architecture, the layer or boundary is not
+//     one of its own, or the module is unknown.
 //   - ErrNotReady: the graph has not been built yet.
 func (this *Live) Reclassify(module string, placement rules.Placement) (path string, err error) {
 	this.mutex.Lock()
@@ -112,10 +113,8 @@ func (this *Live) SetPosition(architecture, module string, position *Position) (
 // analysis's architecture and edits the config to put it there.
 func (this *Service) reclassify(analysis *analysis, moduleID string, placement rules.Placement) (path string, err error) {
 	architecture := analysis.config.Architecture
-	switch architecture.Style {
-	case rules.StyleHexagonal, rules.StyleClean, rules.StyleLayered:
-	default:
-		return "", fmt.Errorf("%w: the %s architecture does not place modules in layers by treaty.yaml alone; a module stays where its directory puts it", ErrPlacement, architecture.Style)
+	if architecture.Style == rules.StyleNone {
+		return "", fmt.Errorf("%w: there is no architecture, so there is nowhere to move a module; declare one in treaty.yaml", ErrPlacement)
 	}
 
 	module := analysis.head.Module(moduleID)
@@ -131,8 +130,28 @@ func (this *Service) reclassify(analysis *analysis, moduleID string, placement r
 }
 
 // placeable reports whether an architecture has room for a placement: its
-// composition, or one of its layers with the right side.
+// composition, or one of its layers with the right side; for vertical and
+// modular, one of its boundaries, shared or composition.
 func placeable(architecture rules.Architecture, placement rules.Placement) error {
+	if architecture.Style == rules.StyleVertical || architecture.Style == rules.StyleModular {
+		switch {
+		case placement.Boundary != "":
+			for _, boundary := range architecture.Boundaries {
+				if boundary.Name == placement.Boundary {
+					return nil
+				}
+			}
+
+			return fmt.Errorf("%w: there is no boundary %q", ErrPlacement, placement.Boundary)
+		case placement.Side != "" || placement.Public:
+			return fmt.Errorf("%w: a move sets a boundary, shared or composition, not a side or public API", ErrPlacement)
+		case placement.Layer == graph.LayerComposition, placement.Layer == graph.LayerShared:
+			return nil
+		}
+
+		return fmt.Errorf("%w: in the %s architecture a module moves to a boundary, shared or composition, not %q", ErrPlacement, architecture.Style, placement.Layer)
+	}
+
 	layers := architecture.LayerNames()
 	switch architecture.Style {
 	case rules.StyleHexagonal:
@@ -154,4 +173,34 @@ func placeable(architecture rules.Architecture, placement rules.Placement) error
 	}
 
 	return nil
+}
+
+// RenameBoundary renames a boundary in treaty.yaml and rebuilds, so the map,
+// the checks and agents follow. A name given on the map alone is not this:
+// a boundary's name is the one treaty.yaml gives it.
+//
+// Parameters:
+//   - from: the boundary's name.
+//   - to: its new name.
+//
+// Returns:
+//   - path: where treaty.yaml was written.
+//   - err: the rename is not possible, or treaty.yaml could not be written.
+//
+// Errors:
+//   - ErrPreviewing: the map shows a previewed architecture, not
+//     treaty.yaml's.
+func (this *Live) RenameBoundary(from, to string) (path string, err error) {
+	this.mutex.Lock()
+	previewing := this.preview != "" && this.preview != this.configured
+	this.mutex.Unlock()
+	if previewing {
+		return "", ErrPreviewing
+	}
+
+	if path, err = this.service.config.RenameBoundary(from, to); err != nil {
+		return "", err
+	}
+
+	return path, this.Refresh()
 }

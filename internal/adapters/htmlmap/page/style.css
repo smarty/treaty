@@ -138,6 +138,12 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: v
 .queue-item.active { border-color: var(--focus); background: var(--bg); }
 .queue-item .title { font-weight: 600; word-break: break-word; }
 .queue-item .detail { color: var(--muted); font-size: 12px; word-break: break-word; }
+.verdict { padding: 8px; margin-bottom: 6px; border-radius: 8px; border-left: 4px solid var(--line); background: var(--bg); }
+.verdict.fail { border-left-color: var(--high); }
+.verdict .title { font-weight: 600; word-break: break-word; }
+.verdict .detail { color: var(--muted); font-size: 12px; word-break: break-word; margin-top: 2px; }
+.verdict-tag { display: inline-block; margin-top: 4px; padding: 0 6px; border-radius: 9px; font-size: 11px; font-weight: 600; border: 1px solid var(--medium); color: var(--ink); }
+.verdict-tag.fail { border-color: var(--high); }
 .sev { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 700; margin-top: 2px; }
 .sev.high { background: var(--high); } .sev.medium { background: var(--medium); border-radius: 3px; } .sev.low { background: var(--low); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 #map { width: 100%; height: 100%; display: block; }
@@ -325,6 +331,9 @@ tr.ut-detail code { font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
 .config-status.error { color: var(--high); }
 .config-editor { flex: 1; min-height: 0; display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--code-bg); font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
 .config-gutter { flex: none; overflow: hidden; padding: 6px 6px 6px 8px; text-align: right; color: var(--muted); user-select: none; -webkit-user-select: none; min-width: 3.2em; border-right: 1px solid var(--line); }
+.config-gutter .placed { color: var(--selection); font-weight: 700; background: color-mix(in srgb, var(--selection) 14%, transparent); border-radius: 3px; }
+.config-why { margin: 0; font-size: 12px; color: var(--muted); word-break: break-word; }
+.config-why[hidden] { display: none; }
 .config-gutter .bad { color: var(--high); font-weight: 700; background: color-mix(in srgb, var(--high) 14%, transparent); border-radius: 3px; }
 .config-editor textarea { flex: 1; min-width: 0; margin: 0; border: 0; padding: 6px 8px; resize: none; background: transparent; color: var(--ink); font: inherit; tab-size: 2; white-space: pre; overflow: auto; }
 .config-editor textarea:focus { outline: none; }

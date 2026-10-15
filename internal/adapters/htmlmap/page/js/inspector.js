@@ -273,6 +273,7 @@ function showCode() {
 }
 function inspect() {
   showCode(); showTests();
+  if (LIVE) notePlacing(modules.get(moduleOfSelection(state.selected)));
   const box = document.getElementById("inspector"); box.innerHTML = ""; const sel = state.selected; if (!sel) return;
   whereBlock(box);
   if (sel.type === "symbol") {
@@ -325,13 +326,13 @@ function inspect() {
   } else if (sel.type === "module") {
     const m = modules.get(sel.id); if (!m) return;
     box.appendChild(h("h3", {}, m.label || m.path));
-    dl(box, [["Id", m.id], ["Manifest", m.manifest || ""], ["Layer", m.layer + (m.side ? ` (${m.side})` : "")], ["Boundary", m.boundary || ""], ["Claimed by", m.ambiguous ? m.ambiguous.join(" and ") + ", equally" : ""], ["API", m.public ? "public" : ""], ["Status", m.design ? "planned, not built" : m.new ? "new" : m.removed ? "removed" : ""]]);
+    dl(box, [["Id", m.id], ["Manifest", m.manifest || ""], ["Layer", m.layer + (m.side ? ` (${m.side})` : "")], ["Placed by", (m.reasons || []).map(r => `${r.glob} (${r.path.join(" › ")})`).join("; "), "The treaty.yaml globs that place this module. The Terms tab marks their lines."], ["Boundary", m.boundary || ""], ["Claimed by", m.ambiguous ? m.ambiguous.join(" and ") + ", equally" : ""], ["API", m.public ? "public" : ""], ["Status", m.design ? "planned, not built" : m.new ? "new" : m.removed ? "removed" : ""]]);
     box.appendChild(h("p", {}, m.guidance));
     if (state.moved.has(m.id)) {
       const moved = h("p", {}, "You placed this module here. "), back = h("button", { type: "button" }, "Put it back");
       back.addEventListener("click", () => savePosition(m.id, null));
       moved.appendChild(back); box.appendChild(moved);
-    } else if (LIVE && !m.design) box.appendChild(h("p", { class: "hint" }, LAYERED_STYLES.includes(D.architecture) ? "Long-press the module to pick it up: drop it elsewhere in its band to place it, or in another layer to move it there in treaty.yaml." : "Long-press the module to pick it up and place it elsewhere in its area."));
+    } else if (LIVE && !m.design) box.appendChild(h("p", { class: "hint" }, LAYERED_STYLES.includes(D.architecture) ? "Long-press the module to pick it up: drop it elsewhere in its band to place it, or in another layer to move it there in treaty.yaml." : "Long-press the module to pick it up: drop it elsewhere in its area to place it, or in another boundary, shared or composition to move it there in treaty.yaml."));
     const t = h("table", { class: "metrics" }); t.innerHTML = "<tr><th>Metric</th><th>Before</th><th>After</th></tr>";
     let group = null;
     for (const [key, name, abbr, about, format, under] of METRICS) {
@@ -404,13 +405,26 @@ function highlightQueue() {
     node.classList.toggle("active", !!sel && (targets.includes(sel.id) || (sel.type === "edge" && targets.includes(sel.from) && targets.includes(sel.to))));
   });
 }
+// verdictBlock says what the check makes of the code, as treaty check does:
+// what fails it, as rules.fail_on says, and what warns, as rules.warn_on
+// says.
+function verdictBlock(q) {
+  const failures = D.failures || [], warnings = D.warnings || [];
+  const box = h("div", { class: "verdict " + (failures.length ? "fail" : "pass"), role: "status" });
+  box.appendChild(h("div", { class: "title" }, failures.length ? `Fails: ${failures.join("; ")}` : "Passes the check"));
+  if (warnings.length) box.appendChild(h("div", { class: "detail" }, `Warns: ${warnings.join("; ")}`));
+  q.appendChild(box);
+}
 function buildQueue() {
   const q = document.getElementById("queue"); q.innerHTML = "";
+  verdictBlock(q);
   if (!D.findings.length) { q.appendChild(h("p", { class: "empty" }, "Nothing to review.")); return; }
   for (const f of D.findings) {
     const item = h("div", { class: "queue-item", tabindex: 0, role: "button" }); item.dataset.targets = JSON.stringify(f.targets);
     item.appendChild(h("span", { class: "sev " + f.severity, "aria-label": f.severity }, f.severity === "high" ? "!" : ""));
-    const body = h("div"); body.appendChild(h("div", { class: "title" }, f.title)); body.appendChild(h("div", { class: "detail" }, f.detail)); item.appendChild(body);
+    const body = h("div"); body.appendChild(h("div", { class: "title" }, f.title)); body.appendChild(h("div", { class: "detail" }, f.detail));
+    if (f.verdict) body.appendChild(h("span", { class: "verdict-tag " + f.verdict, title: f.verdict === "fail" ? "Counts toward the check's failures: rules.fail_on lists it." : "Counts toward the check's warnings: rules.warn_on lists it." }, f.verdict === "fail" ? "fails the check" : "warns"));
+    item.appendChild(body);
     const pick = () => {
       const t = f.targets;
       if (f.kind === "layer_violation") { const e = edges.find(x => x.from === t[0] && x.to === t[1]); if (e) return select({ type: "edge", from: e.from, to: e.to, edge: e }); }

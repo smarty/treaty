@@ -244,14 +244,24 @@ up, and the tip says what a drop will do. Escape puts the module back.
   module there, keeping the file's comments. It adds the module's exact path
   to the new layer's list and removes it from any other. The rules, checks and
   agents follow at once. Dropping an unclassified module on a layer
-  classifies it. Moves between layers wait while another architecture is
-  previewed.
+  classifies it.
+- **In another boundary, shared or composition** (`vertical` and `modular`):
+  Treaty adds the module's exact path to that boundary's globs, or to
+  `shared` or `composition`, the same way. Its layer inside a boundary still
+  comes from `layers`, and a move never creates a boundary.
+
+Moves wait while another architecture is previewed.
 
 The **Terms** tab, beside the inspector, holds the whole `treaty.yaml` for
 editing. Save checks it the way `treaty check` reads it, so a file that
 would not load is refused with its line marked, and it won't overwrite a
-change made on disk since you opened it. See
-[Editing from the map](configuration.md#editing-from-the-map).
+change made on disk since you opened it. Select a module and the tab marks
+the line of each glob that places it, which the inspector also lists under
+*Placed by*. See [Editing from the map](configuration.md#editing-from-the-map).
+
+Above the review queue, the map says what `treaty check` would against the
+baseline: what fails the check and what warns. Each finding that counts is
+tagged *fails the check* or *warns*.
 
 Right-click a band, boundary or area (`layered`, `vertical`, `modular` and
 `none`) for its menu: *Rename…* gives it another name on this map,
@@ -259,7 +269,8 @@ Right-click a band, boundary or area (`layered`, `vertical`, `modular` and
 *Put its moved modules back* returns the modules moved inside it. Names are
 for the map only, saved for this repository and architecture in
 `.treaty/map.json`; `treaty.yaml`, the rules and the checks keep the
-region's own name.
+region's own name. A boundary has *Rename boundary…* instead, which renames it
+in `treaty.yaml`, keeping its globs and comments.
 
 The Theme menu, at the top beside the project tabs, offers System (following your OS) and 21 themes: Light and
 Dark in the style of VS Code's defaults; High Contrast and Color-blind Safe

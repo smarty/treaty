@@ -63,7 +63,11 @@ type MapModule struct {
 	Metrics      rules.Metric  `json:"metrics"`
 	Before       *rules.Metric `json:"before,omitempty"`
 	Guidance     string        `json:"guidance"`
-	Slice        Slice         `json:"slice"`
+
+	// Reasons are the treaty.yaml globs that place the module, empty for
+	// a module nothing places and under a previewed architecture.
+	Reasons []rules.Reason `json:"reasons,omitempty"`
+	Slice   Slice          `json:"slice"`
 }
 
 // MapSymbol is one symbol node on the map. Diff is how its code changed
@@ -116,8 +120,13 @@ type MapView struct {
 	RemovedLinks []graph.Edge `json:"removed_links,omitempty"`
 
 	Findings []rules.Finding `json:"findings"`
-	Designs  []string        `json:"designs,omitempty"`
-	Themes   []Theme         `json:"themes"`
+
+	// Failures and Warnings are the check's verdict, as treaty check reports
+	// it: what fails it, as rules.fail_on says, and what warns.
+	Failures []string `json:"failures,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+	Designs  []string `json:"designs,omitempty"`
+	Themes   []Theme  `json:"themes"`
 
 	// Sources holds each file's text, keyed by path, so the inspector can
 	// show a whole file or cut a symbol's code from it. A file larger than
@@ -179,7 +188,8 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 	architecture := analysis.config.Architecture
 	view := MapView{
 		Title: "Treaty", Root: filepath.Base(filepath.Clean(this.root)), Architecture: architecture.Style, Layers: architecture.LayerNames(), Summary: architecture.Summary(),
-		Base: analysis.baseRef, Findings: analysis.findings, Designs: designs, Links: analysis.head.Edges,
+		Base: analysis.baseRef, Findings: analysis.judge(analysis.findings), Failures: analysis.failures(), Warnings: analysis.warnings(),
+		Designs: designs, Links: analysis.head.Edges,
 	}
 
 	themes, err := this.themes.Themes()
@@ -228,6 +238,10 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 
 		if before, ok := analysis.baseMetrics[module.ID]; ok {
 			entry.Before = &before
+		}
+
+		if !analysis.previewed {
+			entry.Reasons = architecture.Reasons(module.Path)
 		}
 
 		if analysis.base != nil {

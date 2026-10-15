@@ -491,3 +491,45 @@ func TestGroupMetrics(t *testing.T) {
 		t.Fatalf("billing: %+v", billing)
 	}
 }
+
+// TestTermsFindPlacingLines runs the Terms tab's search for the line of a
+// placing glob in node, on treaty.yaml written the ways people write it.
+func TestTermsFindPlacingLines(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+
+	config, err := assets.ReadFile("page/js/config.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := `
+const hexagonal = ["version: 1", "architecture: hexagonal", "layers:", "  composition: [\"cmd/**\"]", "  domain:      [\"internal/graph/**\", \"internal/rules/**\"]", "  adapter:", "    driving:   [\"web/**\"]", "    driven:    [\"store/**\", \"queue/**\"]"];
+const vertical = ["architecture: vertical", "composition: ['cmd/**']", "boundaries:", "  orders:", "    - \"**/orders/**\"   # all of it", "  billing: ['web/billing/**', store/billing/**]", "layers:", "  api: [\"**/api\"]"];
+const cases = [
+  [hexagonal, ["composition"], "cmd/**", 4],
+  [hexagonal, ["layers", "domain"], "internal/rules/**", 5],
+  [hexagonal, ["layers", "adapter", "driven"], "queue/**", 8],
+  [hexagonal, ["layers", "adapter", "driving"], "gone/**", 7],
+  [vertical, ["composition"], "cmd/**", 2],
+  [vertical, ["boundaries", "orders"], "**/orders/**", 5],
+  [vertical, ["boundaries", "billing"], "store/billing/**", 6],
+  [vertical, ["layers", "api"], "**/api", 8],
+  [vertical, ["shared"], "lib/**", 0],
+];
+for (const [lines, path, glob, want] of cases) {
+  const got = locateReason(lines, { path, glob });
+  if (got !== want) { console.log(path.join(" > ") + " " + glob + ": line " + got + ", want " + want); process.exitCode = 1; }
+}
+`
+	file := filepath.Join(t.TempDir(), "terms.js")
+	if err := os.WriteFile(file, append(config, []byte(cases)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if output, err := exec.Command(node, file).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, output)
+	}
+}

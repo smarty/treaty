@@ -8,7 +8,8 @@
 // A module picked up with a long press follows the pointer. Dropped in its
 // own band, ring or area, it stays where it was put: the position is saved
 // for this repository and architecture in .treaty/positions.json. Dropped in
-// another layer, treaty.yaml is edited to move it there, and the rules and
+// another layer, or for vertical and modular in another boundary, shared or
+// composition, treaty.yaml is edited to move it there, and the rules and
 // checks follow. Escape puts it back.
 let carry = null;
 function pickUp(id, clientX, clientY, pointerId) {
@@ -20,7 +21,8 @@ function pickUp(id, clientX, clientY, pointerId) {
   const at = toMap(clientX, clientY);
   carry = { id, node, from: bandOf(id), start: { x: p.x, y: p.y }, grab: { x: at.x - p.x, y: at.y - p.y }, at: { x: p.x, y: p.y }, target: null };
   liftCarried();
-  setStatus(`Moving ${(modules.get(id) || {}).label || id}: drop it in its band to place it, or in another layer to move it there in treaty.yaml · Esc puts it back`);
+  const elsewhere = LAYERED_STYLES.includes(D.architecture) ? "in another layer" : "in another boundary, shared or composition";
+  setStatus(`Moving ${(modules.get(id) || {}).label || id}: drop it in its own area to place it, or ${elsewhere} to move it there in treaty.yaml · Esc puts it back`);
   moveCarry(clientX, clientY);
 }
 // liftCarried marks the carried module and fades its edges, again after a
@@ -49,10 +51,19 @@ function dropVerdict(from, to) {
   if (!to) return { ok: false, text: "Drop it inside a band to place it" };
   if (to.key === from.key) return { ok: true, move: false, text: "Place it here" };
   const previewing = live.state && live.state.view && live.state.view.architecture !== live.state.view.configured;
-  if (!LAYERED_STYLES.includes(D.architecture)) return { ok: false, text: `In the ${D.architecture} architecture a module's area comes from its directory; drop it in its own area` };
   if (previewing) return { ok: false, text: "This is a preview; keep or adopt it before moving modules between layers" };
+  if (!LAYERED_STYLES.includes(D.architecture)) return boundedVerdict(from, to);
   if (!to.layer || to.layer === "unclassified") return { ok: false, text: "Drop it on a layer to classify it" };
   return { ok: true, move: true, text: `Move to ${to.label} in treaty.yaml` };
+}
+// boundedVerdict says what a drop does in vertical and modular, where a
+// module moves to a boundary, shared or composition, and its layer inside a
+// boundary comes from the layers' globs.
+function boundedVerdict(from, to) {
+  if (to.boundary && to.boundary === from.boundary) return { ok: false, text: "Inside a boundary, a module's layer comes from layers in treaty.yaml; drop it in its own cell, or in another boundary" };
+  if (to.boundary) return { ok: true, move: true, text: `Move to boundary ${to.boundary} in treaty.yaml` };
+  if (to.layer === "shared" || to.layer === "composition") return { ok: true, move: true, text: `Move to ${to.layer} in treaty.yaml` };
+  return { ok: false, text: "Drop it on a boundary, shared or composition to place it" };
 }
 function dropCarry(clientX, clientY) {
   moveCarry(clientX, clientY);
@@ -78,7 +89,7 @@ function endCarry() {
 }
 async function reclassify(id, target) {
   try {
-    const response = await fetch("api/reclassify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ module: id, layer: target.layer, side: target.side || "" }) });
+    const response = await fetch("api/reclassify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ module: id, layer: target.boundary ? "boundary" : target.layer, side: target.side || "", boundary: target.boundary || "" }) });
     if (!response.ok) throw new Error((await response.text()).trim());
     setStatus("");
     showState(await response.json());
@@ -160,7 +171,7 @@ function bandAt(x, y) {
   if (hit < 0) return null;
   const r = regions[hit];
   if (D.architecture === "layered") return { key: r.layer, layer: r.layer, side: "", label: regionName(r), backdrop: "region:" + hit };
-  return { key: "region:" + hit, layer: "", side: "", label: regionName(r), backdrop: "region:" + hit };
+  return { key: "region:" + hit, layer: r.layer || "", boundary: r.boundary || "", side: "", label: regionName(r), backdrop: "region:" + hit };
 }
 // inComposition reports whether a point on the outer ring lies within the
 // arc its composition modules span, where composition shares that ring.

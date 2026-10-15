@@ -192,5 +192,17 @@ tab loaded it. The map, the checks and agents follow a saved file at once.
 In `hexagonal`, `clean` and `layered`, dragging a module to another layer on
 the live map edits `treaty.yaml` to place it there: it takes the module's
 exact path out of every list and, unless the remaining globs already place it
-there, adds it to that layer's list, keeping the file's comments. Previewing another architecture on the map never touches the
-file; it changes only when you choose *Use this architecture*.
+there, adds it to that layer's list, keeping the file's comments. In
+`vertical` and `modular`, dragging a module to another boundary adds its
+exact path to that boundary's globs, which beats every wildcard; dragging it
+to `shared` or `composition` adds it there. A `shared` or `composition`
+wildcard that still matches it wins, since both come before boundaries, so
+that move is refused with the reason. A boundary's region menu has *Rename
+boundary…*, which renames its key here.
+
+Selecting a module marks, in the Terms tab, the line of each glob that
+places it: the one that won, by the order in
+[How a module is placed](#how-a-module-is-placed).
+
+Previewing another architecture on the map never touches the file; it
+changes only when you choose *Use this architecture*.

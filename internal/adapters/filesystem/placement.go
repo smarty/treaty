@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -19,7 +20,9 @@ var ErrNoConfig = errors.New("no treaty.yaml")
 // Place edits treaty.yaml so that one module resolves to a placement. It
 // takes the module's exact path out of every list, then adds it to the
 // target's list unless the remaining globs already place it there. Comments
-// and everything else in the file are kept.
+// and everything else in the file are kept. For vertical and modular, the
+// target is a boundary, shared or composition, and a module keeps whatever
+// layer it has inside its boundary.
 //
 // Notes:
 //   - An exact path wins over every wildcard (see rules.Architecture.Resolve),
@@ -29,7 +32,8 @@ var ErrNoConfig = errors.New("no treaty.yaml")
 // Parameters:
 //   - modulePath: the module's path relative to the repository root.
 //   - placement: the layer, and for a hexagonal adapter the side, to place
-//     it in.
+//     it in; for vertical and modular, the boundary, or the layer shared or
+//     composition.
 //
 // Returns:
 //   - path: where treaty.yaml was written.
@@ -41,26 +45,7 @@ var ErrNoConfig = errors.New("no treaty.yaml")
 //   - rules.ErrArchitecture: the file's architecture is invalid, or the
 //     placement is not one it can hold.
 func (this *Config) Place(modulePath string, placement rules.Placement) (path string, err error) {
-	path = filepath.Join(this.root, ConfigFile)
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("%w: run treaty init to declare an architecture first", ErrNoConfig)
-	}
-
-	if err != nil {
-		return "", err
-	}
-
-	var document yaml.Node
-	if err := yaml.Unmarshal(data, &document); err != nil {
-		return "", fmt.Errorf("%s: %w", ConfigFile, err)
-	}
-
-	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
-		return "", fmt.Errorf("%w: %s is not a mapping", rules.ErrArchitecture, ConfigFile)
-	}
-
-	architecture, err := parseArchitecture(data)
+	path, document, architecture, err := this.document()
 	if err != nil {
 		return "", err
 	}
@@ -70,23 +55,108 @@ func (this *Config) Place(modulePath string, placement rules.Placement) (path st
 		removeScalar(list, modulePath)
 	}
 
-	text, architecture, err := encodeConfig(&document)
+	text, architecture, err := encodeConfig(document)
 	if err != nil {
 		return "", err
 	}
 
-	if !architecture.Resolve(modulePath).Same(placement) {
-		appendScalar(targetList(root, architecture.Style, placement), modulePath)
-		if text, architecture, err = encodeConfig(&document); err != nil {
+	if !fits(architecture, architecture.Resolve(modulePath), placement) {
+		list, err := targetList(root, architecture.Style, placement)
+		if err != nil {
+			return "", err
+		}
+
+		appendScalar(list, modulePath)
+		if text, architecture, err = encodeConfig(document); err != nil {
 			return "", err
 		}
 	}
 
-	if got := architecture.Resolve(modulePath); !got.Same(placement) {
+	if got := architecture.Resolve(modulePath); !fits(architecture, got, placement) {
 		return "", fmt.Errorf("%w: %s would be placed in %s, not %s", rules.ErrArchitecture, modulePath, describe(got), describe(placement))
 	}
 
 	return path, os.WriteFile(path, text, 0o644)
+}
+
+// RenameBoundary renames a boundary in treaty.yaml, keeping its globs, its
+// place among the boundaries and every comment.
+//
+// Parameters:
+//   - from: the boundary's name.
+//   - to: its new name.
+//
+// Returns:
+//   - path: where treaty.yaml was written.
+//   - err: treaty.yaml is missing or invalid, there is no boundary from, or
+//     the new name is taken or not a valid name.
+//
+// Errors:
+//   - ErrNoConfig: there is no treaty.yaml to edit.
+//   - rules.ErrArchitecture: there is no such boundary, or the renamed file
+//     would not load.
+func (this *Config) RenameBoundary(from, to string) (path string, err error) {
+	path, document, _, err := this.document()
+	if err != nil {
+		return "", err
+	}
+
+	boundaries := mappingValue(document.Content[0], "boundaries")
+	if boundaries == nil || boundaries.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("%w: %s has no boundaries", rules.ErrArchitecture, ConfigFile)
+	}
+
+	var key *yaml.Node
+	for i := 0; i+1 < len(boundaries.Content); i += 2 {
+		switch boundaries.Content[i].Value {
+		case from:
+			key = boundaries.Content[i]
+		case to:
+			return "", fmt.Errorf("%w: there is already a boundary %q", rules.ErrArchitecture, to)
+		}
+	}
+
+	if key == nil {
+		return "", fmt.Errorf("%w: no boundary %q in %s", rules.ErrArchitecture, from, ConfigFile)
+	}
+
+	if strings.TrimSpace(to) == "" || strings.TrimSpace(to) != to {
+		return "", fmt.Errorf("%w: a boundary's name may not be empty or start or end with a space", rules.ErrArchitecture)
+	}
+
+	key.Value = to
+	text, _, err := encodeConfig(document)
+	if err != nil {
+		return "", err
+	}
+
+	return path, os.WriteFile(path, text, 0o644)
+}
+
+// document reads treaty.yaml as a YAML tree to edit, with the architecture
+// it declares.
+func (this *Config) document() (path string, document *yaml.Node, architecture rules.Architecture, err error) {
+	path = filepath.Join(this.root, ConfigFile)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil, architecture, fmt.Errorf("%w: run treaty init to declare an architecture first", ErrNoConfig)
+	}
+
+	if err != nil {
+		return "", nil, architecture, err
+	}
+
+	document = &yaml.Node{}
+	if err := yaml.Unmarshal(data, document); err != nil {
+		return "", nil, architecture, fmt.Errorf("%s: %w", ConfigFile, err)
+	}
+
+	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+		return "", nil, architecture, fmt.Errorf("%w: %s is not a mapping", rules.ErrArchitecture, ConfigFile)
+	}
+
+	architecture, err = parseArchitecture(data)
+	return path, document, architecture, err
 }
 
 // appendScalar adds a value to a sequence in the style of its other items.
@@ -133,12 +203,34 @@ func child(mapping *yaml.Node, key string, kind yaml.Kind, before string) *yaml.
 
 // describe names a placement for an error message.
 func describe(placement rules.Placement) string {
-	if placement.Side != "" {
+	switch {
+	case len(placement.Ambiguous) > 0:
+		return "no boundary, claimed equally by " + strings.Join(placement.Ambiguous, " and ")
+	case placement.Boundary != "":
+		return "boundary " + placement.Boundary
+	case placement.Side != "":
 		return placement.Layer + " (" + placement.Side + ")"
 	}
 
 	return placement.Layer
 }
+
+// fits reports whether a module placed at got is where the move wanted it.
+// In vertical and modular a move sets the boundary, shared or composition;
+// the layer inside the boundary and its public API follow from the globs.
+func fits(architecture rules.Architecture, got, want rules.Placement) bool {
+	if !bounded(architecture.Style) {
+		return got.Same(want)
+	}
+
+	if want.Boundary != "" {
+		return got.Boundary == want.Boundary && len(got.Ambiguous) == 0
+	}
+
+	return got.Layer == want.Layer && got.Boundary == ""
+}
+
+func bounded(style string) bool { return style == rules.StyleVertical || style == rules.StyleModular }
 
 // encodeConfig renders the document and parses it back, so an edit is
 // checked exactly as treaty will read it.
@@ -175,7 +267,9 @@ func parseArchitecture(data []byte) (rules.Architecture, error) {
 
 // placementLists finds every list of globs that places modules by layer:
 // composition, at the top or under layers, and each layer's, with a
-// hexagonal adapter's two sides.
+// hexagonal adapter's two sides. For vertical and modular they are
+// composition, shared and each boundary's; layers inside boundaries are
+// left alone.
 func placementLists(root *yaml.Node, style string) (result []*yaml.Node) {
 	sequences := func(mapping *yaml.Node) {
 		for i := 0; i+1 < len(mapping.Content); i += 2 {
@@ -197,7 +291,11 @@ func placementLists(root *yaml.Node, style string) (result []*yaml.Node) {
 		switch key, value := root.Content[i].Value, root.Content[i+1]; {
 		case key == "composition" && value.Kind == yaml.SequenceNode:
 			result = append(result, value)
-		case key == "layers" && value.Kind == yaml.MappingNode:
+		case bounded(style) && key == "shared" && value.Kind == yaml.SequenceNode:
+			result = append(result, value)
+		case bounded(style) && key == "boundaries" && value.Kind == yaml.MappingNode:
+			sequences(value)
+		case !bounded(style) && key == "layers" && value.Kind == yaml.MappingNode:
 			sequences(value)
 		}
 	}
@@ -218,7 +316,47 @@ func removeScalar(list *yaml.Node, value string) {
 }
 
 // targetList finds or creates the list that places modules in a placement.
-func targetList(root *yaml.Node, style string, placement rules.Placement) *yaml.Node {
+// A boundary must exist already; a move never creates one.
+func targetList(root *yaml.Node, style string, placement rules.Placement) (*yaml.Node, error) {
+	if bounded(style) {
+		switch {
+		case placement.Boundary != "":
+			boundaries := mappingValue(root, "boundaries")
+			if list := mappingValue(boundaries, placement.Boundary); list != nil && list.Kind == yaml.SequenceNode {
+				return list, nil
+			}
+
+			return nil, fmt.Errorf("%w: no boundary %q in %s", rules.ErrArchitecture, placement.Boundary, ConfigFile)
+		case placement.Layer == graph.LayerShared:
+			return child(root, "shared", yaml.SequenceNode, "boundaries"), nil
+		case placement.Layer == graph.LayerComposition:
+			return child(root, "composition", yaml.SequenceNode, "shared"), nil
+		}
+
+		return nil, fmt.Errorf("%w: in the %s architecture a module moves to a boundary, shared or composition, not %s", rules.ErrArchitecture, style, describe(placement))
+	}
+
+	return layerTarget(root, style, placement), nil
+}
+
+// mappingValue finds a mapping's value by key, or nil.
+func mappingValue(mapping *yaml.Node, key string) *yaml.Node {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return mapping.Content[i+1]
+		}
+	}
+
+	return nil
+}
+
+// layerTarget finds or creates the list for a placement in a layer
+// architecture.
+func layerTarget(root *yaml.Node, style string, placement rules.Placement) *yaml.Node {
 	if placement.Layer == graph.LayerComposition {
 		if style == rules.StyleHexagonal {
 			for i := 0; i+1 < len(root.Content); i += 2 {

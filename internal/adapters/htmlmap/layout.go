@@ -96,14 +96,17 @@ type Point struct {
 // Region is a labeled rectangle: a band, a boundary, a cell of the grid or
 // an island. X and Y are its top-left corner, and Tone picks its shade. Layer
 // names the layer of a band or cell, so a module dropped there can join it.
+// Boundary names the boundary a region draws, or one of its cells, for
+// vertical and modular.
 type Region struct {
-	Label string  `json:"label"`
-	Layer string  `json:"layer,omitempty"`
-	Tone  int     `json:"tone"`
-	X     float64 `json:"x"`
-	Y     float64 `json:"y"`
-	W     float64 `json:"w"`
-	H     float64 `json:"h"`
+	Label    string  `json:"label"`
+	Layer    string  `json:"layer,omitempty"`
+	Boundary string  `json:"boundary,omitempty"`
+	Tone     int     `json:"tone"`
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
+	W        float64 `json:"w"`
+	H        float64 `json:"h"`
 }
 
 // Ring is one layer's hexagon, from the center outward. Tone picks its
@@ -117,12 +120,13 @@ type Ring struct {
 
 // box is a labeled rectangle of items flowed into rows.
 type box struct {
-	label  string
-	tone   int
-	bucket string
-	layer  string
-	items  []*item
-	w, h   float64
+	label    string
+	tone     int
+	bucket   string
+	layer    string
+	boundary string
+	items    []*item
+	w, h     float64
 }
 
 // gridBlock is the middle of a region layout: boundaries as columns of cells,
@@ -175,7 +179,7 @@ func (this *box) natural() float64 {
 // x, y.
 func (this *box) place(result *Layout, x, y float64) {
 	if this.label != "" {
-		result.Regions = append(result.Regions, Region{Label: this.label, Layer: this.layer, Tone: this.tone, X: round(x), Y: round(y), W: round(this.w), H: round(this.h)})
+		result.Regions = append(result.Regions, Region{Label: this.label, Layer: this.layer, Boundary: this.boundary, Tone: this.tone, X: round(x), Y: round(y), W: round(this.w), H: round(this.h)})
 	}
 
 	for _, placed := range this.items {
@@ -270,7 +274,7 @@ func (this *gridBlock) place(result *Layout, x, y float64) {
 			height += cell.h + groupPad
 		}
 
-		result.Regions = append(result.Regions, Region{Label: path.Base(this.columns[c]), Tone: c % 2, X: round(x), Y: round(y), W: round(width), H: round(height)})
+		result.Regions = append(result.Regions, Region{Label: path.Base(this.columns[c]), Boundary: this.columns[c], Tone: c % 2, X: round(x), Y: round(y), W: round(width), H: round(height)})
 		cursor := y + groupLabel + groupPad
 		for _, cell := range column {
 			cell.place(result, x+groupPad, cursor)
@@ -547,7 +551,7 @@ func gridLayout(view app.MapView) Layout {
 				label = layerLabel(row)
 			}
 
-			cellBoxes = append(cellBoxes, &box{label: label, tone: 2, bucket: column + "|" + row, layer: row, items: topItems(cells[[2]string{column, row}])})
+			cellBoxes = append(cellBoxes, &box{label: label, tone: 2, bucket: column + "|" + row, layer: row, boundary: column, items: topItems(cells[[2]string{column, row}])})
 		}
 
 		grid = append(grid, cellBoxes)
@@ -590,7 +594,7 @@ func islandLayout(view app.MapView) Layout {
 	sort.Strings(boundaries)
 	var islands []*box
 	for i, boundary := range boundaries {
-		islands = append(islands, &box{label: boundary, tone: i % 2, bucket: boundary, layer: graph.LayerBoundary, items: topItems(byBoundary[boundary])})
+		islands = append(islands, &box{label: boundary, tone: i % 2, bucket: boundary, layer: graph.LayerBoundary, boundary: boundary, items: topItems(byBoundary[boundary])})
 	}
 
 	var above, below []*box

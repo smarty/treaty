@@ -324,3 +324,42 @@ func TestExactPathWinsOverWildcards(t *testing.T) {
 		}
 	}
 }
+
+func TestReasons(t *testing.T) {
+	modular := Architecture{Style: StyleModular, Shared: []string{"lib/**"}, Boundaries: []Boundary{
+		{Name: "orders", Globs: []string{"**/orders/**"}},
+		{Name: "billing", Globs: []string{"web/billing/**", "web/billing/orders/legacy"}},
+		{Name: "legacy", Globs: []string{"legacy/**"}},
+	}}
+
+	hexagonal := Architecture{Style: StyleHexagonal, Composition: []string{"cmd/**"}, Layers: []Layer{
+		{Name: graph.LayerDomain, Globs: []string{"core/**"}},
+		{Name: graph.LayerAdapter, Side: graph.SideDriving, Globs: []string{"web/**", "core/web"}},
+	}}
+
+	vertical := Architecture{Style: StyleVertical, Boundaries: []Boundary{{Name: "orders", Globs: []string{"orders/**"}}}, Layers: []Layer{
+		{Name: "api", Globs: []string{"**/api"}},
+	}}
+
+	for _, c := range []struct {
+		architecture Architecture
+		path         string
+		want         []Reason
+	}{
+		{modular, "web/billing/orders", []Reason{{[]string{"boundaries", "billing"}, "web/billing/**"}}},
+		{modular, "web/billing/orders/legacy", []Reason{{[]string{"boundaries", "billing"}, "web/billing/orders/legacy"}}},
+		{modular, "lib/x", []Reason{{[]string{"shared"}, "lib/**"}}},
+		{modular, "legacy/orders", []Reason{{[]string{"boundaries", "orders"}, "**/orders/**"}, {[]string{"boundaries", "legacy"}, "legacy/**"}}},
+		{modular, "docs", nil},
+		{hexagonal, "cmd/tool", []Reason{{[]string{"composition"}, "cmd/**"}}},
+		{hexagonal, "core/web", []Reason{{[]string{"layers", "adapter", "driving"}, "core/web"}}},
+		{hexagonal, "core/model", []Reason{{[]string{"layers", "domain"}, "core/**"}}},
+		{vertical, "orders/api", []Reason{{[]string{"boundaries", "orders"}, "orders/**"}, {[]string{"layers", "api"}, "**/api"}}},
+		{Architecture{Style: StyleNone}, "x", nil},
+	} {
+		got := c.architecture.Reasons(c.path)
+		if !slices.EqualFunc(got, c.want, func(a, b Reason) bool { return a.Glob == b.Glob && slices.Equal(a.Path, b.Path) }) {
+			t.Errorf("%s: got %+v, want %+v", c.path, got, c.want)
+		}
+	}
+}

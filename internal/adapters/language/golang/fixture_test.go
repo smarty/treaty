@@ -638,8 +638,9 @@ func TestReviewComparesWithTheMergeBase(t *testing.T) {
 	git("commit", "-q", "-m", "later")
 	git("checkout", "-q", "feature")
 
+	recorder := &viewRecorder{}
 	service := app.NewService(root, filesystem.NewConfig(root), NewExtractor(), []app.Dialect{NewDialect()},
-		gitvcs.New(root), filesystem.NewWorkspace(root), &viewRecorder{}, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+		gitvcs.New(root), filesystem.NewWorkspace(root), recorder, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
 	pipeline := &pipelineRecorder{target: "master"}
 	service.UsePipeline(pipeline)
 
@@ -678,6 +679,11 @@ func TestReviewComparesWithTheMergeBase(t *testing.T) {
 
 	if !slices.Equal(found, expected) {
 		t.Fatalf("judged findings:\n got %+v\nwant %+v", found, expected)
+	}
+
+	// The map's review queue says the same as the check.
+	if !slices.Equal(recorder.view.Failures, report.Failures) || !slices.Equal(recorder.view.Warnings, report.Warnings) || !slices.ContainsFunc(recorder.view.Findings, func(finding rules.Finding) bool { return finding.Verdict == rules.VerdictWarn }) {
+		t.Fatalf("map verdict: failures %v, warnings %v", recorder.view.Failures, recorder.view.Warnings)
 	}
 
 	if markdown := report.Markdown(); !strings.Contains(markdown, "### Treaty: ❌ fails") || !strings.Contains(markdown, "`store/db.go:5`") {

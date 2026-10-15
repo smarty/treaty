@@ -562,6 +562,7 @@ func (this *Live) build(baseline Baseline, preview string) (*analysis, []byte, e
 
 		shown = this.service.analyzeGraphs(fitted, revision{graph: head.Clone(), tests: current.tests}, previewBase, baseline.Label)
 		shown.baseSources = base.sources
+		shown.previewed = true
 	}
 
 	designs, err := this.service.workspace.Designs()

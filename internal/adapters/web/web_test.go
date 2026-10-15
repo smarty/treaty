@@ -455,6 +455,67 @@ func TestMoveModules(t *testing.T) {
 	}
 }
 
+func TestMoveModulesBetweenBoundaries(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/shop\n")
+	write(t, root, "treaty.yaml", "version: 1\narchitecture: modular\nshared: [\"lib/**\"]\nboundaries:\n  orders: [\"orders/**\"] # the order flow\n  billing: [\"billing/**\"]\n")
+	write(t, root, "orders/orders.go", "package orders\n\nfunc Place() {}\n")
+	write(t, root, "orders/tax/tax.go", "package tax\n\nfunc Rate() int { return 1 }\n")
+	write(t, root, "billing/billing.go", "package billing\n\nfunc Charge() {}\n")
+	git(t, root, "init", "-q")
+
+	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	live := app.NewLive(service, filesystem.NewWatcher(root))
+	stop := make(chan struct{})
+	defer close(stop)
+	live.Start(stop)
+	_, base := listen(t, root, live)
+	module := func(id string) (result app.MapModule) {
+		var view struct {
+			Modules []app.MapModule `json:"modules"`
+		}
+
+		_ = json.Unmarshal(get(t, base+"/api/view", http.StatusOK), &view)
+		for _, module := range view.Modules {
+			if module.ID == id {
+				result = module
+			}
+		}
+
+		return result
+	}
+
+	if got := module("go:orders/tax"); got.Boundary != "orders" || len(got.Reasons) != 1 || got.Reasons[0].Glob != "orders/**" {
+		t.Fatalf("tax starts in orders, placed by orders/**: %+v", got)
+	}
+
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:orders/tax","layer":"boundary","boundary":"billing"}`, http.StatusOK)
+	if got := module("go:orders/tax"); got.Boundary != "billing" || got.Reasons[0].Glob != "orders/tax" {
+		t.Fatalf("tax should be in billing by its exact path: %+v", got)
+	}
+
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:orders/tax","layer":"shared"}`, http.StatusOK)
+	if got := module("go:orders/tax"); got.Layer != "shared" {
+		t.Fatalf("tax should be shared: %+v", got)
+	}
+
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:orders/tax","layer":"boundary","boundary":"returns"}`, http.StatusBadRequest)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:orders/tax","layer":"domain"}`, http.StatusBadRequest)
+
+	// Renaming a boundary renames it in treaty.yaml, comments kept.
+	post(t, base+"/api/boundary", "application/json", `{"from":"orders","to":"sales"}`, http.StatusOK)
+	if got := module("go:orders"); got.Boundary != "sales" {
+		t.Fatalf("orders should be in sales: %+v", got)
+	}
+
+	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), `sales: ["orders/**"] # the order flow`) {
+		t.Fatalf("treaty.yaml:\n%s", data)
+	}
+
+	post(t, base+"/api/boundary", "application/json", `{"from":"sales","to":"billing"}`, http.StatusBadRequest)
+	post(t, base+"/api/boundary", "application/json", `{"from":"returns","to":"refunds"}`, http.StatusBadRequest)
+}
+
 func TestRunTests(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "go.mod", "module example.com/calc\n\ngo 1.22\n")

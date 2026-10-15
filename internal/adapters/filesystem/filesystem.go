@@ -446,9 +446,8 @@ func (this *Workspace) WriteOutput(name string, data []byte) (path string, err e
 // architecture builds the rules from the file, innermost layer first.
 //
 // Notes:
-//   - With no architecture key, a file that lists layers or composition is
-//     hexagonal, as configs were before the key existed; one that lists
-//     neither declares no architecture.
+//   - With no architecture key there is no architecture, so layers or
+//     composition listed without one are an error of Validate.
 //
 // Returns:
 //   - result: the validated architecture.

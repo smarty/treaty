@@ -392,3 +392,99 @@ func TestRuleNames(t *testing.T) {
 		})
 	}
 }
+
+func TestPlaceInBoundaries(t *testing.T) {
+	const original = `version: 1
+architecture: vertical
+composition: ["cmd/**"]
+shared: ["lib/**"] # used by every boundary
+boundaries:
+  orders: ["**/orders/**"] # the order flow
+  billing: ["web/billing/**"]
+layers:
+  api: ["**/api"]
+`
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	config := NewConfig(root)
+	place := func(path string, placement rules.Placement) (rules.Placement, string) {
+		t.Helper()
+		if _, err := config.Place(path, placement); err != nil {
+			t.Fatalf("Place(%s, %+v): %v", path, placement, err)
+		}
+
+		loaded, _, err := config.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		data, _ := os.ReadFile(filepath.Join(root, ConfigFile))
+		return loaded.Architecture.Resolve(path), string(data)
+	}
+
+	// The exact path beats orders' wildcard, and the module keeps its layer.
+	got, text := place("web/orders/api", rules.Placement{Layer: graph.LayerBoundary, Boundary: "billing"})
+	if got.Boundary != "billing" || got.Layer != "api" || !strings.Contains(text, `billing: ["web/billing/**", "web/orders/api"]`) || !strings.Contains(text, "# the order flow") {
+		t.Fatalf("into billing: %+v\n%s", got, text)
+	}
+
+	got, text = place("web/orders/api", rules.Placement{Layer: graph.LayerBoundary, Boundary: "orders"})
+	if got.Boundary != "orders" || strings.Contains(text, `"web/orders/api"`) {
+		t.Fatalf("back to orders must only remove the exact path: %+v\n%s", got, text)
+	}
+
+	if got, text = place("web/orders/util", rules.Placement{Layer: graph.LayerShared}); got.Layer != graph.LayerShared || !strings.Contains(text, `shared: ["lib/**", "web/orders/util"]`) {
+		t.Fatalf("into shared: %+v\n%s", got, text)
+	}
+
+	if got, _ = place("web/orders/util", rules.Placement{Layer: graph.LayerComposition}); got.Layer != graph.LayerComposition {
+		t.Fatalf("into composition: %+v", got)
+	}
+
+	// Shared comes before boundaries, so its wildcard keeps the module.
+	if _, err := config.Place("lib/orders", rules.Placement{Layer: graph.LayerBoundary, Boundary: "orders"}); !errors.Is(err, rules.ErrArchitecture) || !strings.Contains(err.Error(), "would be placed in shared") {
+		t.Fatalf("a shared wildcard must refuse the move: %v", err)
+	}
+
+	if _, err := config.Place("web/x", rules.Placement{Layer: graph.LayerBoundary, Boundary: "returns"}); !errors.Is(err, rules.ErrArchitecture) {
+		t.Fatalf("a move never creates a boundary: %v", err)
+	}
+}
+
+func TestRenameBoundary(t *testing.T) {
+	root := t.TempDir()
+	original := "version: 1\narchitecture: modular\nboundaries:\n  orders: [\"orders/**\"] # the order flow\n  billing: [\"billing/**\"]\n"
+	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	config := NewConfig(root)
+	if _, err := config.RenameBoundary("orders", "billing"); !errors.Is(err, rules.ErrArchitecture) {
+		t.Fatalf("a taken name: %v", err)
+	}
+
+	if _, err := config.RenameBoundary("returns", "refunds"); !errors.Is(err, rules.ErrArchitecture) {
+		t.Fatalf("no such boundary: %v", err)
+	}
+
+	if _, err := config.RenameBoundary("orders", " "); !errors.Is(err, rules.ErrArchitecture) {
+		t.Fatalf("a blank name: %v", err)
+	}
+
+	if _, err := config.RenameBoundary("orders", "sales"); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(root, ConfigFile))
+	if text := string(data); !strings.Contains(text, "boundaries:\n  sales: [\"orders/**\"] # the order flow\n  billing:") {
+		t.Fatalf("the rename keeps the globs, the order and the comment:\n%s", text)
+	}
+
+	loaded, _, err := config.Load()
+	if err != nil || loaded.Architecture.Resolve("orders/cart").Boundary != "sales" {
+		t.Fatalf("after the rename: %v %+v", err, loaded.Architecture.Resolve("orders/cart"))
+	}
+}

@@ -152,6 +152,7 @@ func Listen(projects *app.Projects, sessions Sessions, version string, port int)
 		"POST /api/positions":    result.setPosition,
 		"GET /api/preferences":   result.preferences,
 		"POST /api/reclassify":   result.reclassify,
+		"POST /api/boundary":     result.renameBoundary,
 		"POST /api/preferences":  result.savePreferences,
 		"POST /api/view":         result.setView,
 		"POST /api/view/adopt":   result.adopt,
@@ -604,17 +605,39 @@ func (this *Server) savePreferences(live *app.Live, writer http.ResponseWriter, 
 // reclassify moves a module to another layer in treaty.yaml.
 func (this *Server) reclassify(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	var body struct {
-		Module string `json:"module"`
-		Layer  string `json:"layer"`
-		Side   string `json:"side"`
+		Module   string `json:"module"`
+		Layer    string `json:"layer"`
+		Side     string `json:"side"`
+		Boundary string `json:"boundary"`
 	}
 
 	if !decode(writer, request, &body) {
 		return
 	}
 
-	switch _, err := live.Reclassify(body.Module, rules.Placement{Layer: body.Layer, Side: body.Side}); {
+	switch _, err := live.Reclassify(body.Module, rules.Placement{Layer: body.Layer, Side: body.Side, Boundary: body.Boundary}); {
 	case errors.Is(err, app.ErrPreviewing), errors.Is(err, app.ErrPlacement), errors.Is(err, rules.ErrArchitecture):
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+	case err != nil:
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	default:
+		this.state(live, writer, request)
+	}
+}
+
+// renameBoundary renames a boundary in treaty.yaml.
+func (this *Server) renameBoundary(live *app.Live, writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+
+	if !decode(writer, request, &body) {
+		return
+	}
+
+	switch _, err := live.RenameBoundary(body.From, body.To); {
+	case errors.Is(err, app.ErrPreviewing), errors.Is(err, rules.ErrArchitecture):
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 	case err != nil:
 		http.Error(writer, err.Error(), http.StatusInternalServerError)

@@ -268,10 +268,14 @@ function placeSymbol(g, s, x, y, r, rel, file) {
 
 // ---- Regions ----
 // A region's name is the label the layout gives it, a layer or a
-// boundary, unless the person gave it another. Names given
-// are kept per architecture and are only for the map: treaty.yaml, the
-// rules and every check keep the region's own label.
-function regionName(r) { return ((state.regionNames || {})[D.architecture] || {})[r.label] || r.label; }
+// boundary, unless the person gave it another. Names given are kept per
+// architecture and are only for the map: treaty.yaml, the rules and every
+// check keep the region's own label. A boundary has no name of the map's
+// own: renaming it renames it in treaty.yaml.
+function regionName(r) { return isBoundaryRegion(r) ? r.label : ((state.regionNames || {})[D.architecture] || {})[r.label] || r.label; }
+// isBoundaryRegion reports whether a region draws a whole boundary, a
+// column of vertical or an island of modular, rather than one of its cells.
+function isBoundaryRegion(r) { return !!r.boundary && (!r.layer || r.layer === "boundary"); }
 // regionAt finds the region under a map point, and its index.
 function regionAt(x, y) {
   let hit = -1;
@@ -292,7 +296,11 @@ function regionMenu({ region, index }, x, y) {
   const name = regionName(region), renamed = name !== region.label;
   const moved = [...state.moved].filter(id => { const p = D.layout.modules[id], at = p && regionAt(p.x, p.y); return at && at.index === index; });
   const items = [];
-  if (LIVE) {
+  const previewing = live.state && live.state.view && live.state.view.architecture !== live.state.view.configured;
+  if (LIVE && isBoundaryRegion(region)) {
+    items.push({ label: "Rename boundary…", disabled: previewing, title: previewing ? "This is a preview; keep or adopt it before renaming boundaries" : "Rename this boundary in treaty.yaml", action: () => openPrompt(x, y, `Rename boundary “${region.boundary}”`, region.boundary, value => renameBoundary(region.boundary, value.trim())) });
+    items.push("-");
+  } else if (LIVE) {
     items.push({ label: "Rename…", title: "Give this region another name on the map; treaty.yaml keeps its own", action: () => renameRegion(region, x, y) });
     items.push({ label: `Restore the name “${region.label}”`, disabled: !renamed, title: renamed ? "" : "This region has its own name", action: () => nameRegion(region, "") });
     items.push("-");
@@ -316,6 +324,20 @@ async function nameRegion(region, name) {
   if (saved) { state.regionNames = saved.names || {}; render(); return; }
   state.regionNames = before; render();
   setStatus("could not save the region's name", true);
+}
+// renameBoundary renames a boundary in treaty.yaml; the map, the checks and
+// agents follow once the server has rebuilt.
+async function renameBoundary(from, to) {
+  if (!to || to === from) return;
+  setStatus(`renaming boundary ${from} to ${to}…`);
+  try {
+    const response = await fetch("api/boundary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from, to }) });
+    if (!response.ok) throw new Error((await response.text()).trim());
+    setStatus("");
+    showState(await response.json());
+  } catch (err) {
+    setStatus(`not renamed: ${err.message}`, true);
+  }
 }
 // zoomToRect fits the view around a rectangle of the map, keeping the
 // view's shape.

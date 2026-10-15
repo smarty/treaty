@@ -95,6 +95,14 @@ type ConfigSource interface {
 	//     there.
 	Place(modulePath string, placement rules.Placement) (path string, err error)
 
+	// RenameBoundary renames a boundary, keeping its globs and the rest of
+	// the file as it is.
+	//
+	// Returns:
+	//   - path: where the config was written.
+	//   - err: there is no such boundary, or the new name is taken.
+	RenameBoundary(from, to string) (path string, err error)
+
 	// Text reads the config file as it is, for a person to edit.
 	//
 	// Returns:

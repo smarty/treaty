@@ -405,6 +405,97 @@ func (this Architecture) Resolve(modulePath string) (result Placement) {
 	return Placement{Layer: graph.LayerUnclassified, Boundary: boundary.Name}
 }
 
+// Reason is a glob that places a module, at its key in treaty.yaml: Path
+// is the key's path, such as layers, domain or boundaries, orders.
+type Reason struct {
+	Path []string `json:"path"`
+	Glob string   `json:"glob"`
+}
+
+// Reasons says why Resolve places a module where it does: the glob that
+// placed it, and for a vertical boundary with layers also the layer's. A
+// module claimed equally by boundaries gets each one's glob. A module
+// nothing places, or one with no architecture, has none.
+//
+// Notes:
+//   - Composition may also be listed under layers for hexagonal; its path
+//     is composition either way.
+//
+// Parameters:
+//   - modulePath: the module's path relative to the repository root.
+//
+// Returns:
+//   - result: the globs that place it, outermost key first.
+func (this Architecture) Reasons(modulePath string) (result []Reason) {
+	placement := this.Resolve(modulePath)
+	pick := func(globs []string) string {
+		if slices.Contains(globs, modulePath) {
+			return modulePath
+		}
+
+		for _, glob := range globs {
+			if Match(glob, modulePath) {
+				return glob
+			}
+		}
+
+		return ""
+	}
+
+	boundaryGlob := func(boundary Boundary) string {
+		best, result := -1, ""
+		for _, glob := range boundary.Globs {
+			if Match(glob, modulePath) && specificity(glob, modulePath) > best {
+				best, result = specificity(glob, modulePath), glob
+			}
+		}
+
+		return result
+	}
+
+	switch {
+	case placement.Layer == graph.LayerNone:
+		return nil
+	case placement.Layer == graph.LayerComposition:
+		return []Reason{{Path: []string{"composition"}, Glob: pick(this.Composition)}}
+	case placement.Layer == graph.LayerShared:
+		return []Reason{{Path: []string{"shared"}, Glob: pick(this.Shared)}}
+	case len(placement.Ambiguous) > 0:
+		for _, boundary := range this.Boundaries {
+			if slices.Contains(placement.Ambiguous, boundary.Name) {
+				result = append(result, Reason{Path: []string{"boundaries", boundary.Name}, Glob: boundaryGlob(boundary)})
+			}
+		}
+
+		return result
+	}
+
+	if placement.Boundary != "" {
+		for _, boundary := range this.Boundaries {
+			if boundary.Name == placement.Boundary {
+				result = append(result, Reason{Path: []string{"boundaries", boundary.Name}, Glob: boundaryGlob(boundary)})
+			}
+		}
+	}
+
+	for _, layer := range this.Layers {
+		if layer.Name != placement.Layer || layer.Side != placement.Side {
+			continue
+		}
+
+		path := []string{"layers", layer.Name}
+		if layer.Side != "" {
+			path = append(path, layer.Side)
+		}
+
+		if glob := pick(layer.Globs); glob != "" {
+			result = append(result, Reason{Path: path, Glob: glob})
+		}
+	}
+
+	return result
+}
+
 // boundaryOf finds the boundary whose glob matches a module path most
 // specifically, or the names of the boundaries that tie for it.
 func (this Architecture) boundaryOf(modulePath string) (result *Boundary, tied []string) {
