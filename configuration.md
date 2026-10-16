@@ -144,11 +144,16 @@ Dependencies point only inward, at cores:
 The rules:
 
 - **A star is a directory**, relative to the repository root, never a glob:
-  `.`, `internal`, `internal/blocks`.
+  `.`, `internal`, `internal/blocks`. A star that holds no module, such as
+  a misspelled one, and a core glob that matches none are named in the
+  check's notes.
 - **The star's own package is always in its core**, since that is where its
   orchestrators live. Only an exact `composition` entry takes it out, making
-  it a local factory that nothing may use.
-- **A core glob lies inside its star** and names a child directory of it:
+  it a local factory that nothing may use; a `composition` glob such as
+  `internal/gate/**` takes the rest of the star, never its own package.
+- **A core glob lies inside its star**, written as a path from the
+  repository root with no `.` or `..` segment, and names a child directory
+  of it:
   `internal/core/**` is fine, but `internal/**`, `internal/*` and
   `internal/*/contracts/**` are refused, since they would make every spoke
   core. An exact path may name any module inside the star. `[]` leaves the
@@ -231,10 +236,11 @@ A module is placed once, by the first of these steps that matches it.
 
 1. A `composition` entry that is exactly the module's path.
 2. A core entry that is exactly the module's path: the core of that star.
-3. A `composition` glob.
-4. The innermost star holding the module. None, and the module is outside
+3. A star's own directory: its core. No `composition` glob, not even
+   `internal/gate/**`, takes it out.
+4. A `composition` glob.
+5. The innermost star holding the module. None, and the module is outside
    the root star: unclassified.
-5. The star's own directory: its core.
 6. A glob of that star's core. Only the innermost star's globs count, so an
    outer core never reaches into a branch.
 7. Otherwise, the spoke named by the star's child directory holding the
@@ -375,13 +381,14 @@ that move is refused with the reason. A boundary's region menu has *Rename
 boundary…*, which renames its key here.
 
 In `snowflake`, a spoke is its directory, so a module can move only into the
-core of a star that holds it, which adds its exact path to that star's list
-under `stars`; out of a core it is in by its exact path, back to its own
-directory's spoke; or to `composition`. Putting a module in another spoke
-means moving its files, and the map says so. A move never creates a star,
-and a star has no *Rename*, since its directory names it; its menu has
-*Zoom to this star*. A module a star places by its directory, its own
-package or a spoke, marks that star's key line under `stars`.
+core of its own star, the innermost star holding it, which adds its exact
+path to that star's list under `stars`; out of a core it is in by its exact
+path, back to its own directory's spoke; or to `composition`. Putting a
+module in another spoke means moving its files, and the map says so. A move
+never creates a star, and a star has no *Rename*, since its directory names
+it; its menu has *Zoom to this star*. A module a star places by its
+directory, its own package or a spoke, marks that star's key line under
+`stars`, however the key is written, such as `internal/` or `./internal`.
 
 Selecting a module marks, in the Terms tab, the line of each glob that
 places it: the one that won, by the order in

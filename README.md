@@ -282,10 +282,10 @@ up, and the tip says what a drop will do. Escape puts the module back.
   `shared` or `composition`, the same way. Its layer inside a boundary still
   comes from `layers`, and a move never creates a boundary.
 - **Into or out of a core, or to composition** (`snowflake`): Treaty adds the
-  module's exact path to the core of a star that holds it, takes it out
-  again so it returns to its own directory's spoke, or adds it to
-  `composition`. A spoke is its directory, so moving a module to another
-  spoke means moving its files.
+  module's exact path to the core of its own star, the innermost star
+  holding it, takes it out again so it returns to its own directory's spoke,
+  or adds it to `composition`. A spoke is its directory, so moving a module
+  to another spoke means moving its files.
 
 Moves wait while another architecture is previewed.
 
@@ -348,7 +348,7 @@ You and the agent always look at the same graph:
 | `slice` | The context for working on one symbol, file or module, one line per entry with file:line |
 | `source` | Just the code needed: a symbol from its documentation to its last line, or a file's lines, numbered. A long file gives its outline unless asked for all of it |
 | `impact` | Everything that depends on a symbol, file or module, transitively, before an edit |
-| `allowed` | Whether one module may depend on another, before an import is added; in `snowflake`, a refusal names the ports in a core that the target already implements |
+| `allowed` | Whether one module may depend on another, before an import is added; in `snowflake`, a refusal names the ports in a core the source may use that something in the target's spoke or branch already implements |
 | `changes` | What changed in the architecture since the baseline, including new violations |
 | `plan` | The agent's intended contracts in AutoPen, drawn on the map as unbuilt and filled in as the code is written |
 | `selection` | What the person has selected on the map, so they can point and say "work here" |
