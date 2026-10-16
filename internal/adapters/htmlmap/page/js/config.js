@@ -157,13 +157,22 @@ function paintPlacing(placed) {
   why.hidden = false;
   const name = module.label || module.path;
   if (!module.reasons || !module.reasons.length) {
-    why.textContent = module.ambiguous ? `${name} is claimed equally by boundaries ${module.ambiguous.join(" and ")}.` : module.layer === "none" ? `${name}: there is no architecture, so nothing places it.` : `No glob places ${name}, so it is unclassified and its dependencies are not checked.`;
+    why.textContent = module.ambiguous ? `${name} is claimed equally by boundaries ${module.ambiguous.join(" and ")}.` : module.layer === "none" ? `${name}: there is no architecture, so nothing places it.` : STAR_STYLES.includes(D.architecture) ? `${name} lies outside the root star and composition does not claim it, so it is unclassified and its dependencies are not checked.` : `No glob places ${name}, so it is unclassified and its dependencies are not checked.`;
     return;
   }
 
   const lines = [...placed].sort((a, b) => a - b);
-  const globs = module.reasons.map(r => `"${r.glob}" under ${r.path.join(" › ")}`).join(", and ");
+  const globs = module.reasons.map(r => r.glob ? `"${r.glob}" under ${r.path.join(" › ")}` : starReason(module, r)).join(", and ");
   why.textContent = `${lines.length ? (lines.length > 1 ? "Lines " : "Line ") + lines.join(" and ") : "A glob"} place${lines.length === 1 ? "s" : ""} ${name}: ${globs}.`;
+}
+
+// starReason says why a snowflake places a module by its directory, for a
+// reason with no glob: a star's own package is in its core, and any other
+// module is in the spoke its directory names.
+function starReason(module, reason) {
+  const star = reason.path[reason.path.length - 1];
+  if (module.layer === "spoke") return `star ${star} places it in spoke ${module.spoke} by its directory`;
+  return `star ${star} places it in its core, since a star's own package is always in its core`;
 }
 
 // locateReason finds the line, from 1, where a glob that places a module is

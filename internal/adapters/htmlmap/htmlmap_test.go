@@ -1,11 +1,14 @@
 package htmlmap
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -508,6 +511,7 @@ func TestTermsFindPlacingLines(t *testing.T) {
 	cases := `
 const hexagonal = ["version: 1", "architecture: hexagonal", "layers:", "  composition: [\"cmd/**\"]", "  domain:      [\"internal/graph/**\", \"internal/rules/**\"]", "  adapter:", "    driving:   [\"web/**\"]", "    driven:    [\"store/**\", \"queue/**\"]"];
 const vertical = ["architecture: vertical", "composition: ['cmd/**']", "boundaries:", "  orders:", "    - \"**/orders/**\"   # all of it", "  billing: ['web/billing/**', store/billing/**]", "layers:", "  api: [\"**/api\"]"];
+const snowflake = ["architecture: snowflake", "composition: [\".\", \"cmd/**\", \"internal/factory/**\"]", "stars: # each star's directory", "  \".\": []", "  internal: [\"internal/core/**\"]", "  internal/blocks: [\"internal/blocks/core/**\"]   # a branch"];
 const cases = [
   [hexagonal, ["composition"], "cmd/**", 4],
   [hexagonal, ["layers", "domain"], "internal/rules/**", 5],
@@ -518,6 +522,11 @@ const cases = [
   [vertical, ["boundaries", "billing"], "store/billing/**", 6],
   [vertical, ["layers", "api"], "**/api", 8],
   [vertical, ["shared"], "lib/**", 0],
+  [snowflake, ["composition"], "internal/factory/**", 2],
+  [snowflake, ["stars", "internal"], "internal/core/**", 5],
+  [snowflake, ["stars", "internal/blocks"], "internal/blocks/core/**", 6],
+  [snowflake, ["stars", "internal/blocks"], "", 6],
+  [snowflake, ["stars", "."], "", 4],
 ];
 for (const [lines, path, glob, want] of cases) {
   const got = locateReason(lines, { path, glob });
@@ -531,5 +540,207 @@ for (const [lines, path, glob, want] of cases) {
 
 	if output, err := exec.Command(node, file).CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, output)
+	}
+}
+
+// snowflakeView places agentportal-guard's target layout, and any extra
+// paths, by the rules' own snowflake resolution.
+func snowflakeView(extra ...string) app.MapView {
+	architecture := rules.Architecture{
+		Style:       rules.StyleSnowflake,
+		Composition: []string{".", "cmd/**", "internal/factory/**"},
+		Stars: []rules.Star{
+			{Dir: "internal", Core: []string{"internal/core/**"}},
+			{Dir: "internal/blocks", Core: []string{"internal/blocks/core/**"}},
+			{Dir: "internal/gate", Core: []string{"internal/gate/core/**"}},
+		},
+	}
+
+	paths := append([]string{
+		".", "cmd/guardprobe", "internal/factory",
+		"internal", "internal/core", "internal/core/trust", "internal/core/plans",
+		"internal/ai", "internal/anthropic", "internal/plan", "internal/tensors", "internal/tracer", "internal/web", "internal/web/fetch",
+		"internal/blocks", "internal/blocks/core", "internal/blocks/cleanse", "internal/blocks/spotlight", "internal/blocks/summarize", "internal/blocks/www", "internal/blocks/www/sub",
+		"internal/gate", "internal/gate/core", "internal/gate/presence", "internal/gate/tagger",
+		"scripts/x",
+	}, extra...)
+
+	view := app.MapView{Architecture: rules.StyleSnowflake, Root: "agentportal-guard", Layers: []string{graph.LayerCore, graph.LayerSpoke}, Stars: architecture.Tree(paths)}
+	for i, modulePath := range paths {
+		place := architecture.Resolve(modulePath)
+		var files []string
+		for f := range 1 + i%5 {
+			files = append(files, fmt.Sprintf("%s/f%d.go", modulePath, f))
+		}
+
+		view.Modules = append(view.Modules, app.MapModule{ID: "go:" + modulePath, Path: modulePath, Layer: place.Layer, Star: place.Star, Spoke: place.Spoke, Files: files})
+	}
+
+	return view
+}
+
+func TestSnowflakeLayout(t *testing.T) {
+	view := snowflakeView()
+	layout := ComputeLayout(view)
+	inscribed := math.Cos(math.Pi / 6)
+	stars, cores, spokes := map[string]Ring{}, map[string]Ring{}, map[string]Ring{}
+	var composition *Ring
+	for i, ring := range layout.Rings {
+		switch ring.Layer {
+		case ringStar:
+			stars[ring.Star] = ring
+		case graph.LayerCore:
+			cores[ring.Star] = ring
+		case graph.LayerSpoke:
+			spokes[ring.Spoke] = ring
+		case graph.LayerComposition:
+			composition = &layout.Rings[i]
+		}
+	}
+
+	if len(stars) != 3 || len(cores) != 3 || stars["internal"].Label != "internal" || stars["internal/blocks"].Label != "blocks" || cores["internal/gate"].Label != "core" || spokes["internal/web"].Label != "web" {
+		t.Fatalf("a snowflake draws each star with its core and leaves: %+v", layout.Rings)
+	}
+
+	if composition == nil || !composition.Left || composition.Radius <= stars["internal"].Radius {
+		t.Fatalf("composition is a half ring left of the root star: %+v", layout.Rings)
+	}
+
+	// Rings come cores first and stars last, so the page, drawing them in
+	// reverse, paints every core over its star.
+	order := map[string]int{graph.LayerCore: 0, graph.LayerSpoke: 1, ringStar: 2, graph.LayerComposition: 3}
+	for i := 1; i < len(layout.Rings); i++ {
+		if order[layout.Rings[i].Layer] < order[layout.Rings[i-1].Layer] {
+			t.Fatalf("rings are out of order at %d: %+v", i, layout.Rings)
+		}
+	}
+
+	within := func(x, y, r float64, ring Ring) bool {
+		return math.Hypot(x-ring.X, y-ring.Y)+r <= ring.Radius*inscribed+0.5
+	}
+
+	for _, module := range view.Modules {
+		p, placed := layout.Modules[module.ID]
+		if !placed {
+			t.Fatalf("%s was not placed", module.ID)
+		}
+
+		size := layout.Sizes[module.ID]
+		switch module.Layer {
+		case graph.LayerCore:
+			if !within(p.X, p.Y, size, cores[module.Star]) {
+				t.Errorf("%s lies outside the core of %s: %+v in %+v", module.ID, module.Star, p, cores[module.Star])
+			}
+		case graph.LayerSpoke:
+			if !within(p.X, p.Y, size, spokes[module.Spoke]) {
+				t.Errorf("%s lies outside spoke %s: %+v in %+v", module.ID, module.Spoke, p, spokes[module.Spoke])
+			}
+		case graph.LayerComposition:
+			if p.X >= 0 || math.Hypot(p.X, p.Y) < stars["internal"].Radius*inscribed || !within(p.X, p.Y, size, *composition) {
+				t.Errorf("composition %s is not in its half ring: %+v", module.ID, p)
+			}
+		case graph.LayerUnclassified:
+			if p.Y <= 0 || math.Hypot(p.X, p.Y) < composition.Radius*inscribed {
+				t.Errorf("unclassified %s is not outside along the bottom: %+v", module.ID, p)
+			}
+		}
+	}
+
+	// A star's spokes are its leaves and the stars of its branches. None
+	// overlaps a sibling or the star's core, and each lies inside its star.
+	children := map[string][]Ring{}
+	for _, ring := range spokes {
+		children[ring.Star] = append(children[ring.Star], ring)
+	}
+
+	for _, node := range view.Stars {
+		if node.Parent != "" {
+			children[node.Parent] = append(children[node.Parent], stars[node.Dir])
+		}
+	}
+
+	for star, rings := range children {
+		for i, a := range rings {
+			if !within(a.X, a.Y, a.Radius, stars[star]) {
+				t.Errorf("%s%s lies outside star %s", a.Spoke, a.Star, star)
+			}
+
+			if core := cores[star]; math.Hypot(a.X-core.X, a.Y-core.Y) < a.Radius+core.Radius {
+				t.Errorf("%s%s overlaps the core of %s", a.Spoke, a.Star, star)
+			}
+
+			for _, b := range rings[i+1:] {
+				if math.Hypot(a.X-b.X, a.Y-b.Y) < a.Radius+b.Radius {
+					t.Errorf("sibling spokes %s%s and %s%s of %s overlap", a.Spoke, a.Star, b.Spoke, b.Star, star)
+				}
+			}
+		}
+	}
+
+	for i, a := range view.Modules {
+		for _, b := range view.Modules[i+1:] {
+			pa, pb := layout.Modules[a.ID], layout.Modules[b.ID]
+			if distance := math.Hypot(pa.X-pb.X, pa.Y-pb.Y); distance < layout.Sizes[a.ID]+layout.Sizes[b.ID] {
+				t.Errorf("%s and %s overlap: %.1f apart", a.ID, b.ID, distance)
+			}
+		}
+	}
+
+	if again := ComputeLayout(snowflakeView()); !reflect.DeepEqual(layout, again) {
+		t.Error("the snowflake layout is not deterministic")
+	}
+
+	// A new spoke takes its place in directory order without reordering the
+	// others around the root.
+	angles := func(layout Layout) (result []string) {
+		root := stars["internal"]
+		var rings []Ring
+		for _, ring := range layout.Rings {
+			if ring.Layer == graph.LayerSpoke && ring.Star == "internal" || ring.Layer == ringStar && ring.Star != "internal" && path.Dir(ring.Star) == "internal" {
+				rings = append(rings, ring)
+			}
+		}
+
+		turn := func(ring Ring) float64 {
+			return math.Mod(math.Atan2(ring.Y-root.Y, ring.X-root.X)+math.Pi/2+2*math.Pi, 2*math.Pi)
+		}
+
+		slices.SortFunc(rings, func(a, b Ring) int { return cmp.Compare(turn(a), turn(b)) })
+		for _, ring := range rings {
+			result = append(result, cmp.Or(ring.Spoke, ring.Star))
+		}
+
+		return result
+	}
+
+	before := angles(layout)
+	after := slices.DeleteFunc(angles(ComputeLayout(snowflakeView("internal/zebra"))), func(name string) bool { return name == "internal/zebra" })
+	if !slices.Equal(before, after) || !slices.IsSorted(before) {
+		t.Errorf("a new spoke reorders the others: %q, then %q", before, after)
+	}
+}
+
+// TestSnowflakeLayoutKeepsUnlistedStars draws a module whose star the view's
+// tree lacks, such as a planned one, rather than dropping it.
+func TestSnowflakeLayoutKeepsUnlistedStars(t *testing.T) {
+	layout := ComputeLayout(app.MapView{Architecture: rules.StyleSnowflake, Modules: []app.MapModule{
+		{ID: "go:internal", Path: "internal", Layer: graph.LayerCore, Star: "internal"},
+		{ID: "go:internal/web", Path: "internal/web", Layer: graph.LayerSpoke, Star: "internal", Spoke: "internal/web"},
+		{ID: "go:internal/blocks/www", Path: "internal/blocks/www", Layer: graph.LayerSpoke, Star: "internal/blocks", Spoke: "internal/blocks/www"},
+	}})
+
+	if len(layout.Modules) != 3 {
+		t.Fatalf("every module is placed: %+v", layout.Modules)
+	}
+
+	branch := 0
+	for _, ring := range layout.Rings {
+		if ring.Layer == ringStar && ring.Star == "internal/blocks" {
+			branch++
+		}
+	}
+
+	if branch != 1 {
+		t.Fatalf("the unlisted star internal/blocks is drawn as a branch: %+v", layout.Rings)
 	}
 }

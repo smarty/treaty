@@ -10,7 +10,9 @@
 // for this repository and architecture in .treaty/positions.json. Dropped in
 // another layer, or for vertical and modular in another boundary, shared or
 // composition, treaty.yaml is edited to move it there, and the rules and
-// checks follow. Escape puts it back.
+// checks follow. In a snowflake a spoke is its directory, so a module moves
+// only into or out of its star's core, or to composition. Escape puts it
+// back.
 let carry = null;
 function pickUp(id, clientX, clientY, pointerId) {
   const node = mapEl.querySelector(`[data-module="${CSS.escape(id)}"]`), p = D.layout.modules[id];
@@ -21,7 +23,7 @@ function pickUp(id, clientX, clientY, pointerId) {
   const at = toMap(clientX, clientY);
   carry = { id, node, from: bandOf(id), start: { x: p.x, y: p.y }, grab: { x: at.x - p.x, y: at.y - p.y }, at: { x: p.x, y: p.y }, target: null };
   liftCarried();
-  const elsewhere = LAYERED_STYLES.includes(D.architecture) ? "in another layer" : "in another boundary, shared or composition";
+  const elsewhere = LAYERED_STYLES.includes(D.architecture) ? "in another layer" : STAR_STYLES.includes(D.architecture) ? "on its star's core, its own spoke or composition" : "in another boundary, shared or composition";
   setStatus(`Moving ${(modules.get(id) || {}).label || id}: drop it in its own area to place it, or ${elsewhere} to move it there in treaty.yaml · Esc puts it back`);
   moveCarry(clientX, clientY);
 }
@@ -52,6 +54,7 @@ function dropVerdict(from, to) {
   if (to.key === from.key) return { ok: true, move: false, text: "Place it here" };
   const previewing = live.state && live.state.view && live.state.view.architecture !== live.state.view.configured;
   if (previewing) return { ok: false, text: "This is a preview; keep or adopt it before moving modules between layers" };
+  if (STAR_STYLES.includes(D.architecture)) return starVerdict(from, to);
   if (!LAYERED_STYLES.includes(D.architecture)) return boundedVerdict(from, to);
   if (!to.layer || to.layer === "unclassified") return { ok: false, text: "Drop it on a layer to classify it" };
   return { ok: true, move: true, text: `Move to ${to.label} in treaty.yaml` };
@@ -64,6 +67,26 @@ function boundedVerdict(from, to) {
   if (to.boundary) return { ok: true, move: true, text: `Move to boundary ${to.boundary} in treaty.yaml` };
   if (to.layer === "shared" || to.layer === "composition") return { ok: true, move: true, text: `Move to ${to.layer} in treaty.yaml` };
   return { ok: false, text: "Drop it on a boundary, shared or composition to place it" };
+}
+// starVerdict says what a drop does in a snowflake, where a spoke is its
+// directory: a module moves into the core of the innermost star holding it,
+// out of a core it is in by its exact path into its own directory's spoke,
+// or to composition.
+function starVerdict(from, to) {
+  const m = modules.get(carry.id) || {}, path = m.path || "", holder = innermostStar(path);
+  if (to.layer === "composition") return { ok: true, move: true, text: "Move to composition in treaty.yaml" };
+  if (to.layer === "core") {
+    if (to.star === holder) return { ok: true, move: true, text: `Move into the core of star ${to.star} in treaty.yaml` };
+    return { ok: false, text: `A star's core is inside its directory; drop it on the core of a star that holds it${holder ? `, star ${holder}` : ""}` };
+  }
+  if (to.layer === "spoke") {
+    if (to.spoke !== ownSpoke(path)) return { ok: false, text: `A spoke is its directory: move the package's files into ${to.spoke} to put it there` };
+    if (from.layer !== "core") return { ok: true, move: true, text: `Move to spoke ${to.spoke} in treaty.yaml` };
+    const glob = (m.reasons || []).map(r => r.glob).find(g => g && g !== path);
+    if (glob) return { ok: false, text: `The glob "${glob}" under stars › ${from.star} puts it in the core; edit that glob to take it out` };
+    return { ok: true, move: true, text: `Take it out of the core of star ${from.star} in treaty.yaml` };
+  }
+  return { ok: false, text: "Drop it on a core, its own spoke or composition" };
 }
 function dropCarry(clientX, clientY) {
   moveCarry(clientX, clientY);
@@ -89,7 +112,7 @@ function endCarry() {
 }
 async function reclassify(id, target) {
   try {
-    const response = await fetch("api/reclassify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ module: id, layer: target.boundary ? "boundary" : target.layer, side: target.side || "", boundary: target.boundary || "" }) });
+    const response = await fetch("api/reclassify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ module: id, layer: target.boundary ? "boundary" : target.layer, side: target.side || "", boundary: target.boundary || "", star: target.star || "", spoke: target.spoke || "" }) });
     if (!response.ok) throw new Error((await response.text()).trim());
     setStatus("");
     showState(await response.json());
@@ -138,10 +161,16 @@ function placeMoved() {
 // around the origin, as rings are drawn.
 function inHex(x, y, r) { const h = r * Math.sqrt(3) / 2; return Math.abs(y) <= h && Math.abs(x) * Math.sqrt(3) / 2 + Math.abs(y) / 2 <= h; }
 // bandOf is the band a module belongs to: its layer, and its side on a
-// hexagonal adapter ring; for the architectures that place modules by
-// directory, the area its computed position lies in.
+// hexagonal adapter ring; in a snowflake, its star's core or its spoke;
+// for the architectures that place modules by directory, the area its
+// computed position lies in.
 function bandOf(id) {
   const m = modules.get(id) || {}, p = (D.layout.computed || D.layout.modules)[id];
+  if (STAR_STYLES.includes(D.architecture)) {
+    if (m.layer === "core") return { key: "core:" + m.star, layer: "core", star: m.star, spoke: "" };
+    if (m.layer === "spoke") return { key: "spoke:" + m.spoke, layer: "spoke", star: m.star, spoke: m.spoke };
+    return { key: m.layer === "composition" ? "composition" : "unclassified", layer: m.layer === "composition" ? "composition" : "unclassified", star: "", spoke: "" };
+  }
   if (LAYERED_STYLES.includes(D.architecture)) {
     const side = D.architecture === "hexagonal" && m.layer === "adapter" ? m.side || "" : "";
     return { key: m.layer + (side ? "/" + side : ""), layer: m.layer, side };
@@ -152,6 +181,7 @@ function bandOf(id) {
 // that draws it; null outside every area.
 function bandAt(x, y) {
   const rings = D.layout.rings || [];
+  if (STAR_STYLES.includes(D.architecture)) return starBandAt(rings, x, y);
   if (rings.length) {
     // Hexagonal draws composition as its own ring; clean shares the outer
     // ring with it, so there a composition module's arc is the target.
@@ -172,6 +202,23 @@ function bandAt(x, y) {
   const r = regions[hit];
   if (D.architecture === "layered") return { key: r.layer, layer: r.layer, side: "", label: regionName(r), backdrop: "region:" + hit };
   return { key: "region:" + hit, layer: r.layer || "", boundary: r.boundary || "", side: "", label: regionName(r), backdrop: "region:" + hit };
+}
+// starBandAt names the snowflake region under a map point: the smallest
+// ring whose hexagon holds it, a core, a leaf, a star or composition, or
+// unclassified outside them all.
+function starBandAt(rings, x, y) {
+  let best = -1;
+  rings.forEach((ring, i) => {
+    const dx = x - (ring.x || 0), dy = y - (ring.y || 0);
+    if (ring.left && dx > 0 || !inHex(dx, dy, ring.radius)) return;
+    if (best < 0 || ring.radius < rings[best].radius) best = i;
+  });
+  if (best < 0) return { key: "unclassified", layer: "unclassified", star: "", spoke: "", label: "unclassified", backdrop: "" };
+  const ring = rings[best], backdrop = "ring:" + best;
+  if (ring.layer === "core") return { key: "core:" + ring.star, layer: "core", star: ring.star, spoke: "", label: `the core of star ${ring.star}`, backdrop };
+  if (ring.layer === "spoke") return { key: "spoke:" + ring.spoke, layer: "spoke", star: ring.star, spoke: ring.spoke, label: `spoke ${ring.spoke}`, backdrop };
+  if (ring.layer === "star") return { key: "star:" + ring.star, layer: "star", star: ring.star, spoke: "", label: `star ${ring.star}`, backdrop };
+  return { key: "composition", layer: "composition", star: "", spoke: "", label: "composition", backdrop };
 }
 // inComposition reports whether a point on the outer ring lies within the
 // arc its composition modules span, where composition shares that ring.

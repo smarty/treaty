@@ -51,11 +51,16 @@ function drawReferences(svg, rel) {
   // regions for the other architectures.
   const tones = ["--ring-domain", "--ring-app", "--ring-adapter", "--ring-outer"];
   // A half ring, such as hexagonal composition, covers only the left, and
-  // its label centers on the left half of its top edge.
-  for (const ring of [...(D.layout.rings || [])].reverse()) {
-    const top = ring.radius * Math.sin(Math.PI / 3), points = ring.left ? [[0, top], [-ring.radius / 2, top], [-ring.radius, 0], [-ring.radius / 2, -top], [0, -top]] : hexPoints(0, 0, ring.radius);
-    el("polygon", { class: "backdrop", "data-band": "ring:" + ring.layer, points: points.map(p => p.join(",")).join(" "), fill: color(tones[ring.tone] || tones[3]), stroke: color("--ring-stroke") }, svg);
-    el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, ring.left ? -ring.radius / 4 : 0, -top + 16, {}, true, true)).textContent = ring.layer.replace(/_/g, " ");
+  // its label centers on the left half of its top edge. A snowflake's rings
+  // are its stars, cores and leaves, each at its own center, and are told
+  // apart by their place in the list, since many share a layer.
+  const starry = STAR_STYLES.includes(D.architecture), rings = D.layout.rings || [];
+  for (let index = rings.length - 1; index >= 0; index--) {
+    const ring = rings[index], x = ring.x || 0, y = ring.y || 0;
+    const top = ring.radius * Math.sin(Math.PI / 3), points = ring.left ? [[x, y + top], [x - ring.radius / 2, y + top], [x - ring.radius, y], [x - ring.radius / 2, y - top], [x, y - top]] : hexPoints(x, y, ring.radius);
+    const backdrop = el("polygon", { class: "backdrop", "data-band": "ring:" + (starry ? index : ring.layer), points: points.map(p => p.join(",")).join(" "), fill: color(tones[ring.tone] || tones[3]), stroke: color("--ring-stroke") }, svg);
+    if (starry) backdrop.setAttribute("data-label", ringWords(ring));
+    el("text", { x: 0, y: 0, "text-anchor": "middle", class: "ring-label" }, anchored(svg, ring.left ? x - ring.radius / 4 : x, y - top + 16, {}, true, true)).textContent = ring.label || ring.layer.replace(/_/g, " ");
   }
   for (const [index, r] of (D.layout.regions || []).entries()) {
     el("rect", { class: "backdrop", "data-band": "region:" + index, x: r.x, y: r.y, width: r.w, height: r.h, rx: 8, fill: color(tones[r.tone] || tones[3]), stroke: color("--ring-stroke"), "vector-effect": "non-scaling-stroke" }, svg);
@@ -95,13 +100,13 @@ function drawReferences(svg, rel) {
     const a = anchorOf(e.from), b = anchorOf(e.to); if (!a || !b || a.key === b.key) continue;
     // A removed dependency stays apart from a live one between the same ends.
     const key = a.key + "\u0000" + b.key + (e.removed ? "\u0000removed" : "");
-    if (!pairs.has(key)) pairs.set(key, { from: a.key, to: b.key, a, b, references: [], imports: [], count: 0, violation: false, existing: true, new: false, changed: false, removed: !!e.removed });
+    if (!pairs.has(key)) pairs.set(key, { from: a.key, to: b.key, ids: [e.from, e.to], a, b, references: [], imports: [], count: 0, violation: false, existing: true, new: false, changed: false, removed: !!e.removed });
     const pair = pairs.get(key); pair.references.push(...e.references); pair.imports.push(...(e.imports || [])); pair.count += e.count; pair.violation ||= e.violation; if (e.violation) { pair.existing &&= !!(e.existing || e.ignored); pair.ignored = e.ignored || pair.ignored; } pair.new ||= e.new; pair.changed ||= e.changed;
   }
   const edgeLayer = el("g", {}, svg);
   const maxCount = Math.max(1, ...[...pairs.values()].map(e => e.count));
+  if (starry) laneEdges(pairs);
   for (const e of pairs.values()) {
-    const from = e.a, to = e.b;
     // Uses (calls, type uses) draw solid; inherits (implements, embeds) draw
     // dashed with a hollow head. A pair with both bows them to opposite sides.
     const uses = e.references.filter(r => !inherits(r.kind)), inherited = e.references.filter(r => inherits(r.kind));
@@ -110,8 +115,18 @@ function drawReferences(svg, rel) {
     if (uses.length || (!inherited.length && e.imports.length)) parts.push({ refs: uses, inherit: false, bend: 0.12 });
     if (inherited.length) parts.push({ refs: inherited, inherit: true, bend: uses.length ? -0.12 : 0.12 });
     parts.forEach((part, index) => {
+      let from = e.a, to = e.b, bend = part.bend;
+      // In a snowflake, allowed dependencies run straight, in lanes between
+      // their regions, and a violation bows away from the center of the
+      // star around both ends, so a sideways one is an outward chord.
+      if (starry && e.violation) bend = (index ? 0.18 : 0.3) * outwardSign(e);
+      else if (starry) {
+        const length = Math.hypot(to.x - from.x, to.y - from.y) || 1, offset = (e.lane || 0) + index * 3;
+        const px = -(to.y - from.y) / length * offset, py = (to.x - from.x) / length * offset;
+        from = { ...from, x: from.x + px, y: from.y + py }; to = { ...to, x: to.x + px, y: to.y + py }; bend = 0;
+      }
       const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2, dx = to.x - from.x, dy = to.y - from.y;
-      const cx = mx - dy * part.bend, cy = my + dx * part.bend;
+      const cx = mx - dy * bend, cy = my + dx * bend;
       const trim = (p, toward, by) => { const vx = toward[0] - p.x, vy = toward[1] - p.y, d = Math.hypot(vx, vy) || 1; return { x: p.x + vx / d * by, y: p.y + vy / d * by }; };
       const a = trim(from, [cx, cy], from.r + 4), b = trim(to, [cx, cy], to.r + 8);
       const stroke = e.violation ? color("--violation") : e.new ? color("--added") : e.removed ? color("--removed") : e.changed ? color("--changed") : color("--edge");
@@ -156,6 +171,12 @@ function drawReferences(svg, rel) {
     const g = el("g", { class: "module" + (rel && !rel.has(m.id) ? " dim" : ""), "data-module": m.id, tabindex: 0, role: "button", "aria-label": `Module ${m.id}, ${m.layer}`, "data-label": `${m.label || m.path} · ${placeName(m)}${m.design ? " · planned, not built" : ""}${m.removed ? " · removed" : ""}` }, svg);
     const hex = el("polygon", { points: hexPoints(p.x, p.y, S).map(q => q.join(",")).join(" "), fill: color("--module"), stroke: m.new ? color("--added") : m.removed ? color("--removed") : m.design ? color("--planned") : state.selected && state.selected.id === m.id ? color("--selection") : color("--hex-stroke"), "stroke-width": state.selected && state.selected.id === m.id ? 2.5 : 1.4, "vector-effect": "non-scaling-stroke" }, g);
     if (m.new || m.removed || m.design) hex.setAttribute("stroke-dasharray", "5 3");
+    // A snowflake core holds the star's contracts and orchestrators: a dot
+    // marks it, in the middle, or below a lone file's cell.
+    if (starry && m.layer === "core") {
+      const lone = (cellsOf[m.id] || []).length === 1, at = lone ? (S * Math.cos(Math.PI / 6) + (D.layout.cell_size || 0) * Math.cos(Math.PI / 6)) / 2 : 0;
+      el("circle", { cx: p.x, cy: p.y + at, r: Math.max(2, S * 0.07), fill: color("--module-stroke"), "pointer-events": "none" }, g);
+    }
     // Composition wires adapters into the core: a double outline marks the
     // only modules allowed to depend on adapters.
     if (m.layer === "composition") el("polygon", { points: hexPoints(p.x, p.y, S * 0.84).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--hex-stroke"), "stroke-width": 1, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
@@ -233,6 +254,40 @@ function drawReferences(svg, rel) {
     }
   }
 }
+// ringWords names a snowflake ring for people: a star, a star's core or a
+// leaf.
+function ringWords(ring) {
+  if (ring.layer === "star") return `star ${ring.star}${starParent(ring.star) ? ` · branch of ${starParent(ring.star)}` : ""} · right-click to zoom to it`;
+  if (ring.layer === "core") return `core of star ${ring.star}: its contracts and orchestrators`;
+  if (ring.layer === "spoke") return `spoke ${ring.spoke} of star ${ring.star}`;
+  return ring.label || ring.layer;
+}
+// regionKey names the snowflake region a module is in: a star's core, a
+// spoke, composition or unclassified.
+function regionKey(id) { const m = modules.get(id) || {}; return m.layer === "core" ? "core:" + m.star : m.layer === "spoke" ? "spoke:" + m.spoke : m.layer || ""; }
+// laneEdges gives each allowed dependency in a snowflake its lane: the
+// dependencies between the same two regions run side by side, 5 units
+// apart, so they read as one bundle down an arm. Lanes are measured the
+// same way round whichever way a dependency runs, so none share a lane.
+function laneEdges(pairs) {
+  const bundles = new Map();
+  for (const e of pairs.values()) {
+    if (e.violation) continue;
+    const a = regionKey(e.ids[0]), b = regionKey(e.ids[1]), key = a < b ? a + "\u0000" + b : b + "\u0000" + a;
+    if (!bundles.has(key)) bundles.set(key, []);
+    bundles.get(key).push(e);
+    e.flip = a > b;
+  }
+  for (const bundle of bundles.values()) bundle.forEach((e, i) => { e.lane = (i - (bundle.length - 1) / 2) * 5 * (e.flip ? -1 : 1); });
+}
+// outwardSign picks the side a violation bows to: away from the center of
+// the deepest star around both its ends.
+function outwardSign(e) {
+  const a = modules.get(e.ids[0]) || {}, b = modules.get(e.ids[1]) || {};
+  const ring = starRing(commonStar(a.star || "", b.star || "")) || {}, x = ring.x || 0, y = ring.y || 0;
+  const mx = (e.a.x + e.b.x) / 2, my = (e.a.y + e.b.y) / 2, dx = e.b.x - e.a.x, dy = e.b.y - e.a.y;
+  return -dy * (mx - x) + dx * (my - y) >= 0 ? 1 : -1;
+}
 // glowNode finds what to light up for a symbol, module or group id: the
 // symbol's icon, the module's hexagon, or the collapsed group hiding it.
 function glowNode(id) {
@@ -286,8 +341,16 @@ function regionAt(x, y) {
 // regionContextMenu opens a region's menu on a right click inside it, away
 // from its modules.
 function regionContextMenu(ev) {
-  if (ev.defaultPrevented || carry || state.mapTab !== "references" || !D || !(D.layout.regions || []).length) return;
+  if (ev.defaultPrevented || carry || state.mapTab !== "references" || !D) return;
   if (ev.target.closest && ev.target.closest("[data-module], [data-group], [data-symbol]")) return;
+  if (STAR_STYLES.includes(D.architecture)) {
+    const p = toMap(ev.clientX, ev.clientY), band = bandAt(p.x, p.y);
+    if (!band || !band.star) return;
+    ev.preventDefault();
+    starMenu(band.star, ev.clientX, ev.clientY);
+    return;
+  }
+  if (!(D.layout.regions || []).length) return;
   const p = toMap(ev.clientX, ev.clientY), hit = regionAt(p.x, p.y);
   if (!hit) return;
   ev.preventDefault();
@@ -309,6 +372,16 @@ function regionMenu({ region, index }, x, y) {
   items.push({ label: "Zoom to this region", action: () => zoomToRect(region) });
   if (LIVE) items.push({ label: moved.length ? `Put its ${moved.length} moved module${moved.length === 1 ? "" : "s"} back` : "Put its moved modules back", disabled: !moved.length, title: moved.length ? "Return them to where the layout places them" : "No module here has been moved", action: () => { for (const id of moved) savePosition(id, null); } });
   openMenu(x, y, "Region " + name, items);
+}
+// starMenu opens a snowflake star's menu. A star is named by its
+// directory, so it has no Rename.
+function starMenu(dir, x, y) {
+  const ring = starRing(dir); if (!ring) return;
+  const at = { x: (ring.x || 0) - ring.radius, y: (ring.y || 0) - ring.radius, w: 2 * ring.radius, h: 2 * ring.radius };
+  const moved = [...state.moved].filter(id => { const m = modules.get(id); return m && m.star && starsAround(m.star).includes(dir); });
+  const items = [{ label: "Zoom to this star", action: () => zoomToRect(at) }];
+  if (LIVE) items.push({ label: moved.length ? `Put its ${moved.length} moved module${moved.length === 1 ? "" : "s"} back` : "Put its moved modules back", disabled: !moved.length, title: moved.length ? "Return them to where the layout places them" : "No module here has been moved", action: () => { for (const id of moved) savePosition(id, null); } });
+  openMenu(x, y, "Star " + dir, items);
 }
 function renameRegion(region, x, y) {
   openPrompt(x, y, `Rename “${regionName(region)}”`, regionName(region), value => nameRegion(region, value.trim()));
