@@ -250,10 +250,19 @@ func TestValidate(t *testing.T) {
 		{"boundary as a layer name", Architecture{Style: StyleLayered, Layers: []Layer{{Name: "boundary"}}}},
 		{"reserved layer name", Architecture{Style: StyleLayered, Layers: []Layer{{Name: "shared"}}}},
 		{"duplicate layer", Architecture{Style: StyleLayered, Layers: []Layer{{Name: "web"}, {Name: "web"}}}},
+		{"stars outside snowflake", Architecture{Style: StyleModular, Boundaries: []Boundary{{Name: "a", Globs: []string{"a/**"}}}, Stars: []Star{{Dir: "a"}}}},
+		{"snowflake without stars", Architecture{Style: StyleSnowflake}},
+		{"snowflake with boundaries", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: "a"}}, Boundaries: []Boundary{{Name: "a", Globs: []string{"a/**"}}}}},
 	} {
 		if err := c.architecture.Validate(); !errors.Is(err, ErrArchitecture) {
 			t.Errorf("%s: got %v", c.name, err)
 		}
+	}
+}
+
+func TestStyles(t *testing.T) {
+	if !slices.Equal(Styles, []string{StyleNone, StyleClean, StyleHexagonal, StyleLayered, StyleModular, StyleSnowflake, StyleVertical}) {
+		t.Fatalf("none first, then alphabetical, snowflake among them: %v", Styles)
 	}
 }
 

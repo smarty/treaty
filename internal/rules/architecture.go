@@ -17,6 +17,7 @@ const (
 	StyleLayered   = "layered"
 	StyleModular   = "modular"
 	StyleNone      = "none"
+	StyleSnowflake = "snowflake"
 	StyleVertical  = "vertical"
 )
 
@@ -31,7 +32,7 @@ var (
 	HexagonalLayers = []string{graph.LayerDomain, graph.LayerApplication, graph.LayerAdapter}
 
 	// Styles lists every supported architecture, the default first.
-	Styles = []string{StyleNone, StyleClean, StyleHexagonal, StyleLayered, StyleModular, StyleVertical}
+	Styles = []string{StyleNone, StyleClean, StyleHexagonal, StyleLayered, StyleModular, StyleSnowflake, StyleVertical}
 )
 
 // Architecture is the dependency rules of one codebase: a style, and the
@@ -52,6 +53,8 @@ var (
 //     relative to the repository root.
 //   - Shared code may be used by every boundary, and may itself use only
 //     shared code.
+//   - Stars are the snowflake style's, in the order treaty.yaml lists
+//     them, each a directory and the globs of its core: see Star.
 type Architecture struct {
 	Style       string
 	Composition []string
@@ -59,6 +62,7 @@ type Architecture struct {
 	Shared      []string
 	Boundaries  []Boundary
 	Public      []string
+	Stars       []Star
 }
 
 // Boundary is one named group of modules and the globs that gather them.
@@ -77,13 +81,17 @@ type Layer struct {
 	Side  string
 }
 
-// Placement is where the architecture puts one module.
+// Placement is where the architecture puts one module. For the snowflake
+// style, Layer is core or spoke, Star is the directory of the star holding
+// the module, and Spoke is its spoke's directory, empty for a core.
 type Placement struct {
 	Layer     string
 	Side      string
 	Boundary  string
 	Public    bool
 	Ambiguous []string
+	Star      string
+	Spoke     string
 }
 
 // Same reports whether two placements put a module in the same place.
@@ -92,9 +100,11 @@ type Placement struct {
 //   - other: the placement to compare with.
 //
 // Returns:
-//   - result: true when layer, side, boundary, public and ambiguity match.
+//   - result: true when layer, side, boundary, public, ambiguity, star and
+//     spoke match.
 func (this Placement) Same(other Placement) bool {
-	return this.Layer == other.Layer && this.Side == other.Side && this.Boundary == other.Boundary && this.Public == other.Public && slices.Equal(this.Ambiguous, other.Ambiguous)
+	return this.Layer == other.Layer && this.Side == other.Side && this.Boundary == other.Boundary && this.Public == other.Public && slices.Equal(this.Ambiguous, other.Ambiguous) &&
+		this.Star == other.Star && this.Spoke == other.Spoke
 }
 
 // Violation is a module edge that breaks a rule of the architecture. It has
@@ -159,6 +169,7 @@ func (this Architecture) Assign(g *graph.Graph) {
 	for _, module := range g.Modules {
 		placement := this.Resolve(module.Path)
 		module.Layer, module.Side, module.Boundary, module.Public, module.Ambiguous = placement.Layer, placement.Side, placement.Boundary, placement.Public, placement.Ambiguous
+		module.Star, module.Spoke = placement.Star, placement.Spoke
 	}
 }
 
@@ -186,6 +197,8 @@ func (this Architecture) Check(from, to Placement) (allowed bool, rule string) {
 	}
 
 	switch this.Style {
+	case StyleSnowflake:
+		return this.checkSnowflake(from, to)
 	case StyleVertical:
 		return this.checkVertical(from, to)
 	case StyleModular:
@@ -211,6 +224,10 @@ func (this Architecture) Check(from, to Placement) (allowed bool, rule string) {
 // Returns:
 //   - result: one or two sentences.
 func (this Architecture) Guidance(placement Placement) string {
+	if this.Style == StyleSnowflake && placement.Layer != graph.LayerComposition {
+		return this.starGuidance(placement)
+	}
+
 	switch placement.Layer {
 	case graph.LayerNone:
 		return "No architecture: treaty.yaml declares none, so every dependency is allowed. Choose one with treaty init --architecture <name>."
@@ -262,8 +279,12 @@ func (this Architecture) Guidance(placement Placement) string {
 // LayerNames lists the distinct layer names, innermost or lowest first.
 //
 // Returns:
-//   - result: the names; empty for the modular style.
+//   - result: the names; empty for the modular and snowflake styles.
 func (this Architecture) LayerNames() []string {
+	if this.Style == StyleSnowflake {
+		return nil
+	}
+
 	var result []string
 	for _, layer := range this.Layers {
 		if !slices.Contains(result, layer.Name) {
@@ -281,8 +302,12 @@ func (this Architecture) LayerNames() []string {
 //   - placement: the module's placement.
 //
 // Returns:
-//   - result: layer names, or descriptions of boundaries.
+//   - result: layer names, or descriptions of boundaries or cores.
 func (this Architecture) MayUse(placement Placement) []string {
+	if this.Style == StyleSnowflake {
+		return this.starMayUse(placement)
+	}
+
 	names := this.LayerNames()
 	sliced := this.bounded()
 	switch placement.Layer {
@@ -336,6 +361,7 @@ func (this Architecture) MayUse(placement Placement) []string {
 //   - For the modular style, a module is public when it matches a public
 //     glob or, with none given, when it is at the top of its boundary: it
 //     matches one of the boundary's globs without the trailing /**.
+//   - For the snowflake style, see resolveSnowflake.
 //
 // Parameters:
 //   - modulePath: the module path relative to the repository root.
@@ -345,6 +371,10 @@ func (this Architecture) MayUse(placement Placement) []string {
 func (this Architecture) Resolve(modulePath string) (result Placement) {
 	if this.Style == StyleNone {
 		return Placement{Layer: graph.LayerNone}
+	}
+
+	if this.Style == StyleSnowflake {
+		return this.resolveSnowflake(modulePath)
 	}
 
 	if !this.bounded() {
@@ -420,6 +450,10 @@ type Reason struct {
 // Notes:
 //   - Composition may also be listed under layers for hexagonal; its path
 //     is composition either way.
+//   - For the snowflake style, a core module placed by a glob or an exact
+//     path has that entry at stars and the star's directory. A star's own
+//     package and a spoke are placed by their directory, so their reason
+//     has the star's key and an empty glob.
 //
 // Parameters:
 //   - modulePath: the module's path relative to the repository root.
@@ -458,6 +492,17 @@ func (this Architecture) Reasons(modulePath string) (result []Reason) {
 		return nil
 	case placement.Layer == graph.LayerComposition:
 		return []Reason{{Path: []string{"composition"}, Glob: pick(this.Composition)}}
+	case this.Style == StyleSnowflake:
+		if placement.Layer == graph.LayerUnclassified {
+			return nil
+		}
+
+		glob := ""
+		if star := this.star(placement.Star); star != nil && placement.Layer == graph.LayerCore {
+			glob = pick(star.Core)
+		}
+
+		return []Reason{{Path: []string{"stars", placement.Star}, Glob: glob}}
 	case placement.Layer == graph.LayerShared:
 		return []Reason{{Path: []string{"shared"}, Glob: pick(this.Shared)}}
 	case len(placement.Ambiguous) > 0:
@@ -581,6 +626,8 @@ func (this Architecture) Summary() string {
 		return result
 	case StyleModular:
 		return "Rules (modular monolith): a boundary may use its own packages, the public packages of other boundaries and shared code; boundaries may not depend on each other in a cycle; shared code may use only shared code; composition may use everything; nothing may use composition."
+	case StyleSnowflake:
+		return this.starSummary()
 	}
 
 	if this.Style == StyleClean {
@@ -597,11 +644,19 @@ func (this Architecture) Summary() string {
 //
 // Errors:
 //   - ErrArchitecture: an unknown style, a layer name the style does not
-//     allow, a boundary without a name or globs, or a setting the style
-//     does not use.
+//     allow, a boundary without a name or globs, a star that does not fit
+//     the star tree, or a setting the style does not use.
 func (this Architecture) Validate() error {
 	if !slices.Contains(Styles, this.Style) {
 		return fmt.Errorf("%w: unknown architecture %q; use one of %s", ErrArchitecture, this.Style, strings.Join(Styles, ", "))
+	}
+
+	if this.Style != StyleSnowflake && len(this.Stars) > 0 {
+		return fmt.Errorf("%w: stars apply only to the snowflake architecture", ErrArchitecture)
+	}
+
+	if this.Style == StyleSnowflake {
+		return this.validateStars()
 	}
 
 	if this.Style == StyleNone && (len(this.Composition) > 0 || len(this.Layers) > 0 || len(this.Shared) > 0 || len(this.Boundaries) > 0 || len(this.Public) > 0) {
@@ -763,6 +818,10 @@ func (this Architecture) direction() string {
 
 // name describes a placement for rule text.
 func (this Architecture) name(placement Placement) string {
+	if this.Style == StyleSnowflake {
+		return starName(placement)
+	}
+
 	if placement.Boundary != "" && placement.Layer != graph.LayerShared {
 		return "boundary " + placement.Boundary
 	}
@@ -874,5 +933,5 @@ func boundaryPath(next map[string][]string, start, goal string) []string {
 }
 
 func placementOf(module *graph.Module) Placement {
-	return Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous}
+	return Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous, Star: module.Star, Spoke: module.Spoke}
 }

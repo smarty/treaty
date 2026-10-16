@@ -808,3 +808,110 @@ func TestIgnoredFindings(t *testing.T) {
 		t.Fatalf("unignored, the note must go: %v", report.Notes)
 	}
 }
+
+func TestIgnoredSidewaysDependency(t *testing.T) {
+	root := t.TempDir()
+	write := func(files map[string]string) {
+		for name, text := range files {
+			file := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	git := func(args ...string) {
+		if output, err := exec.Command("git", append([]string{"-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+
+	write(map[string]string{
+		"go.mod":                  "module example.com/m\n",
+		"treaty.yaml":             "version: 1\narchitecture: snowflake\ncomposition: [\"cmd/**\"]\nstars:\n  internal: [\"internal/core/**\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
+		"cmd/app/main.go":         "package main\n\nimport (\n\t\"example.com/m/internal/plan\"\n\t\"example.com/m/internal/web\"\n)\n\nfunc main() { plan.Run(web.Fetcher{}) }\n",
+		"internal/core/core.go":   "package core\n\n// Fetcher fetches a page.\ntype Fetcher interface{ Fetch() string }\n",
+		"internal/plan/plan.go":   "package plan\n\nimport \"example.com/m/internal/core\"\n\n// Run runs a plan.\nfunc Run(fetcher core.Fetcher) { fetcher.Fetch() }\n",
+		"internal/web/web.go":     "package web\n\n// Fetcher fetches pages.\ntype Fetcher struct{}\n\n// Fetch fetches a page.\nfunc (Fetcher) Fetch() string { return \"\" }\n",
+		"internal/web/helpers.go": "package web\n\n// Title names a page.\nfunc Title() string { return \"\" }\n",
+		".gitignore":              ".treaty/\n",
+	})
+	git("init", "-q")
+	git("add", ".")
+	git("commit", "-q", "-m", "base")
+
+	config := filesystem.NewConfig(root)
+	service := app.NewService(root, config, NewExtractor(), []app.Dialect{NewDialect()},
+		gitvcs.New(root), filesystem.NewWorkspace(root), &viewRecorder{}, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	check := func() app.Report {
+		t.Helper()
+		report, err := service.Check("HEAD")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return report
+	}
+
+	violation := func(report app.Report) rules.Finding {
+		t.Helper()
+		for _, finding := range report.Findings {
+			if finding.Kind == rules.FindingLayerViolation {
+				return finding
+			}
+		}
+
+		t.Fatalf("no layer violation in %+v", report.Findings)
+		return rules.Finding{}
+	}
+
+	if report := check(); len(report.Failures) != 0 {
+		t.Fatalf("a clean snowflake: %v", report.Failures)
+	}
+
+	// The plan spoke calls its sibling web directly.
+	write(map[string]string{"internal/plan/plan.go": "package plan\n\nimport (\n\t\"example.com/m/internal/core\"\n\t\"example.com/m/internal/web\"\n)\n\n// Run runs a plan.\nfunc Run(fetcher core.Fetcher) { fetcher.Fetch(); web.Title() }\n"})
+	report := check()
+	finding := violation(report)
+	if !slices.Equal(report.Failures, []string{"1 layer violation(s)"}) || finding.Target != "go:internal/plan -> go:internal/web" ||
+		!strings.Contains(finding.Detail, "spoke internal/plan may not depend on spoke internal/web: internal/plan and internal/web are sibling spokes of star internal") {
+		t.Fatalf("sideways: failures %v, %+v", report.Failures, finding)
+	}
+
+	// It is declared like any other boundary violation.
+	if _, err := config.Ignore(app.Ignore{Finding: finding.Kind, Target: finding.Target, Fingerprint: finding.Fingerprint, Reason: "plan moves behind a port next"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if report = check(); len(report.Failures) != 0 || len(report.Warnings) != 0 || violation(report).Ignored != "plan moves behind a port next" {
+		t.Fatalf("ignored: failures %v, warnings %v", report.Failures, report.Warnings)
+	}
+
+	// Turning the dependency around is another edge: it counts, and the
+	// entry for the edge that is gone is stale.
+	write(map[string]string{
+		"internal/plan/plan.go":   "package plan\n\nimport \"example.com/m/internal/core\"\n\n// Run runs a plan.\nfunc Run(fetcher core.Fetcher) { fetcher.Fetch() }\n\n// Name names a plan.\nfunc Name() string { return \"\" }\n",
+		"internal/web/helpers.go": "package web\n\nimport \"example.com/m/internal/plan\"\n\n// Title names a page.\nfunc Title() string { return plan.Name() }\n",
+	})
+	report = check()
+	if finding = violation(report); !slices.Equal(report.Failures, []string{"1 layer violation(s)"}) || finding.Target != "go:internal/web -> go:internal/plan" || finding.Ignored != "" {
+		t.Fatalf("a new edge: failures %v, %+v", report.Failures, finding)
+	}
+
+	if !slices.ContainsFunc(report.Notes, func(note string) bool {
+		return strings.Contains(note, "ignores layer_violation go:internal/plan -> go:internal/web at line") && strings.Contains(note, "no longer in the code")
+	}) {
+		t.Fatalf("notes: %v", report.Notes)
+	}
+
+	// Once the base has it, it is existing debt and does not fail.
+	git("add", ".")
+	git("commit", "-q", "-m", "sideways")
+	if report = check(); len(report.Failures) != 0 || !violation(report).Existing {
+		t.Fatalf("existing: failures %v, %+v", report.Failures, violation(report))
+	}
+}

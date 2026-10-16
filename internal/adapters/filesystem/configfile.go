@@ -30,7 +30,7 @@ var (
 	// configKeys lists the keys of each mapping in treaty.yaml, by the
 	// path of keys that leads to it.
 	configKeys = map[string][]string{
-		"":               {"version", "architecture", "composition", "layers", "shared", "boundaries", "public", "rules"},
+		"":               {"version", "architecture", "composition", "layers", "shared", "boundaries", "public", "stars", "rules"},
 		"rules":          {"fail_on", "warn_on", "ignore"},
 		"layers.adapter": {graph.SideDriving, graph.SideDriven},
 	}

@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -55,7 +56,7 @@ type Workspace struct {
 
 // configFile is the YAML shape of treaty.yaml. Layers stays a node because
 // its order carries meaning: top to bottom for layered and vertical.
-// Boundaries stays a node to keep the order they are listed in.
+// Boundaries and Stars stay nodes to keep the order they are listed in.
 type configFile struct {
 	Version      int       `yaml:"version"`
 	Architecture string    `yaml:"architecture"`
@@ -64,6 +65,7 @@ type configFile struct {
 	Shared       []string  `yaml:"shared"`
 	Boundaries   yaml.Node `yaml:"boundaries"`
 	Public       []string  `yaml:"public"`
+	Stars        yaml.Node `yaml:"stars"`
 	Rules        struct {
 		FailOn []string  `yaml:"fail_on"`
 		WarnOn []string  `yaml:"warn_on"`
@@ -472,6 +474,26 @@ func (this configFile) architecture() (result rules.Architecture, err error) {
 		}
 
 		result.Boundaries = append(result.Boundaries, rules.Boundary{Name: name, Globs: globs})
+	}
+
+	if this.Stars.Kind != 0 && this.Stars.Kind != yaml.MappingNode {
+		return result, fmt.Errorf("%w: stars must map each star's directory to the globs of its core", rules.ErrArchitecture)
+	}
+
+	for i := 0; i+1 < len(this.Stars.Content); i += 2 {
+		dir, value := this.Stars.Content[i].Value, this.Stars.Content[i+1]
+		var globs []string
+		if err := value.Decode(&globs); err != nil {
+			return result, fmt.Errorf("stars.%s: %w", dir, err)
+		}
+
+		// A glob keeps its spelling for Validate to refuse; only a
+		// directory is cleaned, so internal/ and internal name one star.
+		if !strings.ContainsAny(dir, "*?[") && dir != "" {
+			dir = path.Clean(dir)
+		}
+
+		result.Stars = append(result.Stars, rules.Star{Dir: dir, Core: globs})
 	}
 
 	if this.Layers.Kind != 0 && this.Layers.Kind != yaml.MappingNode {

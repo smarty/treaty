@@ -92,6 +92,10 @@ func proposal(g *graph.Graph, style string) (text string, err error) {
 			return "", fmt.Errorf("%w: found no directory with two or more packages to make boundaries of, so %s does not fit this code; choose another architecture, or write boundaries in treaty.yaml yourself", rules.ErrArchitecture, style)
 		}
 
+		if style == rules.StyleSnowflake {
+			return "", fmt.Errorf("%w: found no packages outside composition to make a star of, so snowflake does not fit this code; choose another architecture, or write stars in treaty.yaml yourself", rules.ErrArchitecture)
+		}
+
 		return "", err
 	}
 
@@ -350,10 +354,99 @@ func propose(g *graph.Graph, style string) (architecture rules.Architecture, tex
 	case rules.StyleVertical, rules.StyleModular:
 		root, proposal := proposeSections(g, style)
 		return architectureFrom(style, root, proposal), sectionDraft(style, root, proposal)
+	case rules.StyleSnowflake:
+		return proposeStars(g)
 	default:
 		proposal := proposeLayers(g, style)
 		return architectureFrom(style, "", proposal), layerDraft(style, proposal)
 	}
+}
+
+// proposeStars fits a graph to the snowflake architecture: its entry
+// modules and the front doors nothing imports are composition, and the
+// directory around every other module that imports or is imported is the
+// root star. The star's core is its child directory named core, when it
+// has one, and otherwise just its own package.
+//
+// Returns:
+//   - architecture: the proposed rules.
+//   - text: the same proposal as a treaty.yaml draft.
+func proposeStars(g *graph.Graph) (architecture rules.Architecture, text string) {
+	importers, imports := map[string]int{}, map[string]int{}
+	for _, edge := range g.ModuleEdges() {
+		importers[edge.To]++
+		imports[edge.From]++
+	}
+
+	proposal := map[string]string{}
+	var rest []string
+	for _, module := range g.Modules {
+		switch {
+		case module.Entry || (importers[module.ID] == 0 && imports[module.ID] > 0):
+			proposal[module.Path] = graph.LayerComposition
+		case importers[module.ID] > 0:
+			proposal[module.Path] = groupSection
+			rest = append(rest, module.Path)
+		default:
+			proposal[module.Path] = groupSection
+		}
+	}
+
+	architecture = rules.Architecture{Style: rules.StyleSnowflake}
+	for _, glob := range compressGlobs(proposal) {
+		architecture.Composition = append(architecture.Composition, glob.pattern)
+	}
+
+	sort.Strings(architecture.Composition)
+	if len(rest) > 0 {
+		root := commonDir(rest)
+		star := rules.Star{Dir: root, Core: []string{}}
+		for _, modulePath := range rest {
+			if child, ok := childOf(root, modulePath); ok && child == "core" {
+				star.Core = []string{strings.TrimPrefix(path.Join(root, "core")+"/**", "./")}
+			}
+		}
+
+		architecture.Stars = []rules.Star{star}
+	}
+
+	var builder strings.Builder
+	builder.WriteString("# Proposed by treaty init from the import graph. Edit before relying on it.\n")
+	builder.WriteString("# A snowflake is a star of stars: each star's core holds its contracts and\n")
+	builder.WriteString("# orchestrators, and every other child directory is a spoke. A spoke may use\n")
+	builder.WriteString("# its own star's core and the cores of the stars around it, never a sibling;\n")
+	builder.WriteString("# composition wires spokes together. Run treaty check to see the sideways\n")
+	builder.WriteString("# dependencies left, and move each behind a port in a core.\n")
+	fmt.Fprintf(&builder, "version: %d\narchitecture: snowflake\n", ConfigVersion)
+	fmt.Fprintf(&builder, "composition: %s\n", yamlList(architecture.Composition))
+	builder.WriteString("stars: # each star's directory -> the globs of its core; a star's own package is in its core\n")
+	for _, star := range architecture.Stars {
+		fmt.Fprintf(&builder, "  %s: %s\n", yamlKey(star.Dir), yamlList(star.Core))
+	}
+
+	builder.WriteString(rulesDraft(rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingUnclassified))
+	return architecture, builder.String()
+}
+
+// commonDir is the deepest directory holding every one of the paths, or
+// the repository root.
+func commonDir(paths []string) string {
+	result := strings.Split(paths[0], "/")
+	for _, each := range paths[1:] {
+		segments := strings.Split(each, "/")
+		n := 0
+		for n < len(result) && n < len(segments) && result[n] == segments[n] {
+			n++
+		}
+
+		result = result[:n]
+	}
+
+	if len(result) == 0 {
+		return "."
+	}
+
+	return strings.Join(result, "/")
 }
 
 // proposeLayers places every module of an unlayered graph by the shape of
@@ -754,7 +847,7 @@ func rulesDraft(kinds ...string) string {
 
 // plainKey matches a map key YAML reads back unquoted as the same string,
 // unless it is a word YAML treats as a boolean or null.
-var plainKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
+var plainKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_./-]*$`)
 
 // yamlKey quotes a map key that YAML would not read back as the same
 // string.

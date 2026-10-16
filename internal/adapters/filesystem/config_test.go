@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -118,6 +119,12 @@ func TestLoadRejectsBadArchitectures(t *testing.T) {
 		"layers: [\"x\"]\n",
 		"architecture: none\nlayers:\n  data: [\"x\"]\n",
 		"architecture: none\ncomposition: [\"cmd/**\"]\n",
+		"architecture: snowflake\n",
+		"architecture: hexagonal\nstars:\n  internal: []\n",
+		"architecture: snowflake\nstars: [\"internal\"]\n",
+		"architecture: snowflake\nstars:\n  internal: [\"internal/core/**\"]\nboundaries:\n  orders: [\"x/**\"]\n",
+		"architecture: snowflake\nstars:\n  internal: []\n  pkg: []\n",
+		"architecture: snowflake\nstars:\n  \"internal/*\": []\n",
 	} {
 		root := t.TempDir()
 		if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(text), 0o644); err != nil {
@@ -326,6 +333,12 @@ func TestLoadRejectsWhatItCannotRead(t *testing.T) {
 		{"a misspelled key", "version: 1\narchitecure: clean\n", ErrUnknownKey, `line 2: unknown key "architecure"; did you mean "architecture"?`},
 		{"a key from a newer treaty", "version: 1\nmutation:\n  scope: all\n", ErrUnknownKey, `unknown key "mutation"; a newer treaty may know it`},
 		{"a misspelled rules key", "rules:\n  fail_one: [breaking_changes]\n", ErrUnknownKey, `line 2: unknown key "fail_one" under rules; did you mean "fail_on"?`},
+		{"a misspelled stars key", "version: 1\narchitecture: snowflake\nstarz:\n  internal: []\n", ErrUnknownKey, `line 3: unknown key "starz"; did you mean "stars"?`},
+		{"stars under another architecture", "architecture: hexagonal\nstars:\n  internal: []\n", rules.ErrArchitecture, "treaty.yaml: invalid architecture: stars apply only to the snowflake architecture"},
+		{"stars as a list", "architecture: snowflake\nstars: [\"internal\"]\n", rules.ErrArchitecture, "stars must map each star's directory to the globs of its core"},
+		{"a glob for a star", "architecture: snowflake\nstars:\n  \"internal/*\": []\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: star "internal/*" must be a directory path relative to the repository root, not a glob`},
+		{"a core of every child", "architecture: snowflake\nstars:\n  internal: [\"internal/**\"]\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: core glob "internal/**" of star internal does not name a directory of its own; start it with a child directory of internal, such as internal/core/**`},
+		{"layers under snowflake", "architecture: snowflake\nstars:\n  internal: []\nlayers:\n  web: [\"web/**\"]\n", rules.ErrArchitecture, "treaty.yaml: invalid architecture: layers, shared, boundaries and public do not apply to the snowflake architecture; a star's core is what its spokes share"},
 		{"a misspelled adapter side", "layers:\n  adapter:\n    drivng: [\"web/**\"]\n", ErrUnknownKey, `unknown key "drivng" under layers.adapter; did you mean "driving"?`},
 		{"a misspelled rule", "rules:\n  fail_on: [breaking_changes, layer_violations]\n", ErrUnknownRule, `line 2: fail_on: unknown rule "layer_violations"; did you mean "layer_violation"?`},
 		{"a finding that is not a rule", "rules:\n  fail_on: [new_contract]\n", ErrUnknownRule, "fail_on takes breaking_changes, layer_violation, dependency_cycles, unclassified, ambiguous_boundaries"},
@@ -356,6 +369,67 @@ func TestLoadRejectsWhatItCannotRead(t *testing.T) {
 				t.Errorf("error %q should say %q", err, c.says)
 			}
 		})
+	}
+}
+
+func TestLoadSnowflake(t *testing.T) {
+	root := t.TempDir()
+	text := `# Snowflake: the code under internal is a star of stars.
+version: 1
+architecture: snowflake
+composition: [".", "cmd/**", "internal/factory/**"]
+stars: # each star's directory -> the globs of its core
+  internal: ["internal/core/**"]
+  internal/gate/: ["internal/gate/core/**"]
+  internal/blocks: ["internal/blocks/core/**"]
+  internal/rules: []
+  internal/version:
+rules:
+  fail_on: [breaking_changes, layer_violation, unclassified]
+  ignore:
+    - finding: layer_violation
+      target: go:internal/plan -> go:internal/tracer
+      fingerprint: "3f9c0a1d7b22"
+      reason: The plan executor still calls the tracer directly; it moves behind a Tracer port in internal/core next
+`
+	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	config, _, err := NewConfig(root).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The keys under stars are the config's own directories, not keys
+	// treaty knows, and keep their order; internal/gate/ names a directory.
+	want := []rules.Star{
+		{Dir: "internal", Core: []string{"internal/core/**"}},
+		{Dir: "internal/gate", Core: []string{"internal/gate/core/**"}},
+		{Dir: "internal/blocks", Core: []string{"internal/blocks/core/**"}},
+		{Dir: "internal/rules", Core: []string{}},
+		{Dir: "internal/version"},
+	}
+
+	if config.Architecture.Style != rules.StyleSnowflake || !reflect.DeepEqual(config.Architecture.Stars, want) {
+		t.Errorf("stars %+v, want %+v", config.Architecture.Stars, want)
+	}
+
+	if len(config.Ignores) != 1 || config.Ignores[0].Finding != rules.FindingLayerViolation || config.Ignores[0].Target != rules.EdgeTarget("go:internal/plan", "go:internal/tracer") {
+		t.Errorf("a sideways dependency is ignored like any other violation: %+v", config.Ignores)
+	}
+
+	if got := config.Architecture.Resolve("internal/gate/tagger"); got.Layer != graph.LayerSpoke || got.Star != "internal/gate" || got.Spoke != "internal/gate/tagger" {
+		t.Errorf("internal/gate/tagger resolved to %+v", got)
+	}
+
+	bad := strings.Replace(text, "internal/rules: []", "internal/rules:\n    core: [\"x\"]", 1)
+	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := NewConfig(root).Load(); err == nil || !strings.Contains(err.Error(), "stars.internal/rules") {
+		t.Errorf("a star's core is a list of globs, not a mapping: %v", err)
 	}
 }
 

@@ -186,8 +186,8 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 		} else if module.Layer == graph.LayerUnclassified {
 			result = append(result, Finding{
 				Severity: SeverityMedium, Kind: FindingUnclassified,
-				Title:   fmt.Sprintf("%s matches no layer", module.ID),
-				Detail:  "No glob in treaty.yaml matches this module, so its dependencies are not checked.",
+				Title:   fmt.Sprintf("%s is unclassified", module.ID),
+				Detail:  "treaty.yaml places this module nowhere, so its dependencies are not checked.",
 				Targets: []string{module.ID},
 				File:    firstFile(module),
 				Target:  module.ID, Fingerprint: fingerprint(FindingUnclassified, module.ID),
@@ -197,7 +197,12 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 
 		if base != nil && base.Module(module.ID) == nil {
 			detail := fmt.Sprintf("Placed in the %s layer.", module.Layer)
-			if module.Boundary != "" {
+			switch {
+			case module.Spoke != "":
+				detail = fmt.Sprintf("Placed in spoke %s of star %s.", module.Spoke, module.Star)
+			case module.Star != "":
+				detail = fmt.Sprintf("Placed in the core of star %s.", module.Star)
+			case module.Boundary != "":
 				detail = fmt.Sprintf("Placed in the %s layer of boundary %s.", module.Layer, module.Boundary)
 			}
 
