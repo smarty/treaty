@@ -1,8 +1,8 @@
 # Treaty
 
 Treaty reads a codebase into a graph of its contracts, places them in the
-architecture your team declares (hexagonal, clean, layered, vertical or
-modular monolith), and checks, slices and draws that graph. You can use it
+architecture your team declares (hexagonal, clean, layered, vertical,
+modular monolith or snowflake), and checks, slices and draws that graph. You can use it
 for code review, for thinking through a design, and alongside a coding
 agent.
 
@@ -156,6 +156,7 @@ on everything, and nothing may depend on composition.
 | `layered` | A layer may use itself and every layer below it. Skipping a layer is allowed; forbidding it is a team decision | Horizontal bands |
 | `vertical` | A boundary may use itself and shared code, never another boundary. Optional layers inside every boundary | A column per boundary, or a grid of boundaries by layer |
 | `modular` | A boundary may use its own packages, other boundaries' public packages and shared code. No cycles between boundaries | An island per boundary |
+| `snowflake` | A star of stars: each star's core holds its contracts and orchestrators, and its other child directories are spokes. A spoke may use its own star's core and the cores around it, never a sibling spoke or anything in a sibling branch; a core never uses its own spokes | Each core ringed by its spokes, and each branch a smaller star in its parent's ring |
 
 The layer architectures place modules in layers: their names are fixed for
 `hexagonal` and `clean`, and yours for `layered`; see
@@ -170,6 +171,25 @@ boundaries:
   orders:  ["**/orders/**"]
   billing: ["web/billing/**", "store/billing/**"]
 ```
+
+`snowflake` names only [stars](configuration.md#stars), each a directory and
+the globs of its core; every other child directory of a star is a spoke,
+found without being listed. Orchestrators in a core reach their spokes only
+through ports declared there, and composition hands the implementations in,
+as in the Presentation-Abstraction-Control and Mediator patterns, applied
+recursively:
+
+```yaml
+architecture: snowflake
+composition: ["cmd/**", "internal/factory/**"]
+stars:
+  internal:        ["internal/core/**"]
+  internal/blocks: ["internal/blocks/core/**"]
+```
+
+A sideways dependency accepted for now is an entry under
+[`rules.ignore`](configuration.md#ignoring-a-finding), with its reason, like
+any other violation.
 
 Treaty reads the whole repository, including sub-trees with their own
 `go.mod`. Their imports resolve through their own module paths, and imports
@@ -230,6 +250,10 @@ interfaces, methods, then functions, each by name: the contracts clockwise
 from the left end of the file's bracket on the border, and the internals
 across the file's cell. A package that holds a `go.mod` shows it in the first
 cell of its ring, at 12:00; click it to read the file.
+In `snowflake`, each star's core sits at its center with its spokes on a ring
+around it, and a branch is a smaller star in its parent's ring. Allowed
+dependencies run inward in lanes, and a sideways one bows outward between
+arms as a violation. A star's menu has *Zoom to this star*.
 Directories with several packages are drawn as groups, which collapse when
 they are small on screen. Select a group to see its modules measured as one:
 its coupling across its edge, instability, abstractness and distance, and the
@@ -257,6 +281,11 @@ up, and the tip says what a drop will do. Escape puts the module back.
   Treaty adds the module's exact path to that boundary's globs, or to
   `shared` or `composition`, the same way. Its layer inside a boundary still
   comes from `layers`, and a move never creates a boundary.
+- **Into or out of a core, or to composition** (`snowflake`): Treaty adds the
+  module's exact path to the core of a star that holds it, takes it out
+  again so it returns to its own directory's spoke, or adds it to
+  `composition`. A spoke is its directory, so moving a module to another
+  spoke means moving its files.
 
 Moves wait while another architecture is previewed.
 
@@ -319,7 +348,7 @@ You and the agent always look at the same graph:
 | `slice` | The context for working on one symbol, file or module, one line per entry with file:line |
 | `source` | Just the code needed: a symbol from its documentation to its last line, or a file's lines, numbered. A long file gives its outline unless asked for all of it |
 | `impact` | Everything that depends on a symbol, file or module, transitively, before an edit |
-| `allowed` | Whether one module may depend on another, before an import is added |
+| `allowed` | Whether one module may depend on another, before an import is added; in `snowflake`, a refusal names the ports in a core that the target already implements |
 | `changes` | What changed in the architecture since the baseline, including new violations |
 | `plan` | The agent's intended contracts in AutoPen, drawn on the map as unbuilt and filled in as the code is written |
 | `selection` | What the person has selected on the map, so they can point and say "work here" |
@@ -358,7 +387,7 @@ a large repository (20,000 files or more, or one slow to walk).
 | `treaty serve [--port <n>] [--open]` | Opens this directory's live map until interrupted |
 | `treaty mcp [--port <n>]` | Relays an agent session over MCP on stdio to the treaty server, starting it when needed |
 | `treaty restart [--port <n>]` | Stops the treaty server; open sessions start a new one and rejoin |
-| `treaty init [--architecture <name>]` | Creates `.treaty/` and proposes a `treaty.yaml` for `none` (default), `hexagonal`, `clean`, `layered`, `vertical` or `modular` |
+| `treaty init [--architecture <name>]` | Creates `.treaty/` and proposes a `treaty.yaml` for `none` (default), `hexagonal`, `clean`, `layered`, `vertical`, `modular` or `snowflake` |
 | `treaty url` | Prints the live map's address for this directory |
 | `treaty here [--force]` | Registers Treaty in this repository's `.mcp.json` |
 | `treaty version` | Prints this build's version: the release's, or for a build from source the module version Go recorded |
@@ -392,7 +421,7 @@ See [AutoPen syntax proposal.md](AutoPen%20syntax%20proposal.md).
 
 ## Status
 
-Treaty is early and changing fast. The contract graph, the five
+Treaty is early and changing fast. The contract graph, the six
 architectures, the contract diff, context slices, designs, the live map and
 the MCP server all work.
 
