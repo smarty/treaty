@@ -3,7 +3,9 @@ package app
 import (
 	"errors"
 	"fmt"
+	"path"
 	"slices"
+	"strings"
 
 	"github.com/smarty/treaty/internal/graph"
 	"github.com/smarty/treaty/internal/rules"
@@ -29,7 +31,9 @@ func (this *Live) Positions() (result Positions, err error) {
 // Parameters:
 //   - module: the module id.
 //   - placement: the layer, and for a hexagonal adapter its side; for
-//     vertical and modular, the boundary, or shared or composition.
+//     vertical and modular, the boundary, or shared or composition; for
+//     snowflake, the core of a star holding the module with that star,
+//     the module's own spoke, or composition.
 //
 // Returns:
 //   - path: where treaty.yaml was written.
@@ -39,7 +43,8 @@ func (this *Live) Positions() (result Positions, err error) {
 //   - ErrPreviewing: the map shows a previewed architecture, not
 //     treaty.yaml's.
 //   - ErrPlacement: there is no architecture, the layer or boundary is not
-//     one of its own, or the module is unknown.
+//     one of its own, the module is unknown, or, in a snowflake, the move
+//     would put it in another directory's spoke or another star's core.
 //   - ErrNotReady: the graph has not been built yet.
 func (this *Live) Reclassify(module string, placement rules.Placement) (path string, err error) {
 	this.mutex.Lock()
@@ -122,17 +127,22 @@ func (this *Service) reclassify(analysis *analysis, moduleID string, placement r
 		return "", fmt.Errorf("%w: %w: %s", ErrPlacement, ErrUnknownTarget, moduleID)
 	}
 
-	if err := placeable(architecture, placement); err != nil {
+	if err := placeable(architecture, module.Path, placement); err != nil {
 		return "", err
 	}
 
 	return this.config.Place(module.Path, placement)
 }
 
-// placeable reports whether an architecture has room for a placement: its
-// composition, or one of its layers with the right side; for vertical and
-// modular, one of its boundaries, shared or composition.
-func placeable(architecture rules.Architecture, placement rules.Placement) error {
+// placeable reports whether an architecture has room for a placement of a
+// module: its composition, or one of its layers with the right side; for
+// vertical and modular, one of its boundaries, shared or composition; for
+// snowflake, see starPlaceable.
+func placeable(architecture rules.Architecture, modulePath string, placement rules.Placement) error {
+	if architecture.Style == rules.StyleSnowflake {
+		return starPlaceable(architecture, modulePath, placement)
+	}
+
 	if architecture.Style == rules.StyleVertical || architecture.Style == rules.StyleModular {
 		switch {
 		case placement.Boundary != "":
@@ -173,6 +183,59 @@ func placeable(architecture rules.Architecture, placement rules.Placement) error
 	}
 
 	return nil
+}
+
+// starPlaceable reports whether a snowflake has room for a placement of a
+// module. A module may move into the core of a star whose directory holds
+// it, out of a core into its own directory's spoke, or to composition. A
+// spoke is its directory, so a module cannot move to another spoke without
+// moving its files, and a star's core lies inside the star.
+func starPlaceable(architecture rules.Architecture, modulePath string, placement rules.Placement) error {
+	switch {
+	case placement.Side != "" || placement.Boundary != "" || placement.Public:
+		return fmt.Errorf("%w: a snowflake move sets a star's core, a spoke or composition, not a side, boundary or public API", ErrPlacement)
+	case placement.Layer == graph.LayerComposition:
+		if placement.Star != "" || placement.Spoke != "" {
+			return fmt.Errorf("%w: composition belongs to no star", ErrPlacement)
+		}
+
+		return nil
+	case placement.Layer == graph.LayerCore:
+		innermost := architecture.Innermost(modulePath)
+		switch {
+		case placement.Spoke != "":
+			return fmt.Errorf("%w: a core has no spoke", ErrPlacement)
+		case !slices.ContainsFunc(architecture.Stars, func(star rules.Star) bool { return star.Dir == placement.Star }):
+			return fmt.Errorf("%w: there is no star %q", ErrPlacement, placement.Star)
+		case innermost != placement.Star:
+			return fmt.Errorf("%w: a star's core is inside its directory, and the innermost star holding %s is %s, not %s; drop it on the core of that star", ErrPlacement, modulePath, starOrNone(innermost), placement.Star)
+		}
+
+		return nil
+	case placement.Layer == graph.LayerSpoke:
+		own := architecture.Innermost(modulePath)
+		if own == "" || own == modulePath {
+			return fmt.Errorf("%w: %s is in no spoke; a star's own package is always in its core", ErrPlacement, modulePath)
+		}
+
+		child, _, _ := strings.Cut(strings.TrimPrefix(modulePath, strings.TrimPrefix(own+"/", "./")), "/")
+		if spoke := path.Join(own, child); placement.Star != own || placement.Spoke != spoke {
+			return fmt.Errorf("%w: a spoke is its directory: move the package's files into %s to put it there", ErrPlacement, placement.Spoke)
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("%w: in the snowflake architecture a module moves to a star's core, its own spoke or composition, not %q", ErrPlacement, placement.Layer)
+}
+
+// starOrNone names a star directory for a message, or says there is none.
+func starOrNone(dir string) string {
+	if dir == "" {
+		return "none"
+	}
+
+	return dir
 }
 
 // RenameBoundary renames a boundary in treaty.yaml and rebuilds, so the map,

@@ -687,20 +687,23 @@ func (this *Server) savePreferences(live *app.Live, writer http.ResponseWriter, 
 	respond(writer, preferences)
 }
 
-// reclassify moves a module to another layer in treaty.yaml.
+// reclassify moves a module to another layer in treaty.yaml; in a
+// snowflake, into or out of a star's core, or to composition.
 func (this *Server) reclassify(live *app.Live, writer http.ResponseWriter, request *http.Request) {
 	var body struct {
 		Module   string `json:"module"`
 		Layer    string `json:"layer"`
 		Side     string `json:"side"`
 		Boundary string `json:"boundary"`
+		Star     string `json:"star"`
+		Spoke    string `json:"spoke"`
 	}
 
 	if !decode(writer, request, &body) {
 		return
 	}
 
-	switch _, err := live.Reclassify(body.Module, rules.Placement{Layer: body.Layer, Side: body.Side, Boundary: body.Boundary}); {
+	switch _, err := live.Reclassify(body.Module, rules.Placement{Layer: body.Layer, Side: body.Side, Boundary: body.Boundary, Star: body.Star, Spoke: body.Spoke}); {
 	case errors.Is(err, app.ErrPreviewing), errors.Is(err, app.ErrPlacement), errors.Is(err, rules.ErrArchitecture):
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 	case err != nil:

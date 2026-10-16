@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -24,12 +25,16 @@ var ErrNoConfig = errors.New("no treaty.yaml")
 // target's list unless the remaining globs already place it there. Comments
 // and everything else in the file are kept. For vertical and modular, the
 // target is a boundary, shared or composition, and a module keeps whatever
-// layer it has inside its boundary.
+// layer it has inside its boundary. For snowflake, the target is a star's
+// core, the module's own spoke or composition.
 //
 // Notes:
 //   - An exact path wins over every wildcard (see rules.Architecture.Resolve),
 //     so this works however broad the other globs are.
-//   - A missing list for the target, such as an adapter side, is created.
+//   - A missing list for the target, such as an adapter side, is created;
+//     a star never is, since a star is named by its directory.
+//   - A snowflake spoke has no list: a module moves there only when taking
+//     its exact path out of a core leaves it in its directory's spoke.
 //
 // Parameters:
 //   - modulePath: the module's path relative to the repository root.
@@ -65,6 +70,10 @@ func (this *Config) Place(modulePath string, placement rules.Placement) (path st
 	text, architecture, err := encodeConfig(document)
 	if err != nil {
 		return "", err
+	}
+
+	if got := architecture.Resolve(modulePath); !fits(architecture, got, placement) && placement.Layer == graph.LayerSpoke && architecture.Style == rules.StyleSnowflake {
+		return "", fmt.Errorf("%w: %s would still be placed in %s by %s; a spoke is its directory, so narrow that entry or move the package's files", rules.ErrArchitecture, modulePath, describe(got), reasonOf(architecture, modulePath))
 	}
 
 	if !fits(architecture, architecture.Resolve(modulePath), placement) {
@@ -333,6 +342,10 @@ func child(mapping *yaml.Node, key string, kind yaml.Kind, before string) *yaml.
 // describe names a placement for an error message.
 func describe(placement rules.Placement) string {
 	switch {
+	case placement.Spoke != "":
+		return "spoke " + placement.Spoke
+	case placement.Star != "":
+		return "core of star " + placement.Star
 	case len(placement.Ambiguous) > 0:
 		return "no boundary, claimed equally by " + strings.Join(placement.Ambiguous, " and ")
 	case placement.Boundary != "":
@@ -357,6 +370,43 @@ func fits(architecture rules.Architecture, got, want rules.Placement) bool {
 	}
 
 	return got.Layer == want.Layer && got.Boundary == ""
+}
+
+// starList finds the core list of the star with a directory, whose key
+// may be spelled with a trailing slash. A star with no value yet, such as
+// internal/version:, gets an empty flow list.
+func starList(stars *yaml.Node, dir string) *yaml.Node {
+	if stars == nil || stars.Kind != yaml.MappingNode {
+		return nil
+	}
+
+	for i := 0; i+1 < len(stars.Content); i += 2 {
+		if key, value := stars.Content[i].Value, stars.Content[i+1]; key != "" && path.Clean(key) == dir {
+			if value.Kind == yaml.ScalarNode && value.Tag == "!!null" {
+				value.Kind, value.Tag, value.Value, value.Style = yaml.SequenceNode, "", "", yaml.FlowStyle
+			}
+
+			if value.Kind == yaml.SequenceNode {
+				return value
+			}
+		}
+	}
+
+	return nil
+}
+
+// reasonOf names the treaty.yaml entry that places a module, for a
+// message.
+func reasonOf(architecture rules.Architecture, modulePath string) string {
+	for _, reason := range architecture.Reasons(modulePath) {
+		if reason.Glob != "" {
+			return fmt.Sprintf("%q under %s", reason.Glob, strings.Join(reason.Path, "."))
+		}
+
+		return "its directory, " + strings.Join(reason.Path, ".")
+	}
+
+	return "nothing"
 }
 
 func bounded(style string) bool { return style == rules.StyleVertical || style == rules.StyleModular }
@@ -398,7 +448,7 @@ func parseArchitecture(data []byte) (rules.Architecture, error) {
 // composition, at the top or under layers, and each layer's, with a
 // hexagonal adapter's two sides. For vertical and modular they are
 // composition, shared and each boundary's; layers inside boundaries are
-// left alone.
+// left alone. For snowflake they are composition and each star's core.
 func placementLists(root *yaml.Node, style string) (result []*yaml.Node) {
 	sequences := func(mapping *yaml.Node) {
 		for i := 0; i+1 < len(mapping.Content); i += 2 {
@@ -424,6 +474,8 @@ func placementLists(root *yaml.Node, style string) (result []*yaml.Node) {
 			result = append(result, value)
 		case bounded(style) && key == "boundaries" && value.Kind == yaml.MappingNode:
 			sequences(value)
+		case style == rules.StyleSnowflake && key == "stars" && value.Kind == yaml.MappingNode:
+			sequences(value)
 		case !bounded(style) && key == "layers" && value.Kind == yaml.MappingNode:
 			sequences(value)
 		}
@@ -445,8 +497,23 @@ func removeScalar(list *yaml.Node, value string) {
 }
 
 // targetList finds or creates the list that places modules in a placement.
-// A boundary must exist already; a move never creates one.
+// A boundary or star must exist already; a move never creates one.
 func targetList(root *yaml.Node, style string, placement rules.Placement) (*yaml.Node, error) {
+	if style == rules.StyleSnowflake {
+		switch placement.Layer {
+		case graph.LayerComposition:
+			return child(root, "composition", yaml.SequenceNode, "stars"), nil
+		case graph.LayerCore:
+			if list := starList(mappingValue(root, "stars"), placement.Star); list != nil {
+				return list, nil
+			}
+
+			return nil, fmt.Errorf("%w: no star %q in %s", rules.ErrArchitecture, placement.Star, ConfigFile)
+		}
+
+		return nil, fmt.Errorf("%w: a spoke is its directory: move the package's files into %s to put it there", rules.ErrArchitecture, placement.Spoke)
+	}
+
 	if bounded(style) {
 		switch {
 		case placement.Boundary != "":

@@ -915,3 +915,138 @@ func TestIgnoredSidewaysDependency(t *testing.T) {
 		t.Fatalf("existing: failures %v, %+v", report.Failures, violation(report))
 	}
 }
+
+func TestSnowflakeFromInitToTheTools(t *testing.T) {
+	root := t.TempDir()
+	for name, text := range map[string]string{
+		"go.mod":                             "module example.com/m\n",
+		"m.go":                               "package m\n\nimport \"example.com/m/internal/factory\"\n\n// Run runs the guard.\nfunc Run() { factory.New() }\n",
+		"cmd/app/main.go":                    "package main\n\nimport \"example.com/m\"\n\nfunc main() { m.Run() }\n",
+		"internal/factory/factory.go":        "package factory\n\nimport (\n\t\"example.com/m/internal/blocks\"\n\t\"example.com/m/internal/blocks/cleanse\"\n\t\"example.com/m/internal/blocks/www\"\n\t\"example.com/m/internal/plan\"\n\t\"example.com/m/internal/web\"\n)\n\n// New wires the guard.\nfunc New() { plan.Run(web.Client{}); blocks.Run(www.Step{}, cleanse.Step{}) }\n",
+		"internal/core/core.go":              "package core\n\n// Fetcher fetches a page.\ntype Fetcher interface{ Fetch() string }\n",
+		"internal/plan/plan.go":              "package plan\n\nimport \"example.com/m/internal/core\"\n\n// Run runs a plan.\nfunc Run(fetcher core.Fetcher) { fetcher.Fetch() }\n",
+		"internal/web/web.go":                "package web\n\nimport \"example.com/m/internal/core\"\n\n// Client fetches pages.\ntype Client struct{}\n\n// Fetch fetches a page.\nfunc (Client) Fetch() string { return \"\" }\n\nvar _ core.Fetcher = Client{}\n",
+		"internal/blocks/blocks.go":          "package blocks\n\nimport \"example.com/m/internal/blocks/core\"\n\n// Run runs the steps.\nfunc Run(steps ...core.Step) {\n\tfor _, step := range steps {\n\t\tstep.Do()\n\t}\n}\n",
+		"internal/blocks/core/core.go":       "package core\n\nimport \"example.com/m/internal/core\"\n\n// Step is one block.\ntype Step interface{ Do() }\n\n// Source is where a step reads from.\ntype Source = core.Fetcher\n",
+		"internal/blocks/www/www.go":         "package www\n\nimport \"example.com/m/internal/blocks/core\"\n\n// Step reads the web.\ntype Step struct{}\n\n// Do reads.\nfunc (Step) Do() {}\n\nvar _ core.Step = Step{}\n",
+		"internal/blocks/cleanse/cleanse.go": "package cleanse\n\nimport \"example.com/m/internal/blocks/core\"\n\n// Step cleans text.\ntype Step struct{}\n\n// Do cleans.\nfunc (Step) Do() {}\n\nvar _ core.Step = Step{}\n",
+	} {
+		file := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recorder := &viewRecorder{}
+	config := filesystem.NewConfig(root)
+	service := app.NewService(root, config, NewExtractor(), []app.Dialect{NewDialect()},
+		nil, filesystem.NewWorkspace(root), recorder, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+
+	// init drafts the stars, and the draft loads and passes.
+	if _, err := service.Init(rules.StyleSnowflake); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, _, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []rules.Star{{Dir: "internal", Core: []string{"internal/core/**"}}, {Dir: "internal/blocks", Core: []string{"internal/blocks/core/**"}}}
+	if architecture := loaded.Architecture; !slices.Equal(architecture.Composition, []string{".", "cmd/**", "internal/factory/**"}) || len(architecture.Stars) != 2 ||
+		architecture.Stars[0].Dir != want[0].Dir || !slices.Equal(architecture.Stars[0].Core, want[0].Core) || architecture.Stars[1].Dir != want[1].Dir || !slices.Equal(architecture.Stars[1].Core, want[1].Core) {
+		t.Fatalf("init drafted %+v", architecture)
+	}
+
+	report, err := service.Check("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Failures) > 0 || len(report.Violations) > 0 {
+		t.Fatalf("the draft passes: %v %+v", report.Failures, report.Violations)
+	}
+
+	// Every copy of a placement carries the star and the spoke.
+	for _, module := range report.Modules {
+		got := rules.Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Star: module.Star, Spoke: module.Spoke}
+		if want := loaded.Architecture.Resolve(strings.TrimPrefix(module.ID, "go:")); !got.Same(want) {
+			t.Errorf("the report places %s in %+v, not %+v", module.ID, got, want)
+		}
+	}
+
+	if _, err := service.Map("", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if view := recorder.view; !slices.Equal(view.Layers, []string{"core", "spoke"}) || len(view.Stars) != 2 || view.Stars[1].Parent != "internal" {
+		t.Fatalf("the map's layers %v and stars %+v", view.Layers, view.Stars)
+	}
+
+	for _, module := range recorder.view.Modules {
+		got := rules.Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous, Star: module.Star, Spoke: module.Spoke}
+		if want := loaded.Architecture.Resolve(module.Path); !got.Same(want) {
+			t.Errorf("the map places %s in %+v, not %+v", module.ID, got, want)
+		}
+	}
+
+	// allowed gives the rule, and the ports that already stand for what
+	// the spoke reached for, or says to declare one.
+	for _, c := range []struct{ from, to, want string }{
+		{"internal/plan", "internal/web", "not allowed: go:internal/plan (spoke internal/plan) → go:internal/web (spoke internal/web)\n" +
+			"rule: spoke internal/plan may not depend on spoke internal/web: internal/plan and internal/web are sibling spokes of star internal, and spokes never depend sideways; declare a port in the core of star internal, implement it in internal/web, and let composition hand it in\n" +
+			"ports: go:internal/web:Client implements go:internal/core:Fetcher, which spoke internal/plan may use; depend on the port, and let composition hand internal/web in\n" +
+			"spoke internal/plan may depend on: spoke internal/plan, core of internal (internal, internal/core/**)\n"},
+		{"internal/plan", "internal/blocks/www", "ports: nothing in internal/blocks implements an interface in a core spoke internal/plan may use; declare one in the core of star internal\n"},
+		{"internal/blocks/www", "internal/core", "allowed: go:internal/blocks/www (spoke internal/blocks/www) → go:internal/core (core of star internal)\n"},
+		{"internal/plan", "internal/blocks/new", "go:internal/plan (spoke internal/plan) → internal/blocks/new (not built) (spoke internal/blocks/new)\n"},
+	} {
+		got, err := service.Allowed(c.from, c.to)
+		if err != nil || !strings.Contains(got, c.want) {
+			t.Errorf("allowed %s %s = %q, %v; want %q", c.from, c.to, got, err, c.want)
+		}
+	}
+
+	overview, err := service.Overview("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{
+		"Rules (snowflake): the code is a star of stars.",
+		"\nstars\n  internal  core internal, internal/core/**  leaves internal/plan, internal/web  branches internal/blocks\n  internal/blocks (branch of internal)  core internal/blocks, internal/blocks/core/**  leaves internal/blocks/cleanse, internal/blocks/www\n",
+		"\ncomposition\n",
+		"\ncore of star internal\n  go:internal/core",
+		"\nspoke internal/blocks/www\n  go:internal/blocks/www",
+	} {
+		if !strings.Contains(overview, want) {
+			t.Errorf("the overview lacks %q:\n%s", want, overview)
+		}
+	}
+
+	if strings.Index(overview, "\ncore of star internal\n") > strings.Index(overview, "\nspoke internal/plan\n") || strings.Index(overview, "\nspoke internal/web\n") > strings.Index(overview, "\ncore of star internal/blocks\n") {
+		t.Errorf("each star lists its core, then its leaves, before the stars inside it:\n%s", overview)
+	}
+
+	slice, err := service.Slice("go:internal/blocks/www")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if star := slice.Star; star == nil || star.Dir != "internal/blocks" || star.Parent != "internal" || star.Role != "spoke" || star.Spoke != "internal/blocks/www" ||
+		!slices.Equal(star.Cores, []string{"go:internal/blocks", "go:internal/blocks/core", "go:internal/core"}) || !slices.Equal(star.Siblings, []string{"internal/blocks/cleanse"}) {
+		t.Fatalf("the slice's star: %+v", slice.Star)
+	}
+
+	if text := slice.Text(); !strings.Contains(text, "star: spoke internal/blocks/www of star internal/blocks, a branch of internal\n  cores it may use: go:internal/blocks, go:internal/blocks/core, go:internal/core\n  never use: internal/blocks/cleanse\n") {
+		t.Fatalf("the slice's text:\n%s", text)
+	}
+
+	if slice, err = service.Slice("go:internal/core"); err != nil || slice.Star == nil || !slices.Equal(slice.Star.OwnSpokes, []string{"internal/blocks (branch)", "internal/plan", "internal/web"}) {
+		t.Fatalf("a core's own spokes: %+v %v", slice.Star, err)
+	}
+}

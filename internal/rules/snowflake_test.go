@@ -360,3 +360,29 @@ func TestSnowflakeFindings(t *testing.T) {
 		}
 	}
 }
+
+func TestSnowflakeCrossingAndInnermost(t *testing.T) {
+	architecture := snowflake()
+	for _, c := range []struct{ from, to, star, child string }{
+		{"internal/plan", "internal/web", "internal", "internal/web"},
+		{"internal/plan", "internal/blocks/core", "internal", "internal/blocks"},
+		{"internal/gate/tagger", "internal/blocks/www", "internal", "internal/blocks"},
+		{"internal/blocks/cleanse", "internal/blocks/www", "internal/blocks", "internal/blocks/www"},
+		{"internal/core", "internal/gate/core", "internal", "internal/gate"},
+	} {
+		star, child := Crossing(architecture.Resolve(c.from), architecture.Resolve(c.to))
+		if star != c.star || child != c.child {
+			t.Errorf("Crossing(%s, %s) = %s, %s; want %s, %s", c.from, c.to, star, child, c.star, c.child)
+		}
+	}
+
+	for path, want := range map[string]string{"internal/factory": "internal", "internal/blocks": "internal/blocks", "internal/gate/tagger/x": "internal/gate", "scripts/x": "", ".": ""} {
+		if got := architecture.Innermost(path); got != want {
+			t.Errorf("Innermost(%s) = %q, want %q", path, got, want)
+		}
+	}
+
+	if got := (Architecture{Style: StyleHexagonal}).Innermost("internal"); got != "" {
+		t.Errorf("only a snowflake has stars: %q", got)
+	}
+}

@@ -39,6 +39,9 @@ type glob struct {
 //     directory whose children depend on each other least, each named after
 //     its directory. For vertical, a child that other children use becomes
 //     shared.
+//   - For snowflake, see proposeStars: composition, a root star around
+//     the rest, each star's core by name or by shape, and the children
+//     shaped like stars as branches.
 //   - A library module with no imports either way has no shape to place it
 //     by. It is left unclassified and listed for a person to place.
 //   - Directory names are hints. A hinted layer replaces the shape's answer
@@ -362,33 +365,77 @@ func propose(g *graph.Graph, style string) (architecture rules.Architecture, tex
 	}
 }
 
-// proposeStars fits a graph to the snowflake architecture: its entry
-// modules and the front doors nothing imports are composition, and the
-// directory around every other module that imports or is imported is the
-// root star. The star's core is its child directory named core, when it
-// has one, and otherwise just its own package.
+// coreNames are the directory names that make a child of a star its core,
+// in the order they are tried after core itself.
+var coreNames = []string{"contracts", "ports", "api", "model", "domain"}
+
+// factoryNames are the base names of packages that wire others together,
+// which init makes composition when only composition uses them.
+var factoryNames = []string{"factory", "wire", "wiring", "compose", "composition", "bootstrap"}
+
+// proposeStars fits a graph to the snowflake architecture.
+//
+// Notes:
+//   - Composition is every entry module, every module nothing in the
+//     repository imports that imports something, and then every module
+//     that only composition imports and that is the repository root, the
+//     front door, or is named like a factory, such as factory or wire.
+//   - The root star is the deepest directory holding every other module
+//     that imports or is imported. A module with no imports either way has
+//     no shape to place it by; it is left out here and placed by the stars
+//     that result.
+//   - A star's core is its child named core; failing that, its children
+//     named contracts, ports, api, model or domain; failing that, each
+//     child that a sibling uses and that uses no sibling; and failing
+//     that, only the star's own package.
+//   - A child that is not core is a branch, a star of its own, when it has
+//     two or more child directories holding modules and one of them would
+//     be its core by name or by being a sink its siblings use.
+//   - The draft is not free of violations by construction: code written
+//     with sideways dependencies cannot be fitted without moving it. Its
+//     header counts what treaty check will list.
 //
 // Returns:
 //   - architecture: the proposed rules.
 //   - text: the same proposal as a treaty.yaml draft.
 func proposeStars(g *graph.Graph) (architecture rules.Architecture, text string) {
-	importers, imports := map[string]int{}, map[string]int{}
+	importers, imports := map[string][]string{}, map[string][]string{}
 	for _, edge := range g.ModuleEdges() {
-		importers[edge.To]++
-		imports[edge.From]++
+		importers[edge.To] = append(importers[edge.To], edge.From)
+		imports[edge.From] = append(imports[edge.From], edge.To)
+	}
+
+	composition := map[string]bool{}
+	for _, module := range g.Modules {
+		if module.Entry || (len(importers[module.ID]) == 0 && len(imports[module.ID]) > 0) {
+			composition[module.ID] = true
+		}
+	}
+
+	for changed := true; changed; {
+		changed = false
+		for _, module := range g.Modules {
+			named := module.Path == "." || slices.Contains(factoryNames, path.Base(module.Path))
+			only := len(importers[module.ID]) > 0 && !slices.ContainsFunc(importers[module.ID], func(id string) bool { return !composition[id] })
+			if !composition[module.ID] && named && only {
+				composition[module.ID], changed = true, true
+			}
+		}
 	}
 
 	proposal := map[string]string{}
-	var rest []string
+	var shaped []string
+	members := map[string]bool{}
 	for _, module := range g.Modules {
+		proposal[module.Path] = groupSection
 		switch {
-		case module.Entry || (importers[module.ID] == 0 && imports[module.ID] > 0):
+		case composition[module.ID]:
 			proposal[module.Path] = graph.LayerComposition
-		case importers[module.ID] > 0:
-			proposal[module.Path] = groupSection
-			rest = append(rest, module.Path)
+		case len(importers[module.ID]) > 0 || len(imports[module.ID]) > 0:
+			shaped = append(shaped, module.Path)
+			members[module.Path] = true
 		default:
-			proposal[module.Path] = groupSection
+			members[module.Path] = true
 		}
 	}
 
@@ -398,18 +445,148 @@ func proposeStars(g *graph.Graph) (architecture rules.Architecture, text string)
 	}
 
 	sort.Strings(architecture.Composition)
-	if len(rest) > 0 {
-		root := commonDir(rest)
-		star := rules.Star{Dir: root, Core: []string{}}
-		for _, modulePath := range rest {
-			if child, ok := childOf(root, modulePath); ok && child == "core" {
-				star.Core = []string{strings.TrimPrefix(path.Join(root, "core")+"/**", "./")}
+	fit := starFit{graph: g, members: members}
+	if len(shaped) > 0 {
+		fit.star(commonDir(shaped))
+	}
+
+	architecture.Stars = fit.stars
+	return architecture, starDraft(g, architecture, fit)
+}
+
+// starFit gathers the stars proposeStars finds, root first, each star
+// before the stars inside it.
+type starFit struct {
+	graph   *graph.Graph
+	members map[string]bool
+	stars   []rules.Star
+
+	// shared lists, for each star, the children two or more of its other
+	// children use: what its core could be made of.
+	shared map[string][]string
+}
+
+// star proposes a star at a directory, its core, and its branches.
+func (this *starFit) star(dir string) {
+	children, uses, usedBy := this.children(dir)
+	var core []string
+	switch {
+	case children["core"]:
+		core = []string{"core"}
+	default:
+		for _, name := range coreNames {
+			if children[name] {
+				core = append(core, name)
 			}
 		}
 
-		architecture.Stars = []rules.Star{star}
+		if len(core) == 0 {
+			core = sinks(children, uses, usedBy)
+		}
 	}
 
+	star := rules.Star{Dir: dir, Core: []string{}}
+	for _, name := range core {
+		star.Core = append(star.Core, strings.TrimPrefix(path.Join(dir, name)+"/**", "./"))
+	}
+
+	if len(core) == 0 {
+		if this.shared == nil {
+			this.shared = map[string][]string{}
+		}
+
+		for _, name := range sortedKeys(children) {
+			if len(usedBy[name]) >= 2 {
+				this.shared[dir] = append(this.shared[dir], path.Join(dir, name))
+			}
+		}
+	}
+
+	this.stars = append(this.stars, star)
+	for _, name := range sortedKeys(children) {
+		if !slices.Contains(core, name) && this.branches(path.Join(dir, name)) {
+			this.star(path.Join(dir, name))
+		}
+	}
+}
+
+// branches reports whether a child of a star is a star of its own: it has
+// two or more child directories holding modules, and one of them would be
+// its core.
+func (this *starFit) branches(dir string) bool {
+	children, uses, usedBy := this.children(dir)
+	if len(children) < 2 {
+		return false
+	}
+
+	for name := range children {
+		if name == "core" || slices.Contains(coreNames, name) {
+			return true
+		}
+	}
+
+	return len(sinks(children, uses, usedBy)) > 0
+}
+
+// children finds the child directories of dir that hold modules outside
+// composition, and which of them use which others.
+func (this *starFit) children(dir string) (children map[string]bool, uses, usedBy map[string]map[string]bool) {
+	children, uses, usedBy = map[string]bool{}, map[string]map[string]bool{}, map[string]map[string]bool{}
+	of := map[string]string{}
+	for _, module := range this.graph.Modules {
+		if child, ok := childOf(dir, module.Path); ok && this.members[module.Path] {
+			children[child], of[module.ID] = true, child
+		}
+	}
+
+	for _, edge := range this.graph.ModuleEdges() {
+		from, fromInside := of[edge.From]
+		to, toInside := of[edge.To]
+		if !fromInside || !toInside || from == to {
+			continue
+		}
+
+		if uses[from] == nil {
+			uses[from] = map[string]bool{}
+		}
+
+		if usedBy[to] == nil {
+			usedBy[to] = map[string]bool{}
+		}
+
+		uses[from][to], usedBy[to][from] = true, true
+	}
+
+	return children, uses, usedBy
+}
+
+// sinks lists the children a sibling uses that use no sibling, by name.
+func sinks(children map[string]bool, uses, usedBy map[string]map[string]bool) (result []string) {
+	for _, name := range sortedKeys(children) {
+		if len(usedBy[name]) > 0 && len(uses[name]) == 0 {
+			result = append(result, name)
+		}
+	}
+
+	return result
+}
+
+// sortedKeys lists a set's members in order.
+func sortedKeys(set map[string]bool) []string {
+	result := make([]string, 0, len(set))
+	for key := range set {
+		result = append(result, key)
+	}
+
+	sort.Strings(result)
+	return result
+}
+
+// starDraft writes the proposed config for snowflake. Its header lists the
+// star tree, counts the dependencies treaty check will list against it by
+// kind, says which stars have no core yet, and lists the modules outside
+// the root star.
+func starDraft(g *graph.Graph, architecture rules.Architecture, fit starFit) string {
 	var builder strings.Builder
 	builder.WriteString("# Proposed by treaty init from the import graph. Edit before relying on it.\n")
 	builder.WriteString("# A snowflake is a star of stars: each star's core holds its contracts and\n")
@@ -417,6 +594,10 @@ func proposeStars(g *graph.Graph) (architecture rules.Architecture, text string)
 	builder.WriteString("# its own star's core and the cores of the stars around it, never a sibling;\n")
 	builder.WriteString("# composition wires spokes together. Run treaty check to see the sideways\n")
 	builder.WriteString("# dependencies left, and move each behind a port in a core.\n")
+	if len(architecture.Stars) > 0 {
+		writeStarTree(&builder, g, architecture, fit)
+	}
+
 	fmt.Fprintf(&builder, "version: %d\narchitecture: snowflake\n", ConfigVersion)
 	fmt.Fprintf(&builder, "composition: %s\n", yamlList(architecture.Composition))
 	builder.WriteString("stars: # each star's directory -> the globs of its core; a star's own package is in its core\n")
@@ -425,7 +606,91 @@ func proposeStars(g *graph.Graph) (architecture rules.Architecture, text string)
 	}
 
 	builder.WriteString(rulesDraft(rules.FindingBreaking, rules.FindingLayerViolation, rules.FindingUnclassified))
-	return architecture, builder.String()
+	return builder.String()
+}
+
+// writeStarTree writes the draft's comments on its stars: one line per
+// star, the dependencies that break the rules by kind, the stars without a
+// core, and the modules outside the root star.
+func writeStarTree(builder *strings.Builder, g *graph.Graph, architecture rules.Architecture, fit starFit) {
+	paths := make([]string, 0, len(g.Modules))
+	for _, module := range g.Modules {
+		paths = append(paths, module.Path)
+	}
+
+	builder.WriteString("#\n")
+	for _, star := range architecture.Tree(paths) {
+		line := fmt.Sprintf("#   %s  core %s", star.Dir, strings.Join(append([]string{star.Dir}, star.Core...), ", "))
+		if star.Parent != "" {
+			line = fmt.Sprintf("#   %s  branch of %s; core %s", star.Dir, star.Parent, strings.Join(append([]string{star.Dir}, star.Core...), ", "))
+		}
+
+		if len(star.Leaves) > 0 {
+			line += "; leaves " + strings.Join(star.Leaves, ", ")
+		}
+
+		if len(star.Branches) > 0 {
+			line += "; branches " + strings.Join(star.Branches, ", ")
+		}
+
+		builder.WriteString(line + "\n")
+	}
+
+	placed := g.Clone()
+	architecture.Assign(placed)
+	counts := map[string]int{}
+	violations := architecture.Violations(placed)
+	for _, violation := range violations {
+		from, to := placement(placed.Module(violation.From)), placement(placed.Module(violation.To))
+		switch {
+		case to.Layer == graph.LayerComposition:
+			counts["on composition"]++
+		case from.Layer == graph.LayerCore && rules.Encloses(from.Star, to.Star):
+			counts["from a core into its own spokes"]++
+		default:
+			counts["between sibling spokes"]++
+		}
+	}
+
+	switch len(violations) {
+	case 0:
+		builder.WriteString("# treaty check lists no dependency that breaks these rules.\n")
+	default:
+		var parts []string
+		for _, kind := range []string{"between sibling spokes", "from a core into its own spokes", "on composition"} {
+			if counts[kind] > 0 {
+				parts = append(parts, fmt.Sprintf("%d %s", counts[kind], kind))
+			}
+		}
+
+		noun := "dependencies that break"
+		if len(violations) == 1 {
+			noun = "dependency that breaks"
+		}
+
+		fmt.Fprintf(builder, "# treaty check lists %d %s these rules: %s.\n", len(violations), noun, strings.Join(parts, ", "))
+	}
+
+	for _, star := range architecture.Stars {
+		if len(star.Core) > 0 {
+			continue
+		}
+
+		core := strings.TrimPrefix(path.Join(star.Dir, "core"), "./")
+		fmt.Fprintf(builder, "# No core in %s yet: every dependency between its children is sideways. Create %s and move the contracts there.\n", star.Dir, core)
+		if candidates := fit.shared[star.Dir]; len(candidates) > 0 {
+			fmt.Fprintf(builder, "# Candidates for %s: %s.\n", core, strings.Join(candidates, ", "))
+		}
+	}
+
+	unplaced := map[string]string{}
+	for _, module := range placed.Modules {
+		if module.Layer == graph.LayerUnclassified {
+			unplaced[module.Path] = ""
+		}
+	}
+
+	writeUnplaced(builder, unplaced, "outside the root star and not composition")
 }
 
 // commonDir is the deepest directory holding every one of the paths, or
@@ -760,7 +1025,7 @@ func noneDraft() string {
 	var builder strings.Builder
 	builder.WriteString("# Written by treaty init. No architecture is declared, so every dependency is\n")
 	builder.WriteString("# allowed; contracts and their changes are still checked. To declare one, run\n")
-	builder.WriteString("# treaty init --architecture <hexagonal, clean, layered, vertical or modular>.\n")
+	builder.WriteString("# treaty init --architecture <hexagonal, clean, layered, vertical, modular or\n# snowflake>.\n")
 	fmt.Fprintf(&builder, "version: %d\narchitecture: none\n", ConfigVersion)
 	builder.WriteString(rulesDraft(rules.FindingBreaking))
 	return builder.String()

@@ -517,6 +517,62 @@ func TestMoveModulesBetweenBoundaries(t *testing.T) {
 	post(t, base+"/api/boundary", "application/json", `{"from":"returns","to":"refunds"}`, http.StatusBadRequest)
 }
 
+func TestMoveModulesInASnowflake(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/shop\n")
+	write(t, root, "treaty.yaml", "version: 1\narchitecture: snowflake\ncomposition: [\"cmd/**\"]\nstars:\n  internal: [\"internal/core/**\"]\n  internal/orders: []\n")
+	write(t, root, "internal/core/core.go", "package core\n\ntype Order struct{ ID string }\n")
+	write(t, root, "internal/web/port/port.go", "package port\n\ntype Fetcher interface{ Fetch() }\n")
+	write(t, root, "internal/orders/orders.go", "package orders\n\nfunc Place() {}\n")
+	write(t, root, "internal/orders/tax/tax.go", "package tax\n\nfunc Rate() int { return 1 }\n")
+	git(t, root, "init", "-q")
+
+	service := app.NewService(root, filesystem.NewConfig(root), golang.NewExtractor(), []app.Dialect{golang.NewDialect()}, gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(root), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	live := app.NewLive(service, filesystem.NewWatcher(root))
+	stop := make(chan struct{})
+	defer close(stop)
+	live.Start(stop)
+	_, base := listen(t, root, live)
+	module := func(id string) (result app.MapModule) {
+		var view struct {
+			Modules []app.MapModule `json:"modules"`
+		}
+
+		_ = json.Unmarshal(get(t, base+"/api/view", http.StatusOK), &view)
+		for _, module := range view.Modules {
+			if module.ID == id {
+				result = module
+			}
+		}
+
+		return result
+	}
+
+	if got := module("go:internal/web/port"); got.Layer != "spoke" || got.Star != "internal" || got.Spoke != "internal/web" {
+		t.Fatalf("the port starts in spoke internal/web: %+v", got)
+	}
+
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web/port","layer":"core","star":"internal"}`, http.StatusOK)
+	if got := module("go:internal/web/port"); got.Layer != "core" || got.Star != "internal" || got.Spoke != "" {
+		t.Fatalf("the port should be in the core of internal: %+v", got)
+	}
+
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web/port","layer":"spoke","star":"internal","spoke":"internal/web"}`, http.StatusOK)
+	if got := module("go:internal/web/port"); got.Spoke != "internal/web" {
+		t.Fatalf("the port should be back in its spoke: %+v", got)
+	}
+
+	// A spoke is its directory, and a star's core is inside the star.
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web/port","layer":"spoke","star":"internal","spoke":"internal/orders"}`, http.StatusBadRequest)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web/port","layer":"core","star":"internal/orders"}`, http.StatusBadRequest)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/orders/tax","layer":"core","star":"internal"}`, http.StatusBadRequest)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/orders/tax","layer":"core","star":"internal/orders"}`, http.StatusOK)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/orders/tax","layer":"composition"}`, http.StatusOK)
+	if got := module("go:internal/orders/tax"); got.Layer != "composition" || got.Star != "" {
+		t.Fatalf("tax should be composition: %+v", got)
+	}
+}
+
 func TestIgnoreFindings(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "go.mod", "module example.com/shop\n")

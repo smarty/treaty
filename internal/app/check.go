@@ -11,13 +11,17 @@ import (
 const ReportSchema = "treaty/report/v1"
 
 // ModuleReport is one module's placement and metrics. Boundary is the
-// boundary holding it, for the vertical and modular architectures.
+// boundary holding it, for the vertical and modular architectures. Star
+// and Spoke are the snowflake's: the star holding the module, and its
+// spoke, empty for a core.
 type ModuleReport struct {
 	ID       string        `json:"id"`
 	Layer    string        `json:"layer"`
 	Side     string        `json:"side,omitempty"`
 	Boundary string        `json:"boundary,omitempty"`
 	Public   bool          `json:"public,omitempty"`
+	Star     string        `json:"star,omitempty"`
+	Spoke    string        `json:"spoke,omitempty"`
 	Before   *rules.Metric `json:"before,omitempty"`
 	Metrics  rules.Metric  `json:"metrics"`
 }
@@ -119,7 +123,7 @@ func (this *analysis) report() Report {
 	result.Modules = []ModuleReport{}
 
 	for _, module := range this.head.Modules {
-		entry := ModuleReport{ID: module.ID, Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Metrics: this.metrics[module.ID]}
+		entry := ModuleReport{ID: module.ID, Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Star: module.Star, Spoke: module.Spoke, Metrics: this.metrics[module.ID]}
 		if before, ok := this.baseMetrics[module.ID]; ok {
 			entry.Before = &before
 		}

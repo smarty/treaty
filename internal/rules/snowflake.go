@@ -91,6 +91,60 @@ func (this Architecture) Tree(modulePaths []string) []StarNode {
 	return result
 }
 
+// Crossing names, for a dependency the snowflake refuses, the star whose
+// children it crosses between and the child directory of that star that
+// holds the module depended on: a spoke of it, or a branch around it. A
+// port for the dependency belongs in that star's core, and composition
+// hands that child in.
+//
+// Parameters:
+//   - from: the depending module's placement, a core or a spoke.
+//   - to: the placement of the module depended on, a core or a spoke.
+//
+// Returns:
+//   - star: the deepest star around both.
+//   - child: the child directory of star that holds to.
+func Crossing(from, to Placement) (star, child string) {
+	star = from.Star
+	for !encloses(star, to.Star) {
+		star = path.Dir(star)
+	}
+
+	return star, childOf(star, to)
+}
+
+// Encloses reports whether a star directory holds a path, or is that
+// path. The repository root, ".", holds everything.
+//
+// Parameters:
+//   - dir: the star's directory.
+//   - inner: a module path or another star's directory.
+//
+// Returns:
+//   - result: true when inner is dir or lies inside it.
+func Encloses(dir, inner string) bool { return encloses(dir, inner) }
+
+// Innermost names the deepest star of a snowflake architecture whose
+// directory holds a module path, whatever composition says about it.
+//
+// Parameters:
+//   - modulePath: the module path relative to the repository root.
+//
+// Returns:
+//   - result: the star's directory; empty when no star holds the path or
+//     the style is not snowflake.
+func (this Architecture) Innermost(modulePath string) string {
+	if this.Style != StyleSnowflake {
+		return ""
+	}
+
+	if star := this.innermost(modulePath); star != nil {
+		return star.Dir
+	}
+
+	return ""
+}
+
 // resolveSnowflake places one module path in the star tree. The first step
 // that matches places it:
 //
@@ -143,12 +197,7 @@ func (this Architecture) checkSnowflake(from, to Placement) (bool, string) {
 		return true, ""
 	}
 
-	common := from.Star
-	for !encloses(common, to.Star) {
-		common = path.Dir(common)
-	}
-
-	theirs := childOf(common, to)
+	common, theirs := Crossing(from, to)
 	if from.Layer == graph.LayerCore && from.Star == common {
 		return false, fmt.Sprintf("%s may not depend on %s: %s is a spoke of star %s, and a core may use only itself and the cores of the stars around it; declare a port in the core of star %s, and let composition hand %s in",
 			starName(from), starName(to), theirs, common, common, theirs)

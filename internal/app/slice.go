@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -27,6 +28,7 @@ type Neighbor struct {
 // Slice is the minimum context an agent needs for one symbol, file or
 // module. A file slice lists every declaration in the file; a module slice
 // lists its contracts and its files, the narrower targets to slice next.
+// Star places the target's module in a snowflake.
 type Slice struct {
 	Schema     string            `json:"schema"`
 	TaskScope  SliceScope        `json:"task_scope"`
@@ -35,6 +37,7 @@ type Slice struct {
 	Symbols    []SliceSymbol     `json:"symbols,omitempty"`
 	Files      []SliceFile       `json:"files,omitempty"`
 	MayDepend  []string          `json:"may_depend_on_layers"`
+	Star       *SliceStar        `json:"star,omitempty"`
 	Neighbors  []Neighbor        `json:"neighbors,omitempty"`
 	Dependents []string          `json:"dependents,omitempty"`
 	Violations []rules.Violation `json:"violations,omitempty"`
@@ -45,6 +48,23 @@ type Slice struct {
 type SliceContract struct {
 	Signature string `json:"signature"`
 	Change    string `json:"change,omitempty"`
+}
+
+// SliceStar is where a snowflake puts the slice's module: its star, the
+// star around that, its role, core or spoke, and its spoke. Cores are the
+// modules it may use, in its own star's core and the cores around it.
+// Siblings are the other children of the star whose spokes it must never
+// use, a branch marked as one: a spoke's sibling spokes, or, for a branch's
+// core, the branch's siblings. OwnSpokes are a core's own spokes, which it
+// may not use either.
+type SliceStar struct {
+	Dir       string   `json:"dir"`
+	Parent    string   `json:"parent,omitempty"`
+	Role      string   `json:"role"`
+	Spoke     string   `json:"spoke,omitempty"`
+	Cores     []string `json:"cores"`
+	Siblings  []string `json:"siblings"`
+	OwnSpokes []string `json:"own_spokes,omitempty"`
 }
 
 // SliceExcluded counts what the slice left out.
@@ -224,7 +244,72 @@ func buildSlice(analysis *analysis, target string) (Slice, error) {
 	}
 
 	result.Excluded = SliceExcluded{Modules: len(g.Modules) - len(modules), Symbols: len(g.Symbols) - len(included)}
+	result.Star = sliceStar(analysis, result.TaskScope)
 	return result, nil
+}
+
+// sliceStar places a slice's module in the star tree, or nil outside a
+// snowflake and for composition and unclassified modules.
+func sliceStar(analysis *analysis, scope SliceScope) *SliceStar {
+	architecture, g := analysis.config.Architecture, analysis.head
+	moduleID := scope.Module
+	if scope.Symbol != "" {
+		moduleID, _ = graph.SplitSymbolID(scope.Symbol)
+	}
+
+	module := g.Module(moduleID)
+	if architecture.Style != rules.StyleSnowflake || module == nil || module.Star == "" {
+		return nil
+	}
+
+	paths := make([]string, 0, len(g.Modules))
+	for _, each := range g.Modules {
+		paths = append(paths, each.Path)
+	}
+
+	nodes := map[string]rules.StarNode{}
+	for _, node := range architecture.Tree(paths) {
+		nodes[node.Dir] = node
+	}
+
+	// children names a star's spokes, a branch marked as one, leaving out
+	// the one the module is in.
+	children := func(dir, except string) []string {
+		result := []string{}
+		for _, leaf := range nodes[dir].Leaves {
+			if leaf != except {
+				result = append(result, leaf)
+			}
+		}
+
+		for _, branch := range nodes[dir].Branches {
+			if branch != except {
+				result = append(result, branch+" (branch)")
+			}
+		}
+
+		sort.Strings(result)
+		return result
+	}
+
+	result := &SliceStar{Dir: module.Star, Parent: nodes[module.Star].Parent, Role: module.Layer, Spoke: module.Spoke, Cores: []string{}}
+	for _, other := range g.Modules {
+		if other.ID != module.ID && other.Layer == graph.LayerCore && rules.Encloses(other.Star, module.Star) {
+			result.Cores = append(result.Cores, other.ID)
+		}
+	}
+
+	if module.Layer == graph.LayerSpoke {
+		result.Siblings = children(module.Star, module.Spoke)
+	} else {
+		result.Siblings, result.OwnSpokes = []string{}, children(module.Star, "")
+		if result.Parent != "" {
+			result.Siblings = children(result.Parent, module.Star)
+		}
+	}
+
+	sort.Strings(result.Cores)
+	return result
 }
 
 // fileTarget finds the module holding a file named by target, a path
@@ -274,6 +359,15 @@ func violationTouches(violation rules.Violation, file string) bool {
 	return false
 }
 
+// listOrNone joins a list for text, or says it is empty.
+func listOrNone(values []string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+
+	return strings.Join(values, ", ")
+}
+
 func changeOf(analysis *analysis, id string) string {
 	for _, change := range analysis.changes {
 		if change.Symbol == id {
@@ -315,6 +409,19 @@ func (this Slice) Text() string {
 	}
 
 	fmt.Fprintf(&builder, "may depend on: %s\n", strings.Join(this.MayDepend, ", "))
+	if star := this.Star; star != nil {
+		place := "core of star " + star.Dir
+		if star.Role == graph.LayerSpoke {
+			place = "spoke " + star.Spoke + " of star " + star.Dir
+		}
+
+		if star.Parent != "" {
+			place += ", a branch of " + star.Parent
+		}
+
+		fmt.Fprintf(&builder, "star: %s\n  cores it may use: %s\n  never use: %s\n", place, listOrNone(star.Cores), listOrNone(append(slices.Clone(star.Siblings), star.OwnSpokes...)))
+	}
+
 	short := func(id string) string {
 		if owner, name := graph.SplitSymbolID(id); owner == module {
 			return name

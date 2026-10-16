@@ -273,7 +273,7 @@ func instructions(mapURL string, shared bool) string {
 	return where + " One treaty server on this machine serves every repository Claude Code works in, each in its own map, at the same address every time. " +
 		"The person cannot see this server's output, so in your first reply of the session give them that link, " +
 		"saying whether the map is new or was already open, so they can open it in a browser. " +
-		"Treaty keeps a live graph of this repository's contracts, placed by the architecture treaty.yaml declares (hexagonal, clean, layered, vertical or modular monolith), and rebuilds it as files change. " +
+		"Treaty keeps a live graph of this repository's contracts, placed by the architecture treaty.yaml declares (hexagonal, clean, layered, vertical, modular monolith or snowflake), and rebuilds it as files change. " +
 		"Use it to decide where to work without reading the whole codebase: call overview first, find to locate symbols, " +
 		"slice before editing a symbol, file or module, source to read just the lines you need, impact before changing a contract, and allowed before adding an import. " +
 		"Write what you intend to build as AutoPen with plan; it shows on the person's map and fills in as the code is written. " +
@@ -311,7 +311,7 @@ func tools() []tool {
 		},
 		{
 			Name:        "allowed",
-			Description: "Whether one module may depend on another under the architecture's rules, the rule it would break, and what the first may use. Call before adding an import. Modules that do not exist yet are placed by the config.",
+			Description: "Whether one module may depend on another under the architecture's rules, the rule it would break, and what the first may use; for a snowflake, also the ports in a core that already stand for what it reached for. Call before adding an import. Modules that do not exist yet are placed by the config.",
 			InputSchema: schema(map[string]string{"from": "The depending module, as an id such as go:internal/app, a path, or a short name such as app; a symbol or file stands for its module.", "to": "The module depended on, given the same ways."}, "from", "to"),
 		},
 		{

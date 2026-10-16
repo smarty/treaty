@@ -135,3 +135,16 @@ func write(t *testing.T, root, name, text string) {
 		t.Fatal(err)
 	}
 }
+
+func TestInstructionsNameEveryArchitecture(t *testing.T) {
+	text := instructions("http://127.0.0.1:7878/?p=x", false)
+	if !strings.Contains(text, "(hexagonal, clean, layered, vertical, modular monolith or snowflake)") {
+		t.Fatalf("the instructions must name snowflake:\n%s", text)
+	}
+
+	for _, each := range tools() {
+		if each.Name == "allowed" && !strings.Contains(each.Description, "ports") {
+			t.Fatalf("allowed must say it names ports: %s", each.Description)
+		}
+	}
+}

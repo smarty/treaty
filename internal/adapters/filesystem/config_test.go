@@ -596,3 +596,81 @@ func TestEditsThatChangeNothingDoNotWrite(t *testing.T) {
 		t.Fatalf("an edit that changes nothing rewrote treaty.yaml:\n%s", data)
 	}
 }
+
+func TestPlaceInSnowflake(t *testing.T) {
+	const original = `# Our snowflake.
+version: 1
+architecture: snowflake
+composition: ["cmd/**"]
+stars:
+  internal: ["internal/core/**"] # contracts and orchestrators
+  internal/blocks/: []
+  internal/gate:
+rules:
+  fail_on: [breaking_changes, layer_violation]
+`
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	config := NewConfig(root)
+	place := func(path string, placement rules.Placement) string {
+		t.Helper()
+		if _, err := config.Place(path, placement); err != nil {
+			t.Fatalf("Place(%s, %+v): %v", path, placement, err)
+		}
+
+		loaded, _, err := config.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got := loaded.Architecture.Resolve(path); !got.Same(placement) {
+			t.Fatalf("%s resolves to %+v, want %+v", path, got, placement)
+		}
+
+		data, _ := os.ReadFile(filepath.Join(root, ConfigFile))
+		return string(data)
+	}
+
+	// A port moves into the core by its exact path, comments kept, and out
+	// again into its directory's spoke.
+	text := place("internal/web/port", rules.Placement{Layer: graph.LayerCore, Star: "internal"})
+	if !strings.Contains(text, "# Our snowflake.") || !strings.Contains(text, `internal: ["internal/core/**", "internal/web/port"] # contracts and orchestrators`) {
+		t.Fatalf("the port joins the core of internal:\n%s", text)
+	}
+
+	if text = place("internal/web/port", rules.Placement{Layer: graph.LayerSpoke, Star: "internal", Spoke: "internal/web"}); strings.Contains(text, "internal/web/port") {
+		t.Fatalf("the port leaves the core:\n%s", text)
+	}
+
+	// A star whose key has a trailing slash, or no value yet, takes a
+	// module into its core all the same.
+	place("internal/blocks/www", rules.Placement{Layer: graph.LayerCore, Star: "internal/blocks"})
+	if text = place("internal/gate/model", rules.Placement{Layer: graph.LayerCore, Star: "internal/gate"}); !strings.Contains(text, `internal/gate: ["internal/gate/model"]`) {
+		t.Fatalf("a star with no value gets a list:\n%s", text)
+	}
+
+	// A move to composition beats the star's own package.
+	place("internal/gate", rules.Placement{Layer: graph.LayerComposition})
+
+	// A wildcard still places the module in the core, so it cannot leave
+	// it by a move; the error names the glob.
+	if _, err := config.Place("internal/core/trust", rules.Placement{Layer: graph.LayerSpoke, Star: "internal", Spoke: "internal/core"}); !errors.Is(err, rules.ErrArchitecture) || !strings.Contains(err.Error(), `"internal/core/**" under stars.internal`) {
+		t.Fatalf("a core glob keeps it: %v", err)
+	}
+
+	// Another star's core lies outside the module's directory.
+	if _, err := config.Place("internal/plan", rules.Placement{Layer: graph.LayerCore, Star: "internal/blocks"}); !errors.Is(err, rules.ErrArchitecture) {
+		t.Fatalf("a move into another star's core: %v", err)
+	}
+
+	if _, err := config.Place("internal/plan", rules.Placement{Layer: graph.LayerCore, Star: "internal/orders"}); !errors.Is(err, rules.ErrArchitecture) || !strings.Contains(err.Error(), `no star "internal/orders"`) {
+		t.Fatalf("a move never creates a star: %v", err)
+	}
+
+	if _, err := config.Place("internal/plan", rules.Placement{Layer: graph.LayerSpoke, Star: "internal", Spoke: "internal/web"}); !errors.Is(err, rules.ErrArchitecture) || !strings.Contains(err.Error(), "a spoke is its directory") {
+		t.Fatalf("a spoke is its directory: %v", err)
+	}
+}

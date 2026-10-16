@@ -59,7 +59,8 @@ commands:
                                               a new one, such as a newly built treaty
   init [--architecture <name>]                create .treaty and propose treaty.yaml for an
                                               architecture: none (default), hexagonal,
-                                              clean, layered, vertical or modular
+                                              clean, layered, vertical, modular or
+                                              snowflake
   url [--port <n>]                            print the live map's address for this directory
   here [--force]                              register treaty in this repository's .mcp.json,
                                               so Claude Code sessions here start it
@@ -204,7 +205,7 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	architecture := flags.String("architecture", "", "architecture for init: clean, hexagonal, layered, modular or vertical")
+	architecture := flags.String("architecture", "", "architecture for init: clean, hexagonal, layered, modular, snowflake or vertical")
 	base := flags.String("base", "", "git ref to diff against")
 	mergeBase := flags.String("merge-base", "", "branch whose merge base with HEAD to diff against")
 	target := flags.String("target", "", "branch a pull request merges into")
@@ -453,6 +454,13 @@ func checkText(report app.Report) string {
 
 		if module.Boundary != "" {
 			layer = module.Boundary + "/" + layer
+		}
+
+		switch {
+		case module.Spoke != "":
+			layer = "spoke " + module.Spoke
+		case module.Star != "":
+			layer = "core of star " + module.Star
 		}
 
 		if module.Public {
