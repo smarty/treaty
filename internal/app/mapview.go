@@ -203,12 +203,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 	}
 
 	if architecture.Style == rules.StyleSnowflake {
-		paths := make([]string, 0, len(analysis.head.Modules))
-		for _, module := range analysis.head.Modules {
-			paths = append(paths, module.Path)
-		}
-
-		view.Layers, view.Stars = []string{graph.LayerCore, graph.LayerSpoke}, architecture.Tree(paths)
+		view.Layers, view.Stars = []string{graph.LayerCore, graph.LayerSpoke}, architecture.Tree(analysis.modulePaths())
 	}
 
 	themes, err := this.themes.Themes()

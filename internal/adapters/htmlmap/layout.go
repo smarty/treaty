@@ -523,13 +523,14 @@ func ringLayout(modules []app.MapModule, rings []string, sided bool) (result Lay
 // clear for the dependencies running into it. Composition has a half ring
 // of its own around the left of the root star, drawn even when empty so a
 // module can be moved there, and unclassified modules sit along the bottom
-// right outside it.
+// outside it.
 //
 // Notes:
 //   - Stars are measured bottom-up in their own frames, then placed
 //     top-down, each branch turned to point away from its parent's core.
-//     A leaf's modules and a core's are never turned with it, since the
-//     circle bounding them turns into itself.
+//     A core's items turn with it, on a full circle that turns into
+//     itself; a leaf's packed modules are never turned, since the circle
+//     bounding them turns into itself.
 //   - Rings are emitted cores first, deepest first, then leaves, then stars,
 //     deepest first, then composition. The page draws them in reverse, so
 //     a core paints over its star.

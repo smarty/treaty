@@ -12,9 +12,10 @@ import (
 
 // Star is one star of the snowflake architecture: a directory relative to
 // the repository root, such as internal or internal/blocks, and the globs
-// of its core. Its own package is always in its core, so Core may be empty.
-// Every other child directory of the star that holds modules is a spoke: a
-// leaf, or a branch when it is a star of its own.
+// of its core. Its own package is in its core unless a composition entry
+// names it exactly, so Core may be empty. Every other child directory of
+// the star that holds modules is a spoke: a leaf, or a branch when it is a
+// star of its own.
 //
 // Notes:
 //   - A spoke may use its own star's core and the cores of every star
@@ -91,6 +92,38 @@ func (this Architecture) Tree(modulePaths []string) []StarNode {
 	return result
 }
 
+// Unmatched lists, for people, each star of a snowflake architecture that
+// holds no module, and each core glob that matches none. Neither stops the
+// architecture from loading, but a misspelled branch demotes the real one
+// to a leaf of its parent, whose packages may then use each other.
+//
+// Parameters:
+//   - modulePaths: the paths of the modules to look for.
+//
+// Returns:
+//   - result: one note per empty star or core glob; empty for any other
+//     style.
+func (this Architecture) Unmatched(modulePaths []string) (result []string) {
+	if this.Style != StyleSnowflake {
+		return nil
+	}
+
+	for _, star := range this.ordered() {
+		if !slices.ContainsFunc(modulePaths, func(modulePath string) bool { return encloses(star.Dir, modulePath) }) {
+			result = append(result, fmt.Sprintf("treaty.yaml declares star %s under stars, but no module lies in it; check the directory's spelling", star.Dir))
+			continue
+		}
+
+		for _, entry := range star.Core {
+			if !slices.ContainsFunc(modulePaths, func(modulePath string) bool { return Match(entry, modulePath) }) {
+				result = append(result, fmt.Sprintf("core glob %q of star %s matches no module; check its spelling", entry, star.Dir))
+			}
+		}
+	}
+
+	return result
+}
+
 // Crossing names, for a dependency the snowflake refuses, the star whose
 // children it crosses between and the child directory of that star that
 // holds the module depended on: a spoke of it, or a branch around it. A
@@ -150,9 +183,10 @@ func (this Architecture) Innermost(modulePath string) string {
 //
 //  1. a composition entry that is exactly the path;
 //  2. a core entry of some star that is exactly the path;
-//  3. a composition glob;
-//  4. outside every star, the module is unclassified;
-//  5. the innermost star's own package is in its core;
+//  3. a star's own package is in its core, so no composition glob, such
+//     as one ending in /**, takes a star's hub from it;
+//  4. a composition glob;
+//  5. outside every star, the module is unclassified;
 //  6. a core glob of the innermost star, and only of that star, so an
 //     outer core never reaches into a branch;
 //  7. otherwise the module is in the spoke named by the child directory of
@@ -168,6 +202,10 @@ func (this Architecture) resolveSnowflake(modulePath string) Placement {
 		}
 	}
 
+	if this.star(modulePath) != nil {
+		return Placement{Layer: graph.LayerCore, Star: modulePath}
+	}
+
 	if MatchAny(this.Composition, modulePath) {
 		return Placement{Layer: graph.LayerComposition}
 	}
@@ -176,7 +214,7 @@ func (this Architecture) resolveSnowflake(modulePath string) Placement {
 	switch {
 	case star == nil:
 		return Placement{Layer: graph.LayerUnclassified}
-	case modulePath == star.Dir || MatchAny(star.Core, modulePath):
+	case MatchAny(star.Core, modulePath):
 		return Placement{Layer: graph.LayerCore, Star: star.Dir}
 	}
 
@@ -276,8 +314,9 @@ func (this Architecture) starSummary() string {
 }
 
 // validateStars checks a snowflake architecture: one root star, every other
-// star a child directory of a star, and every core entry inside its own
-// star, naming a child directory of it and outside its branches.
+// star a child directory of a star, and every core entry a clean path
+// inside its own star, naming a child directory of it and outside its
+// branches.
 func (this Architecture) validateStars() error {
 	if len(this.Layers) > 0 || len(this.Shared) > 0 || len(this.Boundaries) > 0 || len(this.Public) > 0 {
 		return fmt.Errorf("%w: layers, shared, boundaries and public do not apply to the snowflake architecture; a star's core is what its spokes share", ErrArchitecture)
@@ -320,6 +359,10 @@ func (this Architecture) validateStars() error {
 
 	for _, star := range this.Stars {
 		for _, entry := range star.Core {
+			if entry != star.Dir && !clean(entry) {
+				return fmt.Errorf("%w: core glob %q of star %s must be a path relative to the repository root, with no empty, . or .. segment", ErrArchitecture, entry, star.Dir)
+			}
+
 			if !encloses(star.Dir, entry) {
 				return fmt.Errorf("%w: core glob %q of star %s lies outside %s; a star's core is inside its directory", ErrArchitecture, entry, star.Dir, star.Dir)
 			}
@@ -430,6 +473,19 @@ func childOf(dir string, placement Placement) string {
 	}
 
 	return result
+}
+
+// clean reports whether a path relative to the repository root is written
+// the one way a module path is: no leading or trailing slash, and no empty,
+// . or .. segment. A glob written any other way matches no module.
+func clean(entry string) bool {
+	for _, segment := range strings.Split(entry, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+
+	return true
 }
 
 // cores names the cores of stars for guidance, such as the core of internal

@@ -33,6 +33,12 @@ func TestSnowflakeResolve(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	hub := snowflake()
+	hub.Composition = append(hub.Composition, "internal/gate/**", "internal/blo*")
+	if err := hub.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
 	rooted := Architecture{Style: StyleSnowflake, Composition: []string{"cmd/**"}, Stars: []Star{{Dir: "."}, {Dir: "internal", Core: []string{"internal/core/**"}}}}
 	if err := rooted.Validate(); err != nil {
 		t.Fatal(err)
@@ -67,6 +73,11 @@ func TestSnowflakeResolve(t *testing.T) {
 		{exact, "internal/web", Placement{Layer: graph.LayerSpoke, Star: "internal", Spoke: "internal/web"}},
 		// An exact composition path beats a star's own package.
 		{exact, "internal/blocks", Placement{Layer: graph.LayerComposition}},
+		// A composition glob never takes a star's own package from its
+		// core, though it takes the rest of the star.
+		{hub, "internal/gate", Placement{Layer: graph.LayerCore, Star: "internal/gate"}},
+		{hub, "internal/gate/core", Placement{Layer: graph.LayerComposition}},
+		{hub, "internal/blocks", Placement{Layer: graph.LayerCore, Star: "internal/blocks"}},
 		// A composition glob beats a spoke.
 		{architecture, "internal/factory/wire", Placement{Layer: graph.LayerComposition}},
 		{rooted, ".", Placement{Layer: graph.LayerCore, Star: "."}},
@@ -210,6 +221,11 @@ func TestSnowflakeValidate(t *testing.T) {
 		{"a core of any child", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: "internal", Core: []string{"internal/*"}}}}, `core glob "internal/*" of star internal does not name a directory of its own`},
 		{"a core inside any child", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: "internal", Core: []string{"internal/*/contracts/**"}}}}, `core glob "internal/*/contracts/**" of star internal does not name a directory of its own`},
 		{"a root core of every child", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: ".", Core: []string{"**/core/**"}}}}, `core glob "**/core/**" of star . does not name a directory of its own; start it with a child directory of ., such as core/**`},
+		{"a root core outside the repository", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: ".", Core: []string{"../core/**"}}}}, `core glob "../core/**" of star . must be a path relative to the repository root, with no empty, . or .. segment`},
+		{"a root core written from .", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: ".", Core: []string{"./core/**"}}}}, `core glob "./core/**" of star . must be a path relative`},
+		{"an absolute root core", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: ".", Core: []string{"/abs/**"}}}}, `core glob "/abs/**" of star . must be a path relative`},
+		{"a core that climbs out", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: "internal/gate", Core: []string{"internal/gate/../core/**"}}, {Dir: "internal"}}}, `core glob "internal/gate/../core/**" of star internal/gate must be a path relative`},
+		{"a core with a trailing slash", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: "internal", Core: []string{"internal/core/"}}}}, `core glob "internal/core/" of star internal must be a path relative`},
 		{"a core inside a branch", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: "internal", Core: []string{"internal/blocks/core/**"}}, {Dir: "internal/blocks"}}}, `core glob "internal/blocks/core/**" of star internal lies inside branch internal/blocks, whose core is its own; list it under internal/blocks`},
 		{"a core that is a branch", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: "internal", Core: []string{"internal/blocks"}}, {Dir: "internal/blocks"}}}, `core glob "internal/blocks" of star internal lies inside branch internal/blocks`},
 		{"layers", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: "internal"}}, Layers: []Layer{{Name: "web"}}}, "layers, shared, boundaries and public do not apply to the snowflake architecture; a star's core is what its spokes share"},
@@ -229,6 +245,7 @@ func TestSnowflakeValidate(t *testing.T) {
 		{Style: StyleSnowflake, Stars: []Star{{Dir: ".", Core: []string{"core/**"}}, {Dir: "internal"}}},
 		{Style: StyleSnowflake, Composition: []string{"cmd/**"}, Stars: []Star{{Dir: "internal", Core: []string{"internal"}}, {Dir: "internal/billing", Core: []string{}}, {Dir: "internal/orders", Core: []string{"internal/orders/ports/**", "internal/orders/flow"}}}},
 		{Style: StyleSnowflake, Stars: []Star{{Dir: "internal", Core: []string{"internal/web/port"}}}},
+		{Style: StyleSnowflake, Stars: []Star{{Dir: ".", Core: []string{"."}}}},
 	} {
 		if err := valid.Validate(); err != nil {
 			t.Errorf("%+v: %v", valid.Stars, err)
@@ -358,6 +375,25 @@ func TestSnowflakeFindings(t *testing.T) {
 		if details[key] != want {
 			t.Errorf("%s: got %q\nwant %q", key, details[key], want)
 		}
+	}
+}
+
+func TestSnowflakeUnmatched(t *testing.T) {
+	architecture := snowflake()
+	architecture.Stars = append(architecture.Stars, Star{Dir: "internal/blcoks", Core: []string{"internal/blcoks/core/**"}})
+	architecture.Stars[2].Core = append(architecture.Stars[2].Core, "internal/gate/ports")
+	got := architecture.Unmatched([]string{"cmd/guardprobe", "internal/core", "internal/blocks/core", "internal/blocks/www", "internal/gate/core/x"})
+	want := []string{
+		"treaty.yaml declares star internal/blcoks under stars, but no module lies in it; check the directory's spelling",
+		`core glob "internal/gate/ports" of star internal/gate matches no module; check its spelling`,
+	}
+
+	if !slices.Equal(got, want) {
+		t.Errorf("Unmatched = %q\nwant %q", got, want)
+	}
+
+	if got := (Architecture{Style: StyleLayered, Layers: []Layer{{Name: "web", Globs: []string{"web/**"}}}}).Unmatched(nil); got != nil {
+		t.Errorf("only a snowflake has stars: %q", got)
 	}
 }
 

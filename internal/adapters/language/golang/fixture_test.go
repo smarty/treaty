@@ -914,6 +914,13 @@ func TestIgnoredSidewaysDependency(t *testing.T) {
 	if report = check(); len(report.Failures) != 0 || !violation(report).Existing {
 		t.Fatalf("existing: failures %v, %+v", report.Failures, violation(report))
 	}
+
+	// A misspelled star holds no module, and the check says so rather than
+	// quietly checking less.
+	write(map[string]string{"treaty.yaml": "version: 1\narchitecture: snowflake\ncomposition: [\"cmd/**\"]\nstars:\n  internal: [\"internal/core/**\"]\n  internal/wbe: [\"internal/wbe/core/**\"]\n"})
+	if report = check(); !slices.Contains(report.Notes, "treaty.yaml declares star internal/wbe under stars, but no module lies in it; check the directory's spelling") {
+		t.Fatalf("notes: %v", report.Notes)
+	}
 }
 
 func TestSnowflakeFromInitToTheTools(t *testing.T) {

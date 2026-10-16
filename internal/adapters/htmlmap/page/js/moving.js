@@ -77,7 +77,7 @@ function starVerdict(from, to) {
   if (to.layer === "composition") return { ok: true, move: true, text: "Move to composition in treaty.yaml" };
   if (to.layer === "core") {
     if (to.star === holder) return { ok: true, move: true, text: `Move into the core of star ${to.star} in treaty.yaml` };
-    return { ok: false, text: `A star's core is inside its directory; drop it on the core of a star that holds it${holder ? `, star ${holder}` : ""}` };
+    return { ok: false, text: `A star's core is inside its directory; drop it on the core of its own star${holder ? `, star ${holder}` : ""}` };
   }
   if (to.layer === "spoke") {
     if (to.spoke !== ownSpoke(path)) return { ok: false, text: `A spoke is its directory: move the package's files into ${to.spoke} to put it there` };

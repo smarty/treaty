@@ -512,6 +512,7 @@ func TestTermsFindPlacingLines(t *testing.T) {
 const hexagonal = ["version: 1", "architecture: hexagonal", "layers:", "  composition: [\"cmd/**\"]", "  domain:      [\"internal/graph/**\", \"internal/rules/**\"]", "  adapter:", "    driving:   [\"web/**\"]", "    driven:    [\"store/**\", \"queue/**\"]"];
 const vertical = ["architecture: vertical", "composition: ['cmd/**']", "boundaries:", "  orders:", "    - \"**/orders/**\"   # all of it", "  billing: ['web/billing/**', store/billing/**]", "layers:", "  api: [\"**/api\"]"];
 const snowflake = ["architecture: snowflake", "composition: [\".\", \"cmd/**\", \"internal/factory/**\"]", "stars: # each star's directory", "  \".\": []", "  internal: [\"internal/core/**\"]", "  internal/blocks: [\"internal/blocks/core/**\"]   # a branch"];
+const loose = ["architecture: snowflake", "stars:", "  internal/: [\"internal/core/**\"]", "  ./internal/gate: []", "  ./: []"];
 const cases = [
   [hexagonal, ["composition"], "cmd/**", 4],
   [hexagonal, ["layers", "domain"], "internal/rules/**", 5],
@@ -527,6 +528,9 @@ const cases = [
   [snowflake, ["stars", "internal/blocks"], "internal/blocks/core/**", 6],
   [snowflake, ["stars", "internal/blocks"], "", 6],
   [snowflake, ["stars", "."], "", 4],
+  [loose, ["stars", "internal"], "internal/core/**", 3],
+  [loose, ["stars", "internal/gate"], "", 4],
+  [loose, ["stars", "."], "", 5],
 ];
 for (const [lines, path, glob, want] of cases) {
   const got = locateReason(lines, { path, glob });

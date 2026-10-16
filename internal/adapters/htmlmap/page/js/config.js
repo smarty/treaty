@@ -183,8 +183,8 @@ function locateReason(lines, reason) {
   const paths = reason.path[0] === "composition" ? [["composition"], ["layers", "composition"]] : [reason.path];
   for (const path of paths) {
     let from = 0, to = lines.length, indent = -1, keyLine = -1;
-    for (const key of path) {
-      keyLine = childKey(lines, key, from, to, indent);
+    for (const [depth, key] of path.entries()) {
+      keyLine = childKey(lines, key, from, to, indent, path[0] === "stars" && depth === 1 ? starKey : String);
       if (keyLine < 0) break;
       indent = indentOf(lines[keyLine]); from = keyLine; to = blockEnd(lines, keyLine, indent);
     }
@@ -208,9 +208,17 @@ function yamlTokens(line, isKey) {
 function indentOf(line) { return line.length - line.trimStart().length; }
 function blank(line) { const t = line.trim(); return !t || t.startsWith("#"); }
 
+// starKey writes a star's key the way the loader cleans it, so internal/
+// and ./internal both name star internal.
+function starKey(key) {
+  const result = key.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+  return result || ".";
+}
+
 // childKey finds a key among the direct children of the block from..to whose
-// key sits at indent, or at the top level when indent is -1.
-function childKey(lines, key, from, to, indent) {
+// key sits at indent, or at the top level when indent is -1; normal writes a
+// key the way the path names it.
+function childKey(lines, key, from, to, indent, normal = String) {
   let child = -1;
   for (let i = indent < 0 ? from : from + 1; i < to; i++) {
     if (blank(lines[i])) continue;
@@ -218,7 +226,7 @@ function childKey(lines, key, from, to, indent) {
     if (child < 0) child = at;
     if (at !== child) continue;
     const match = /^\s*(["']?)([^"':#]+)\1\s*:/.exec(lines[i]);
-    if (match && match[2].trim() === key) return i;
+    if (match && normal(match[2].trim()) === key) return i;
   }
 
   return -1;

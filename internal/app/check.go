@@ -63,6 +63,7 @@ func (this *Service) checkReport(base string, analysis *analysis) (result Report
 	result = analysis.report()
 	result.Notes = append(this.notes(base, analysis), result.Notes...)
 	result.Notes = append(result.Notes, staleNotes(analysis.stale)...)
+	result.Notes = append(result.Notes, analysis.config.Architecture.Unmatched(analysis.modulePaths())...)
 	if analysis.config.Unversioned {
 		result.Notes = append(result.Notes, unversionedNote)
 	}
@@ -129,6 +130,16 @@ func (this *analysis) report() Report {
 		}
 
 		result.Modules = append(result.Modules, entry)
+	}
+
+	return result
+}
+
+// modulePaths lists the paths of the head graph's modules.
+func (this *analysis) modulePaths() []string {
+	result := make([]string, 0, len(this.head.Modules))
+	for _, module := range this.head.Modules {
+		result = append(result, module.Path)
 	}
 
 	return result
