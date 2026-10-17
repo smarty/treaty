@@ -665,7 +665,7 @@ func TestSnowflake(t *testing.T) {
 		"src/billing/assembly/index.ts":  "import { Clock, Ledger } from '../contracts';\nimport { Invoices } from '../invoices';\nimport { tax } from '../tax';\nimport { report } from '../report';\nexport function build(clock: Clock): Ledger { const ledger = new Invoices(clock); tax(); report(); return ledger; }\n",
 		"src/billing/invoices/index.ts":  "import { Clock, Ledger } from '../contracts';\nexport class Invoices implements Ledger { constructor(private clock: Clock) {} add(amount: number): void { this.clock.now(); } }\n",
 		"src/billing/tax/index.ts":       "import { Invoices } from '../invoices';\nexport function tax(): number { return Invoices.length; }\n",
-		"src/billing/report/index.ts":    "import { Money } from '../../contracts';\nexport function report(): Money { return 0; }\n",
+		"src/billing/report/index.ts":    "import { Clock } from '../../contracts';\nexport function report(clock: Clock): number { return clock.now(); }\n",
 	})
 
 	service := newService(t, root)
@@ -690,8 +690,15 @@ func TestSnowflake(t *testing.T) {
 		t.Errorf("violations:\n%s\nwant\n%s", strings.Join(violations, "\n"), strings.Join(want, "\n"))
 	}
 
-	allowed, err := service.Allowed("src/billing/tax", "src/billing/invoices")
-	if want := "ports: ts:src/billing/invoices:Invoices implements ts:src/billing/contracts:Ledger, which leaf src/billing/tax may use"; err != nil || !strings.Contains(allowed, want) {
-		t.Errorf("allowed = %q, %v; want %q", allowed, err, want)
+	// allowed names the port the sibling implements, and the re-export
+	// that stands for what the leaf reached for above its star.
+	for _, c := range []struct{ from, to, want string }{
+		{"src/billing/tax", "src/billing/invoices", "ports: ts:src/billing/invoices:Invoices implements ts:src/billing/contracts:Ledger, which leaf src/billing/tax may use; depend on the port, and let an orchestrator of star src/billing hand src/billing/invoices in\n"},
+		{"src/billing/report", "src/contracts", "re-exports: ts:src/billing/contracts:Clock stands for ts:src/contracts:Clock; use those instead\n"},
+	} {
+		allowed, err := service.Allowed(c.from, c.to)
+		if err != nil || !strings.Contains(allowed, c.want) {
+			t.Errorf("allowed %s %s = %q, %v; want %q", c.from, c.to, allowed, err, c.want)
+		}
 	}
 }

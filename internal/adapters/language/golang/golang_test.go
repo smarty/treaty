@@ -755,3 +755,47 @@ func TestInitRefusesWhatItCannotPropose(t *testing.T) {
 		}
 	}
 }
+
+func TestDialectSatisfiesThroughAliases(t *testing.T) {
+	root := t.TempDir()
+	for name, text := range map[string]string{
+		"go.mod":                          "module example.com/m\n",
+		"internal/contracts/contracts.go": "package contracts\n\n// Fetcher fetches a page.\ntype Fetcher interface{ Fetch() string }\n\n// Closer closes.\ntype Closer interface{ Close() }\n",
+		"internal/blocks/contracts/c.go":  "package contracts\n\nimport \"example.com/m/internal/contracts\"\n\n// Source is a fetcher.\ntype Source = contracts.Fetcher\n\n// Name names a source.\ntype Name string\n",
+		"internal/web/web.go":             "package web\n\n// Client fetches pages.\ntype Client struct{}\n\n// Fetch fetches a page.\nfunc (*Client) Fetch() string { return \"\" }\n",
+	} {
+		file := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	g, err := NewExtractor().Extract(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dialect := NewDialect()
+	if got := dialect.Alias(g, "go:internal/blocks/contracts:Source"); got != "go:internal/contracts:Fetcher" {
+		t.Errorf("Alias(Source) = %q", got)
+	}
+
+	if got := dialect.Alias(g, "go:internal/blocks/contracts:Name"); got != "" {
+		t.Errorf("a defined type is no alias: %q", got)
+	}
+
+	// web imports neither contracts, so no implements edge links them.
+	for iface, want := range map[string]bool{
+		"go:internal/contracts:Fetcher":       true,
+		"go:internal/blocks/contracts:Source": true,
+		"go:internal/contracts:Closer":        false,
+	} {
+		if got := dialect.Satisfies(g, "go:internal/web:Client", iface); got != want {
+			t.Errorf("Satisfies(Client, %s) = %v", iface, got)
+		}
+	}
+}

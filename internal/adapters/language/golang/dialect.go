@@ -140,3 +140,63 @@ func (this *Dialect) ModulePath(path string) string {
 
 	return "."
 }
+
+// Satisfies reports whether a concrete type's methods cover an interface's,
+// the structural match Go's implicit interfaces make, whether or not the
+// type's package imports the interface's. An alias of an interface is
+// followed to it.
+//
+// Parameters:
+//   - g: the graph both symbols are in.
+//   - concrete: the concrete type's symbol id.
+//   - iface: the interface's symbol id, or an alias of one.
+//
+// Returns:
+//   - result: true when the type has every method of the interface.
+func (this *Dialect) Satisfies(g *graph.Graph, concrete, iface string) bool {
+	for range aliasHops {
+		target := this.Alias(g, iface)
+		if target == "" {
+			break
+		}
+
+		iface = target
+	}
+
+	typed, port := g.Symbol(concrete), g.Symbol(iface)
+	if typed == nil || port == nil || typed.Kind != graph.KindType || port.Kind != graph.KindInterface {
+		return false
+	}
+
+	methods := methodSets(append(g.SymbolsIn(typed.Module), g.SymbolsIn(port.Module)...))
+	return covers(methods[typed.ID], methods[port.ID])
+}
+
+// Alias names the type a type alias, type X = pkg.Y, stands for, through
+// the type use the alias's declaration records.
+//
+// Parameters:
+//   - g: the graph the symbol is in.
+//   - symbol: the symbol's id.
+//
+// Returns:
+//   - result: the id of the aliased type; empty when the symbol is not an
+//     alias, or aliases a type the graph does not hold.
+func (this *Dialect) Alias(g *graph.Graph, symbol string) string {
+	alias := g.Symbol(symbol)
+	if alias == nil || alias.Kind != graph.KindType || !strings.HasPrefix(alias.Signature, "type "+alias.Name+" = ") {
+		return ""
+	}
+
+	for _, edge := range g.Edges {
+		if edge.From == symbol && edge.Kind == graph.EdgeTypeUse && g.Symbol(edge.To) != nil {
+			return edge.To
+		}
+	}
+
+	return ""
+}
+
+// aliasHops caps how many aliases Satisfies follows, so a cycle of them
+// cannot loop.
+const aliasHops = 8

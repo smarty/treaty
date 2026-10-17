@@ -190,8 +190,16 @@ func (this *designWalk) block(block *autopen.Block) error {
 
 	modulePath := dialect.ModulePath(block.Path)
 	moduleID := graph.ModuleID(block.Language, modulePath)
-	layer := this.analysis.config.Architecture.Resolve(modulePath).Layer
-	if layer == graph.LayerUnclassified {
+	architecture := this.analysis.config.Architecture
+	place := architecture.Resolve(modulePath)
+	layer := place.Layer
+	switch {
+	case layer != graph.LayerUnclassified:
+	case architecture.Style == rules.StyleSnowflake:
+		// A snowflake places every module but a star's unlisted own
+		// package, so its guidance says what to list.
+		this.add(ItemUnclassified, moduleID, block.Line, "%s: %s", moduleID, architecture.Guidance(place))
+	default:
 		this.add(ItemUnclassified, moduleID, block.Line, "treaty.yaml places %s in no layer", moduleID)
 	}
 

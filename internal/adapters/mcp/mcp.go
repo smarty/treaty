@@ -311,7 +311,7 @@ func tools() []tool {
 		},
 		{
 			Name:        "allowed",
-			Description: "Whether one module may depend on another under the architecture's rules, the rule it would break, and what the first may use; for a snowflake, also the ports in a core that already stand for what it reached for. Call before adding an import. Modules that do not exist yet are placed by the config.",
+			Description: "Whether one module may depend on another under the architecture's rules, the rule it would break, and what the first may use; for a snowflake, also the ports it may use that something in the module it reached for already implements, and the re-exports in its own star's contracts that stand for what it reached for in a star around it. Call before adding an import. Modules that do not exist yet are placed by the config.",
 			InputSchema: schema(map[string]string{"from": "The depending module, as an id such as go:internal/app, a path, or a short name such as app; a symbol or file stands for its module.", "to": "The module depended on, given the same ways."}, "from", "to"),
 		},
 		{

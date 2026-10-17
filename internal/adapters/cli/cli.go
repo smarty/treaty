@@ -431,6 +431,35 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 	}
 }
 
+// moduleLabel names a module's placement: a snowflake's contracts E,
+// orchestrator E or leaf L, else its layer with its side, its boundary and
+// whether it is public.
+func moduleLabel(module app.ModuleReport) string {
+	switch {
+	case module.Star != "" && module.Entry != "":
+		return module.Layer + " " + module.Entry
+	case module.Star != "" && module.Layer == "leaf":
+		return "leaf " + module.Spoke
+	case module.Star != "":
+		return module.Layer
+	}
+
+	layer := module.Layer
+	if module.Side != "" {
+		layer += "/" + module.Side
+	}
+
+	if module.Boundary != "" {
+		layer = module.Boundary + "/" + layer
+	}
+
+	if module.Public {
+		layer += " (public)"
+	}
+
+	return layer
+}
+
 // text writes a command's text result, or returns its error.
 func text(stdout io.Writer) func(result string, err error) error {
 	return func(result string, err error) error {
@@ -443,32 +472,22 @@ func text(stdout io.Writer) func(result string, err error) error {
 	}
 }
 
+// checkText writes a check's report for a person: each module with its
+// placement and metrics, the notes, the review queue and the verdict. The
+// placement column is as wide as its longest label, and at least 20, so a
+// snowflake's long names keep the metrics in line.
 func checkText(report app.Report) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "Modules (%d)\n", len(report.Modules))
-	for _, module := range report.Modules {
-		layer := module.Layer
-		if module.Side != "" {
-			layer += "/" + module.Side
-		}
+	labels, width := make([]string, len(report.Modules)), 20
+	for i, module := range report.Modules {
+		labels[i] = moduleLabel(module)
+		width = max(width, len(labels[i]))
+	}
 
-		if module.Boundary != "" {
-			layer = module.Boundary + "/" + layer
-		}
-
-		switch {
-		case module.Spoke != "":
-			layer = "spoke " + module.Spoke
-		case module.Star != "":
-			layer = "core of star " + module.Star
-		}
-
-		if module.Public {
-			layer += " (public)"
-		}
-
+	for i, module := range report.Modules {
 		m := module.Metrics
-		fmt.Fprintf(&builder, "  %-44s %-20s Ca=%d Ce=%d I=%.2f A=%.2f D=%.2f", module.ID, layer, m.Afferent, m.Efferent, m.Instability, m.Abstractness, m.Distance)
+		fmt.Fprintf(&builder, "  %-44s %-*s Ca=%d Ce=%d I=%.2f A=%.2f D=%.2f", module.ID, width, labels[i], m.Afferent, m.Efferent, m.Instability, m.Abstractness, m.Distance)
 		if module.Before != nil && module.Before.Instability != m.Instability {
 			fmt.Fprintf(&builder, " (I was %.2f)", module.Before.Instability)
 		}

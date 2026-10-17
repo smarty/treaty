@@ -35,6 +35,10 @@ type analysis struct {
 	base    *graph.Graph
 	baseRef string
 
+	// dialects are the languages' readers, by id prefix, for what the
+	// tools learn from symbols beyond their edges, such as aliases.
+	dialects map[string]Dialect
+
 	// previewed marks an analysis under an architecture treaty.yaml does
 	// not declare, whose placements no line of the file explains.
 	previewed   bool
@@ -152,7 +156,7 @@ func (this *Service) analyzeGraphs(config Config, head, base revision, baseRef s
 	}
 
 	config.Architecture = bound
-	result := &analysis{config: config, head: head.graph, base: base.graph, baseRef: baseRef}
+	result := &analysis{config: config, head: head.graph, base: base.graph, baseRef: baseRef, dialects: this.dialects}
 	measured := map[string]bool{}
 	for _, suite := range this.suites {
 		measured[suite.Language()] = true

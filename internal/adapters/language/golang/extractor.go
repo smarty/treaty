@@ -590,20 +590,7 @@ func hash(text string) string {
 // set it covers, in its own module or a module it imports. Go interfaces are
 // implicit, so this is a structural match on method keys.
 func implementsEdges(g *graph.Graph, moduleImports map[string]map[string]bool) {
-	methods := map[string]map[string]bool{}
-	for _, symbol := range g.Symbols {
-		if symbol.Kind != graph.KindMethod {
-			continue
-		}
-
-		owner := graph.SymbolID(symbol.Module, symbol.Parent)
-		if methods[owner] == nil {
-			methods[owner] = map[string]bool{}
-		}
-
-		methods[owner][signatureKey(symbol.Signature)] = true
-	}
-
+	methods := methodSets(g.Symbols)
 	for _, concrete := range g.Symbols {
 		if concrete.Kind != graph.KindType || len(methods[concrete.ID]) == 0 {
 			continue
@@ -618,19 +605,47 @@ func implementsEdges(g *graph.Graph, moduleImports map[string]map[string]bool) {
 				continue
 			}
 
-			satisfied := true
-			for key := range methods[iface.ID] {
-				if !methods[concrete.ID][key] {
-					satisfied = false
-					break
-				}
-			}
-
-			if satisfied {
+			if covers(methods[concrete.ID], methods[iface.ID]) {
 				g.AddEdge(graph.Edge{From: concrete.ID, To: iface.ID, Kind: graph.EdgeImplements, File: concrete.File, Line: concrete.Line})
 			}
 		}
 	}
+}
+
+// methodSets gathers the method keys of every type and interface among
+// symbols, keyed by the owner's symbol id.
+func methodSets(symbols []*graph.Symbol) map[string]map[string]bool {
+	result := map[string]map[string]bool{}
+	for _, symbol := range symbols {
+		if symbol.Kind != graph.KindMethod {
+			continue
+		}
+
+		owner := graph.SymbolID(symbol.Module, symbol.Parent)
+		if result[owner] == nil {
+			result[owner] = map[string]bool{}
+		}
+
+		result[owner][signatureKey(symbol.Signature)] = true
+	}
+
+	return result
+}
+
+// covers reports whether a concrete type's method keys include every one
+// of an interface's, which must have at least one.
+func covers(concrete, iface map[string]bool) bool {
+	if len(iface) == 0 {
+		return false
+	}
+
+	for key := range iface {
+		if !concrete[key] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // readGoModule reads the module path a go.mod declares, or empty when the

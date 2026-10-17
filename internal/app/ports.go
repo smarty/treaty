@@ -172,6 +172,33 @@ type Dialect interface {
 
 	// ModulePath derives the module path from a header path.
 	ModulePath(path string) string
+
+	// Satisfies reports whether a concrete type meets an interface by the
+	// language's structural match, such as Go's implicit interfaces, even
+	// when its module does not import the interface's. A language whose
+	// types name what they implement reports false, since its implements
+	// edges say so already.
+	//
+	// Parameters:
+	//   - g: the graph both symbols are in.
+	//   - concrete: the concrete type's symbol id.
+	//   - iface: the interface's symbol id.
+	//
+	// Returns:
+	//   - result: true when the type's methods cover the interface's.
+	Satisfies(g *graph.Graph, concrete, iface string) bool
+
+	// Alias names the symbol another one stands for, as a Go type alias or
+	// a re-exported name does.
+	//
+	// Parameters:
+	//   - g: the graph the symbol is in.
+	//   - symbol: the symbol's id.
+	//
+	// Returns:
+	//   - result: the id of the symbol it stands for; empty when it stands
+	//     for none.
+	Alias(g *graph.Graph, symbol string) string
 }
 
 // MapRenderer draws the interactive map.

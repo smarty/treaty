@@ -756,3 +756,23 @@ func TestSnowflakeCrossingPositionInnermost(t *testing.T) {
 		t.Errorf("only a snowflake has stars: %q", got)
 	}
 }
+
+func TestSnowflakeHandover(t *testing.T) {
+	architecture := deep(t)
+	for _, c := range []struct {
+		from, to, declare string
+		reexport          []string
+		hands             string
+	}{
+		{"internal/plan", "internal/web", "the contracts of star . (internal/contracts)", nil, "an orchestrator of star ."},
+		{"internal/blocks/www", "internal/web", "the contracts of star . (internal/contracts)", []string{"the contracts of star internal/blocks (internal/blocks/contracts)"}, "the orchestrators of stars . and internal/blocks"},
+		{"internal/blocks/summarize", "internal/executor", "the contracts of star . (internal/contracts)", []string{"the contracts of star internal/blocks (internal/blocks/contracts)"}, "the orchestrators of stars . and internal/blocks"},
+		{"internal/blocks/kit", "internal/gate/pipeline", "the contracts of star . (internal/contracts)", nil, "an orchestrator of star ."},
+		{"internal/gate/models/tiny", "internal/web", "the contracts of star . (internal/contracts)", []string{"the contracts of star internal/gate (internal/gate/contracts)", "the contracts of star internal/gate/models (internal/gate/models/contracts)"}, "the orchestrators of stars ., internal/gate and internal/gate/models"},
+	} {
+		declare, reexport, hands := architecture.Handover(architecture.Resolve(c.from), architecture.Resolve(c.to))
+		if declare != c.declare || !slices.Equal(reexport, c.reexport) || hands != c.hands {
+			t.Errorf("Handover(%s, %s) = %q, %q, %q", c.from, c.to, declare, reexport, hands)
+		}
+	}
+}

@@ -169,3 +169,43 @@ func fieldName(tokens []token) string {
 
 	return ""
 }
+
+// Satisfies reports false: a class names what it implements, and the
+// extractor's implements edges say so already.
+//
+// Parameters:
+//   - g: the graph both symbols are in.
+//   - concrete: the concrete type's symbol id.
+//   - iface: the interface's symbol id.
+//
+// Returns:
+//   - result: false.
+func (this *Dialect) Satisfies(g *graph.Graph, concrete, iface string) bool {
+	return false
+}
+
+// Alias names the symbol that a name a file re-exports, export { X } from or export * from,
+// stands for: the extractor makes one in the file's module, with an edge
+// to its target and a hash drawn from the target's id.
+//
+// Parameters:
+//   - g: the graph the symbol is in.
+//   - symbol: the symbol's id.
+//
+// Returns:
+//   - result: the id of the symbol it stands for; empty when it is a
+//     declaration of its own.
+func (this *Dialect) Alias(g *graph.Graph, symbol string) string {
+	alias := g.Symbol(symbol)
+	if alias == nil {
+		return ""
+	}
+
+	for _, edge := range g.Edges {
+		if edge.From == symbol && alias.Hash == hash("alias "+edge.To) {
+			return edge.To
+		}
+	}
+
+	return ""
+}

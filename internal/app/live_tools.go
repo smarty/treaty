@@ -344,7 +344,7 @@ func (this *analysis) allowed(from, to string) (result string, err error) {
 	verdict, rule := "allowed", ""
 	if fromID != toID {
 		if allowed, broken := architecture.Check(fromPlace, toPlace); !allowed {
-			verdict, rule = "not allowed", "rule: "+broken+"\n"+this.ports(fromPlace, toPlace)
+			verdict, rule = "not allowed", "rule: "+broken+"\n"+this.ports(fromID, fromPlace, toPlace)+this.reexports(fromID, toID, fromPlace, toPlace)
 		}
 	}
 
@@ -353,15 +353,18 @@ func (this *analysis) allowed(from, to string) (result string, err error) {
 		placeName(fromPlace), strings.Join(architecture.MayUse(fromPlace), ", ")), nil
 }
 
-// portLimit caps the ports the allowed tool names for one dependency.
+// portLimit caps the ports, and the re-exports, the allowed tool names for
+// one dependency.
 const portLimit = 5
 
 // ports suggests, for a dependency the snowflake refuses sideways or out to
-// an orchestrator, the interfaces in a core that the depending module may
-// use and that something in the child it reached for already implements,
-// so the dependency can go through a port instead. Other styles, other
-// refusals and dependencies on or from unclassified modules get no line.
-func (this *analysis) ports(from, to rules.Placement) string {
+// an orchestrator, the interfaces the depending module may use that a type
+// in the child it reached for already implements, by an implements edge,
+// or satisfies, by the language's structural match through any alias, so
+// the dependency can go through a port instead. The depending module's own
+// interfaces count, exported or not. Other styles, other refusals and
+// dependencies on or from unclassified modules get no line.
+func (this *analysis) ports(fromID string, from, to rules.Placement) string {
 	architecture := this.config.Architecture
 	switch kind := architecture.Break(from, to); {
 	case kind == rules.BreakSideways:
@@ -370,34 +373,121 @@ func (this *analysis) ports(from, to rules.Placement) string {
 		return ""
 	}
 
-	star, child := architecture.Crossing(from, to)
-	var found []string
-	seen := map[string]bool{}
+	_, child := architecture.Crossing(from, to)
+	implemented := map[string]bool{}
 	for _, edge := range this.head.Edges {
-		if edge.Kind != graph.EdgeImplements {
+		if edge.Kind == graph.EdgeImplements {
+			implemented[edge.From+" "+edge.To] = true
+		}
+	}
+
+	var concretes, ports []*graph.Symbol
+	usable := map[string]bool{}
+	for _, module := range this.head.Modules {
+		if rules.Encloses(child, module.Path) {
+			for _, symbol := range this.head.SymbolsIn(module.ID) {
+				if symbol.Kind == graph.KindType && symbol.Contract {
+					concretes = append(concretes, symbol)
+				}
+			}
+		}
+
+		if allowed, _ := architecture.Check(from, placement(module)); allowed || module.ID == fromID {
+			usable[module.ID] = true
+		}
+	}
+
+	targets := map[string]string{}
+	for _, symbol := range this.head.Symbols {
+		if !usable[symbol.Module] || !symbol.Contract && symbol.Module != fromID {
 			continue
 		}
 
-		implementation, port := this.head.Symbol(edge.From), this.head.Symbol(edge.To)
-		if implementation == nil || port == nil {
+		if target := this.aliased(symbol.ID); symbol.Kind == graph.KindInterface || target != symbol.ID {
+			ports, targets[symbol.ID] = append(ports, symbol), target
+		}
+	}
+
+	var found []string
+	for _, concrete := range concretes {
+		language, _, _ := strings.Cut(concrete.Module, ":")
+		dialect := this.dialects[language]
+		for _, port := range ports {
+			target := targets[port.ID]
+			switch {
+			case implemented[concrete.ID+" "+port.ID]:
+				found = append(found, concrete.ID+" implements "+port.ID)
+			case implemented[concrete.ID+" "+target], dialect != nil && dialect.Satisfies(this.head, concrete.ID, target):
+				found = append(found, concrete.ID+" satisfies "+port.ID)
+			}
+		}
+	}
+
+	declare, carriers, hands := architecture.Handover(from, to)
+	if len(found) == 0 {
+		reexport := ""
+		if len(carriers) > 0 {
+			reexport = ", and re-export it in " + joinAnd(carriers)
+		}
+
+		return fmt.Sprintf("ports: nothing in %s implements an interface %s may use; declare one in %s%s\n", child, placeName(from), declare, reexport)
+	}
+
+	sort.Strings(found)
+	found = slices.Compact(found)
+	if len(found) > portLimit {
+		found = found[:portLimit]
+	}
+
+	return fmt.Sprintf("ports: %s, which %s may use; depend on the port, and let %s hand %s in\n", strings.Join(found, "; "), placeName(from), hands, child)
+}
+
+// reexports names, for a leaf the snowflake refuses the contracts of a star
+// around its own, the symbols its own star's contracts already re-export
+// from those contracts, so it can use them instead: those standing for the
+// symbols it references there when the dependency exists, else every one.
+// Other refusals get no line.
+func (this *analysis) reexports(fromID, toID string, from, to rules.Placement) string {
+	architecture := this.config.Architecture
+	if architecture.Break(from, to) != rules.BreakOut || from.Layer != graph.LayerLeaf || to.Layer != graph.LayerContracts {
+		return ""
+	}
+
+	// reached tells whether a symbol lies in the contracts depended on.
+	reached := func(id string) bool {
+		symbol := this.head.Symbol(id)
+		if symbol == nil {
+			return false
+		}
+
+		module := this.head.Module(symbol.Module)
+		return module != nil && module.Layer == to.Layer && module.Star == to.Star && module.CoreEntry == to.Entry
+	}
+
+	referenced := map[string]bool{}
+	for _, edge := range this.head.Edges {
+		if symbol := this.head.Symbol(edge.From); symbol != nil && symbol.Module == fromID && reached(edge.To) {
+			referenced[edge.To] = true
+		}
+	}
+
+	var found []string
+	for _, symbol := range this.head.Symbols {
+		module := this.head.Module(symbol.Module)
+		if module == nil || module.Layer != graph.LayerContracts || module.Star != from.Star {
 			continue
 		}
 
-		owner, inside := this.head.Module(implementation.Module), this.head.Module(port.Module)
-		if owner == nil || inside == nil || !rules.Encloses(child, owner.Path) {
-			continue
+		for hop, seen := this.alias(symbol.ID), 0; hop != "" && seen < aliasHops; hop, seen = this.alias(hop), seen+1 {
+			if reached(hop) && (len(referenced) == 0 || referenced[hop]) {
+				found = append(found, symbol.ID+" stands for "+hop)
+				break
+			}
 		}
-
-		if allowed, _ := architecture.Check(from, placement(inside)); !allowed || seen[edge.From+" "+edge.To] {
-			continue
-		}
-
-		seen[edge.From+" "+edge.To] = true
-		found = append(found, implementation.ID+" implements "+port.ID)
 	}
 
 	if len(found) == 0 {
-		return fmt.Sprintf("ports: nothing in %s implements an interface %s may use; declare one in the contracts of star %s\n", child, placeName(from), star)
+		return fmt.Sprintf("re-exports: the contracts of star %s re-export nothing from %s yet; alias what it needs there\n", from.Star, to.Entry)
 	}
 
 	sort.Strings(found)
@@ -405,7 +495,39 @@ func (this *analysis) ports(from, to rules.Placement) string {
 		found = found[:portLimit]
 	}
 
-	return fmt.Sprintf("ports: %s, which %s may use; depend on the port, and let the orchestrators hand %s in\n", strings.Join(found, "; "), placeName(from), child)
+	return fmt.Sprintf("re-exports: %s; use those instead\n", strings.Join(found, "; "))
+}
+
+// aliasHops caps how many aliases in a row the tools follow, so a cycle of
+// them cannot loop.
+const aliasHops = 8
+
+// alias names the symbol a symbol stands for, as its language's dialect
+// reads aliases and re-exports, or empty when it stands for none.
+func (this *analysis) alias(id string) string {
+	module, _ := graph.SplitSymbolID(id)
+	language, _, _ := strings.Cut(module, ":")
+	dialect := this.dialects[language]
+	if dialect == nil {
+		return ""
+	}
+
+	return dialect.Alias(this.head, id)
+}
+
+// aliased follows a symbol through every alias in a row to the symbol they
+// stand for, or returns it when it is no alias.
+func (this *analysis) aliased(id string) string {
+	for range aliasHops {
+		hop := this.alias(id)
+		if hop == "" {
+			break
+		}
+
+		id = hop
+	}
+
+	return id
 }
 
 // find lists the symbols whose id contains query, contracts first.

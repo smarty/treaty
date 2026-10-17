@@ -279,6 +279,40 @@ func (this Architecture) Crossing(from, to Placement) (star, child string) {
 	return star, this.childOf(star, to)
 }
 
+// Handover words how a port carries a refused dependency of a snowflake:
+// the contracts of the deepest star around both ends declare it, the
+// contracts of each star on the way down to the depending module re-export
+// it, and the orchestrators of those stars hand the implementation in.
+//
+// Parameters:
+//   - from: the depending module's placement.
+//   - to: the placement of the module depended on.
+//
+// Returns:
+//   - declare: the contracts that declare the port, such as the contracts
+//     of star . (internal/contracts).
+//   - reexport: the contracts that re-export it, outer first; none when
+//     the depending module may use the declaring contracts already.
+//   - hands: who hands the implementation in, such as an orchestrator of
+//     star . or the orchestrators of stars . and internal/blocks.
+func (this Architecture) Handover(from, to Placement) (declare string, reexport []string, hands string) {
+	common := this.common(from.Star, to.Star)
+	carriers := this.between(common, from.Star)
+	if from.Layer == graph.LayerLeaf && from.Star != common {
+		carriers = append(carriers, from.Star)
+	}
+
+	if len(carriers) == 0 {
+		return this.contractsOf(common), nil, "an orchestrator of star " + common
+	}
+
+	for _, carrier := range carriers {
+		reexport = append(reexport, this.contractsOf(carrier))
+	}
+
+	return this.contractsOf(common), reexport, "the orchestrators of stars " + joinAnd(append([]string{common}, carriers...))
+}
+
 // Encloses reports whether a star directory holds a path, or is that
 // path. The repository root, ".", holds everything.
 //
@@ -490,22 +524,13 @@ func (this Architecture) sidewaysRule(from, to Placement) string {
 
 	fix := "declare what it needs in " + this.contractsOf(common)
 	if to.Layer != graph.LayerContracts {
-		carriers := this.between(common, from.Star)
-		if from.Layer == graph.LayerLeaf && from.Star != common {
-			carriers = append(carriers, from.Star)
-		}
-
-		reexport, hands := "", "an orchestrator of star "+common
+		declare, carriers, hands := this.Handover(from, to)
+		reexport := ""
 		if len(carriers) > 0 {
-			var each []string
-			for _, carrier := range carriers {
-				each = append(each, this.contractsOf(carrier))
-			}
-
-			reexport, hands = ", re-export it in "+joinAnd(each), "the orchestrators of stars "+joinAnd(append([]string{common}, carriers...))
+			reexport = ", re-export it in " + joinAnd(carriers)
 		}
 
-		fix = fmt.Sprintf("declare a port in %s%s, implement it in %s, and let %s hand it in", this.contractsOf(common), reexport, theirs, hands)
+		fix = fmt.Sprintf("declare a port in %s%s, implement it in %s, and let %s hand it in", declare, reexport, theirs, hands)
 	}
 
 	return fmt.Sprintf("%s may not depend on %s: %s and %s are sibling spokes of star %s, and spokes never depend sideways%s; %s",

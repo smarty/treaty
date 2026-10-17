@@ -143,8 +143,8 @@ func TestInstructionsNameEveryArchitecture(t *testing.T) {
 	}
 
 	for _, each := range tools() {
-		if each.Name == "allowed" && !strings.Contains(each.Description, "ports") {
-			t.Fatalf("allowed must say it names ports: %s", each.Description)
+		if each.Name == "allowed" && (!strings.Contains(each.Description, "ports") || !strings.Contains(each.Description, "re-exports")) {
+			t.Fatalf("allowed must say it names ports and re-exports: %s", each.Description)
 		}
 	}
 }
