@@ -536,9 +536,9 @@ func ringLayout(modules []app.MapModule, rings []string, sided bool) (result Lay
 // Notes:
 //   - Stars are measured bottom-up in their own frames, then placed
 //     top-down, each branch turned to point away from its parent's core.
-//     A core's items turn with it, on full circles that turn into
-//     themselves; a leaf's packed modules are never turned, since the
-//     circle bounding them turns into itself.
+//     A core's items are never turned, so on every star its first
+//     orchestrator stays at the top, and a leaf's packed modules are never
+//     turned either; each lies on a circle that turns into itself.
 //   - Rings are emitted contracts first, deepest first, then cores,
 //     deepest first, then leaves, then stars, deepest first. The page draws
 //     them in reverse, so contracts paint over their core's band and the
@@ -756,7 +756,8 @@ func measureStar(nodes map[string]*rules.StarNode, dir string, depth int, module
 
 // placeStar emits a measured star, its contracts, its orchestrators, its
 // leaves and, in turn, its branches, with its center at x, y and its
-// outward axis turned by angle.
+// outward axis turned by angle. Its core's items keep the turn they were
+// measured with, so its first orchestrator stays at the top.
 //
 // Parameters:
 //   - result: the layout to emit into.
@@ -769,12 +770,10 @@ func placeStar(result *Layout, rings *[4][]Ring, shape *starShape, x, y, angle f
 	rings[1] = append(rings[1], Ring{Layer: ringCore, Tone: 1, Radius: round(shape.coreR), X: round(x), Y: round(y), Star: shape.dir, Label: ringCore})
 	rings[0] = append(rings[0], Ring{Layer: graph.LayerContracts, Tone: 0, Radius: round(shape.contractsR), X: round(x), Y: round(y), Star: shape.dir, Label: graph.LayerContracts})
 	for _, placed := range shape.contracts {
-		placed.x, placed.y = rotate(placed.x, placed.y, angle)
 		emit(result, placed, x, y, graph.LayerContracts+":"+shape.dir, graph.LayerContracts, "", 0)
 	}
 
 	for _, placed := range shape.orchestrators {
-		placed.x, placed.y = rotate(placed.x, placed.y, angle)
 		emit(result, placed, x, y, graph.LayerOrchestrator+":"+shape.dir, graph.LayerOrchestrator, "", 0)
 	}
 

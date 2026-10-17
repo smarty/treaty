@@ -355,9 +355,14 @@ function inspect() {
   } else if (sel.type === "edge") {
     const e = sel.edge;
     // A snowflake end is named by its contracts or orchestrator entry or its
-    // leaf, since its layer alone does not say which.
+    // leaf, since its layer alone does not say which. A collapsed group that
+    // spans several is named by its layer and star.
     const where = (layer, m) => STAR_STYLES.includes(D.architecture) && m ? placeName(m) : layer;
-    const end = key => { const g = groups.get(key), m = modules.get(key); return g ? { label: g.path + "/", layer: where(g.layer, modules.get(g.modules[0])) } : { label: m.label || m.path, layer: where(m.layer, m) }; };
+    const groupWhere = g => {
+      const ms = g.modules.map(id => modules.get(id)).filter(Boolean), names = [...new Set(ms.map(m => where(g.layer, m)))];
+      return names.length === 1 ? names[0] : STAR_STYLES.includes(D.architecture) && ms.length && ms[0].star ? `${g.layer} of star ${ms[0].star}` : g.layer;
+    };
+    const end = key => { const g = groups.get(key), m = modules.get(key); return g ? { label: g.path + "/", layer: groupWhere(g) } : { label: m.label || m.path, layer: where(m.layer, m) }; };
     const a = end(e.from), b = end(e.to);
     box.appendChild(h("h3", {}, `${shortName(a.label)} → ${shortName(b.label)}`));
     const p = h("p");
