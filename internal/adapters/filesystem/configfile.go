@@ -123,9 +123,13 @@ func checkKeys(mapping *yaml.Node, path string) error {
 		}
 
 		inner := strings.TrimPrefix(path+"."+key.Value, ".")
-		if path == "" && key.Value == "stars" && entry.Kind == yaml.MappingNode {
-			if err := checkStarKeys(entry); err != nil {
-				return err
+		if path == "" && key.Value == "stars" {
+			// Only a snowflake's stars have a shape to check; under any
+			// other style architecture refuses them whatever their shape.
+			if style := value(mapping, "architecture"); style != nil && style.Value == rules.StyleSnowflake && entry.Kind == yaml.MappingNode {
+				if err := checkStarKeys(entry); err != nil {
+					return err
+				}
 			}
 
 			continue
@@ -154,8 +158,9 @@ func checkKeys(mapping *yaml.Node, path string) error {
 }
 
 // checkStarKeys refuses a key under a star other than contracts and
-// orchestrators. A star that is not a mapping is left for the
-// architecture to refuse.
+// orchestrators, and either listed twice, which decoding the stars as nodes
+// would let pass, reading the first. A star that is not a mapping is left
+// for the architecture to refuse.
 func checkStarKeys(stars *yaml.Node) error {
 	for i := 0; i+1 < len(stars.Content); i += 2 {
 		dir, star := stars.Content[i].Value, stars.Content[i+1]
@@ -163,10 +168,18 @@ func checkStarKeys(stars *yaml.Node) error {
 			continue
 		}
 
+		first := map[string]int{}
 		for j := 0; j+1 < len(star.Content); j += 2 {
-			if key := star.Content[j]; !slices.Contains(starKeys, key.Value) {
-				return fmt.Errorf("line %d: %w %q under stars.%s; %s", key.Line, ErrUnknownKey, key.Value, dir, suggest(key.Value, starKeys, "a star maps contracts and orchestrators"))
+			key := star.Content[j]
+			if !slices.Contains(starKeys, key.Value) {
+				return fmt.Errorf("line %d: %w %q under %s; %s", key.Line, ErrUnknownKey, key.Value, starPath(dir), suggest(key.Value, starKeys, "a star maps contracts and orchestrators"))
 			}
+
+			if line, seen := first[key.Value]; seen {
+				return fmt.Errorf("line %d: %s is listed twice under %s, first at line %d", key.Line, key.Value, starPath(dir), line)
+			}
+
+			first[key.Value] = key.Line
 		}
 	}
 

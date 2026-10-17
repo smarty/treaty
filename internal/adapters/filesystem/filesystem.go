@@ -476,16 +476,22 @@ func (this configFile) architecture() (result rules.Architecture, err error) {
 		result.Boundaries = append(result.Boundaries, rules.Boundary{Name: name, Globs: globs})
 	}
 
-	if this.Stars.Kind != 0 && this.Stars.Kind != yaml.MappingNode {
+	// Stars under another style are refused before their shape is judged,
+	// and left alone under an unknown one, for Validate to name the style.
+	if this.Stars.Kind != 0 && result.Style != rules.StyleSnowflake && slices.Contains(rules.Styles, result.Style) {
+		return result, fmt.Errorf("%w: stars apply only to the snowflake architecture", rules.ErrArchitecture)
+	}
+
+	if this.Stars.Kind != 0 && result.Style == rules.StyleSnowflake && this.Stars.Kind != yaml.MappingNode {
 		return result, fmt.Errorf("%w: stars must map each star's directory to its contracts and orchestrators", rules.ErrArchitecture)
 	}
 
-	for i := 0; i+1 < len(this.Stars.Content); i += 2 {
+	for i := 0; result.Style == rules.StyleSnowflake && i+1 < len(this.Stars.Content); i += 2 {
 		dir, value := this.Stars.Content[i].Value, this.Stars.Content[i+1]
 
 		// A glob keeps its spelling for Validate to refuse; only a
 		// directory is cleaned, so internal/ and internal name one star.
-		if !strings.ContainsAny(dir, "*?[") && dir != "" {
+		if !strings.ContainsAny(dir, "*?") && dir != "" {
 			dir = path.Clean(dir)
 		}
 
@@ -558,28 +564,67 @@ func (this configFile) architecture() (result rules.Architecture, err error) {
 // decodeStar reads one star's value: a mapping of contracts and
 // orchestrators to lists of directories, or nothing yet, written as null or
 // {}. Its entries are kept as written, for Validate to judge.
+//
+// Notes:
+//   - A star written as a list is the earlier shape, from before a core
+//     held contracts and orchestrators, so its error says how to split it.
 func decodeStar(dir string, star *yaml.Node) (result rules.Star, err error) {
 	result.Dir = dir
-	if star.Kind == yaml.ScalarNode && star.Tag == "!!null" {
+	if null(star) {
 		return result, nil
 	}
 
+	contracts := path.Join(dir, "contracts")
+	if dir == "." {
+		contracts = "internal/contracts"
+	}
+
+	if star.Kind == yaml.SequenceNode {
+		return result, fmt.Errorf("line %d: %w: %s is a list, the earlier shape of a star; split its entries into contracts and orchestrators, such as %s: {contracts: [%q], orchestrators: [%q]}", star.Line, rules.ErrArchitecture, starPath(dir), dir, contracts, dir)
+	}
+
 	if star.Kind != yaml.MappingNode {
-		return result, fmt.Errorf("line %d: %w: stars.%s must map contracts and orchestrators to lists of directories, such as %s: {contracts: [%q]}", star.Line, rules.ErrArchitecture, dir, dir, path.Join(dir, "contracts"))
+		return result, fmt.Errorf("line %d: %w: %s must map contracts and orchestrators to lists of directories, such as %s: {contracts: [%q]}", star.Line, rules.ErrArchitecture, starPath(dir), dir, contracts)
 	}
 
 	for _, list := range []struct {
-		key     string
-		entries *[]string
-	}{{"contracts", &result.Contracts}, {"orchestrators", &result.Orchestrators}} {
-		if node := value(star, list.key); node != nil {
-			if err := node.Decode(list.entries); err != nil {
-				return result, fmt.Errorf("stars.%s.%s: %w", dir, list.key, err)
+		key, example string
+		entries      *[]string
+	}{{"contracts", contracts, &result.Contracts}, {"orchestrators", dir, &result.Orchestrators}} {
+		node := value(star, list.key)
+		if node == nil || null(node) {
+			continue
+		}
+
+		if node.Kind != yaml.SequenceNode {
+			return result, fmt.Errorf("line %d: %w: %s.%s must be a list of directories, such as %s: [%q]", node.Line, rules.ErrArchitecture, starPath(dir), list.key, list.key, list.example)
+		}
+
+		for _, item := range node.Content {
+			if item.Kind != yaml.ScalarNode {
+				return result, fmt.Errorf("line %d: %w: %s.%s must be a list of directories, such as %s: [%q]", item.Line, rules.ErrArchitecture, starPath(dir), list.key, list.key, list.example)
 			}
+
+			*list.entries = append(*list.entries, item.Value)
 		}
 	}
 
 	return result, nil
+}
+
+// starPath names a star's place in treaty.yaml for an error, quoting the
+// root's key so it does not read as stars..
+func starPath(dir string) string {
+	if dir == "." {
+		return `stars."."`
+	}
+
+	return "stars." + dir
+}
+
+// null reports whether a node is YAML's null, written as nothing or ~.
+func null(node *yaml.Node) bool {
+	return node.Kind == yaml.ScalarNode && node.Tag == "!!null"
 }
 
 func (this *Workspace) designPath(name string) (string, error) {
