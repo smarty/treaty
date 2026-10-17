@@ -88,6 +88,13 @@ Or build it with Go 1.27 or later:
 go install github.com/smarty/treaty/cmd/treaty@latest
 ```
 
+The `snowflake` architecture is newer than v0.4.0. Until the next release,
+build Treaty from source to use it:
+
+```sh
+go install github.com/smarty/treaty/cmd/treaty@master
+```
+
 `treaty version` prints the version you have.
 
 ## Getting started
@@ -145,8 +152,10 @@ rules:
 
 ## Architectures
 
-Every architecture shares two rules: composition (usually `main`) may depend
-on everything, and nothing may depend on composition.
+Every architecture but `snowflake` shares two rules: composition (usually
+`main`) may depend on everything, and nothing may depend on composition. In
+`snowflake`, composition is orchestration, done by orchestrators in the core
+of their star.
 
 | Architecture | Rules | Map |
 | --- | --- | --- |
@@ -156,7 +165,7 @@ on everything, and nothing may depend on composition.
 | `layered` | A layer may use itself and every layer below it. Skipping a layer is allowed; forbidding it is a team decision | Horizontal bands |
 | `vertical` | A boundary may use itself and shared code, never another boundary. Optional layers inside every boundary | A column per boundary, or a grid of boundaries by layer |
 | `modular` | A boundary may use its own packages, other boundaries' public packages and shared code. No cycles between boundaries | An island per boundary |
-| `snowflake` | A star of stars: each star's core holds its contracts and orchestrators, and its other child directories are spokes. A spoke may use its own star's core and the cores around it, never a sibling spoke or anything in a sibling branch; a core never uses its own spokes | Each core ringed by its spokes, and each branch a smaller star in its parent's ring |
+| `snowflake` | A star of stars: each star's core holds its contracts and its orchestrators, and its other children that hold a package are spokes, leaves or branches. A spoke may use only its own star's core. Contracts reach one star out or in, to contracts; an orchestrator also wires its own leaves and uses its branches' cores. Nothing runs sideways, not even between sibling cores | Each star's contracts inside the band of its orchestrators, ringed by its spokes, and each branch a smaller star in its parent's ring |
 
 The layer architectures place modules in layers: their names are fixed for
 `hexagonal` and `clean`, and yours for `layered`; see
@@ -172,24 +181,36 @@ boundaries:
   billing: ["web/billing/**", "store/billing/**"]
 ```
 
-`snowflake` names only [stars](configuration.md#stars), each a directory and
-the globs of its core; every other child directory of a star is a spoke,
-found without being listed. Orchestrators in a core reach their spokes only
-through ports declared there, and composition hands the implementations in,
-as in the Presentation-Abstraction-Control and Mediator patterns, applied
-recursively:
+`snowflake` names only [stars](configuration.md#stars): each star's
+directory, with the directories of its contracts and its orchestrators. Core
+is a region of the map, not a package name. Every other child of a star that
+holds a package is a spoke, found without being listed, and directories that
+hold no package, such as `internal/` and `cmd/`, are looked through. A spoke
+depends on interfaces in its star's contracts, and an orchestrator builds
+the implementations and hands them in: dependency inversion, applied at
+every level, in the lineage of Koala's compound components and the
+Presentation-Abstraction-Control and Mediator patterns:
 
 ```yaml
 architecture: snowflake
-composition: ["cmd/**", "internal/factory/**"]
 stars:
-  internal:        ["internal/core/**"]
-  internal/blocks: ["internal/blocks/core/**"]
+  .:
+    contracts:     ["internal/contracts"]
+    orchestrators: [".", "internal/assembly", "internal/executor"]
+  internal/blocks:
+    contracts:     ["internal/blocks/contracts"]
+    orchestrators: ["internal/blocks/kit"]
+  internal/gate:
+    contracts:     ["internal/gate/contracts"]
+    orchestrators: ["internal/gate/pipeline"]
 ```
 
-A sideways dependency accepted for now is an entry under
-[`rules.ignore`](configuration.md#ignoring-a-finding), with its reason, like
-any other violation.
+A snowflake dependency that breaks the rules and is accepted for now is an
+entry under [`rules.ignore`](configuration.md#ignoring-a-finding), with its
+reason, like any other violation.
+
+Treaty reads no test files, in any language, so their imports are not
+checked against the rules.
 
 Treaty reads the whole repository, including sub-trees with their own
 `go.mod`. Their imports resolve through their own module paths, and imports
@@ -250,10 +271,12 @@ interfaces, methods, then functions, each by name: the contracts clockwise
 from the left end of the file's bracket on the border, and the internals
 across the file's cell. A package that holds a `go.mod` shows it in the first
 cell of its ring, at 12:00; click it to read the file.
-In `snowflake`, each star's core sits at its center with its spokes on a ring
-around it, and a branch is a smaller star in its parent's ring. Allowed
-dependencies run inward in lanes, and a sideways one bows outward between
-arms as a violation. A star's menu has *Zoom to this star*.
+In `snowflake`, each star's core sits at its center: its contracts in an
+inner hexagon, its orchestrators in the band around them, and its spokes on
+a ring around that; a branch is a smaller star in its parent's ring. There
+is no composition ring. Allowed dependencies run inward in lanes, and a
+sideways one bows outward between arms as a violation. A star's menu has
+*Zoom to this star*.
 Directories with several packages are drawn as groups, which collapse when
 they are small on screen. Select a group to see its modules measured as one:
 its coupling across its edge, instability, abstractness and distance, and the
@@ -281,11 +304,12 @@ up, and the tip says what a drop will do. Escape puts the module back.
   Treaty adds the module's exact path to that boundary's globs, or to
   `shared` or `composition`, the same way. Its layer inside a boundary still
   comes from `layers`, and a move never creates a boundary.
-- **Into or out of a core, or to composition** (`snowflake`): Treaty adds the
-  module's exact path to the core of its own star, the innermost star
-  holding it, takes it out again so it returns to its own directory's spoke,
-  or adds it to `composition`. A spoke is its directory, so moving a module
-  to another spoke means moving its files.
+- **Into the contracts or the orchestrators, or out to its spoke**
+  (`snowflake`): Treaty adds the module's directory to the contracts or the
+  orchestrators of its own star, the innermost star holding it, taking it
+  out of the other list, or takes it out of both so it returns to its own
+  spoke. A spoke is its directory, so moving a module to another spoke means
+  moving its files.
 
 Moves wait while another architecture is previewed.
 
@@ -348,7 +372,7 @@ You and the agent always look at the same graph:
 | `slice` | The context for working on one symbol, file or module, one line per entry with file:line |
 | `source` | Just the code needed: a symbol from its documentation to its last line, or a file's lines, numbered. A long file gives its outline unless asked for all of it |
 | `impact` | Everything that depends on a symbol, file or module, transitively, before an edit |
-| `allowed` | Whether one module may depend on another, before an import is added; in `snowflake`, a refusal names the ports in a core the source may use that something in the target's spoke or branch already implements |
+| `allowed` | Whether one module may depend on another, before an import is added; in `snowflake`, a refusal names the ports the source may use that something in the target's spoke or branch already implements or satisfies, or the re-exports in its own star's contracts that stand for what it reached for |
 | `changes` | What changed in the architecture since the baseline, including new violations |
 | `plan` | The agent's intended contracts in AutoPen, drawn on the map as unbuilt and filled in as the code is written |
 | `selection` | What the person has selected on the map, so they can point and say "work here" |
@@ -404,6 +428,9 @@ report on the pull request and keeps the map of the change. On GitHub:
     fetch-depth: 0
 - uses: smarty/treaty@v0.4.0
 ```
+
+A `snowflake` needs a Treaty newer than v0.4.0: until the next release, use
+`smarty/treaty@master` with `version: source`.
 
 On Bitbucket Pipelines it publishes a Code Insights report, with no token
 needed. [ci.md](ci.md) has both setups, and what to do when a clone is too

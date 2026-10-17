@@ -47,6 +47,16 @@ artifact, and fails the job when the check fails. Its inputs:
 
 Its output `result` is `pass` or `fail`.
 
+The `snowflake` architecture is newer than v0.4.0. Until the next release,
+run the action from `master` with `version: source`, which builds it with Go,
+so set Go up first (for example with `actions/setup-go`):
+
+```yaml
+      - uses: smarty/treaty@master
+        with:
+          version: source
+```
+
 GitHub checks out a pull request merged into its base branch, so the check
 sees what the base branch would get. GitHub shows at most ten error and ten
 warning annotations per step; the job summary lists every finding that fails
@@ -80,6 +90,10 @@ annotated, and the pull request shows it under Reports and on the changed
 lines. Inside a pipeline, Bitbucket's own proxy authorizes the report, so no
 token or app password is needed. A new build of the same commit replaces the
 report.
+
+For a `snowflake`, which needs a Treaty newer than v0.4.0, replace the
+`curl` line with `go install github.com/smarty/treaty/cmd/treaty@master` and
+run `$(go env GOPATH)/bin/treaty ci` until the next release.
 
 ## Anywhere else
 
