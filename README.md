@@ -165,7 +165,7 @@ of their star.
 | `layered` | A layer may use itself and every layer below it. Skipping a layer is allowed; forbidding it is a team decision | Horizontal bands |
 | `vertical` | A boundary may use itself and shared code, never another boundary. Optional layers inside every boundary | A column per boundary, or a grid of boundaries by layer |
 | `modular` | A boundary may use its own packages, other boundaries' public packages and shared code. No cycles between boundaries | An island per boundary |
-| `snowflake` | A star of stars: each star's core holds its contracts and its orchestrators, and its other children that hold a package are spokes, leaves or branches. A spoke may use only its own star's core. Contracts reach one star out or in, to contracts; an orchestrator also wires its own leaves and uses its branches' cores. Nothing runs sideways, not even between sibling cores | Each star's contracts inside the band of its orchestrators, ringed by its spokes, and each branch a smaller star in its parent's ring |
+| `snowflake` | A star of stars: each star's core holds its contracts and its orchestrators, and its other children that hold a package are spokes, leaves or branches. A spoke may use only its own star's core. Contracts use only contracts, their star's and those one star out or in; an orchestrator uses its star's core, wires its own leaves and uses its branches' cores. Nothing runs sideways, not even between sibling cores | Each star's contracts inside the band of its orchestrators, ringed by its spokes, and each branch a smaller star in its parent's ring |
 
 The layer architectures place modules in layers: their names are fixed for
 `hexagonal` and `clean`, and yours for `layered`; see
@@ -274,8 +274,9 @@ cell of its ring, at 12:00; click it to read the file.
 In `snowflake`, each star's core sits at its center: its contracts in an
 inner hexagon, its orchestrators in the band around them, and its spokes on
 a ring around that; a branch is a smaller star in its parent's ring. There
-is no composition ring. Allowed dependencies run inward in lanes, and a
-sideways one bows outward between arms as a violation. A star's menu has
+is no composition ring. Allowed dependencies run straight in lanes, between
+a star's core and its own spokes or the next star's core, and only a
+violation bows: a sideways one bows outward between arms. A star's menu has
 *Zoom to this star*.
 Directories with several packages are drawn as groups, which collapse when
 they are small on screen. Select a group to see its modules measured as one:

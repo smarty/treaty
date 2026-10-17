@@ -51,7 +51,7 @@ Every other key is an error.
 | `layered` | A layer may use itself and every layer below it. | `composition`, `layers` with names of your own, at least one |
 | `vertical` | A boundary may use itself and shared code, never another boundary. | `composition`, `shared`, `boundaries`, and optionally `layers` |
 | `modular` | A boundary may use its own modules, the public modules of other boundaries, and shared code. Boundaries may not depend on each other in a cycle. | `composition`, `shared`, `boundaries`, `public` |
-| `snowflake` | The code is a star of stars, each with a core of contracts and orchestrators. A spoke may use only its own star's core. Contracts may use the core and the contracts one star out or in; an orchestrator may also wire its own leaves and use its branches' cores. Nothing runs sideways, not even between the cores of sibling branches. | `stars` |
+| `snowflake` | The code is a star of stars, each with a core of contracts and orchestrators. A spoke may use only its own star's core. Contracts may use their star's contracts and the contracts one star out or in; an orchestrator may use its star's core, wire its own leaves and use its branches' cores. Nothing runs sideways, not even between the cores of sibling branches. | `stars` |
 
 In every architecture but `none` and `snowflake`, composition may use
 everything and nothing may use composition. A snowflake has no composition:
@@ -168,7 +168,7 @@ stars directly inside it.
 | A module in star S that is | May use |
 | --- | --- |
 | a leaf | itself, every package nested in it included; S's contracts; S's orchestrators |
-| contracts | S's core; the parent's contracts; each branch's contracts |
+| contracts | S's contracts; the parent's contracts; each branch's contracts |
 | an orchestrator | S's core; S's leaves, to wire them; each branch's core, its contracts and its orchestrators; the parent's contracts |
 
 So:
@@ -176,9 +176,10 @@ So:
 - **A spoke uses only its own star's core.** It never uses a sibling spoke,
   and never the core of a star further out. A leaf of `internal/blocks`
   that uses `internal/contracts` breaks the rules.
-- **The core's packages use each other.** Contracts never use a spoke or
-  another star's orchestrators; an orchestrator never uses a branch's
-  spokes, only the branch's core.
+- **Contracts use only contracts.** Contracts never use a spoke or an
+  orchestrator, not even one of their own star: what an orchestrator does
+  is declared in contracts and implemented by it. An orchestrator uses its
+  star's whole core, but never a branch's spokes, only the branch's core.
 - **One level at a time.** A core reaches one star out, to its parent's
   contracts, and one star in, to its branches' cores. What a branch's
   spokes need from above reaches them through the branch's own contracts,
@@ -198,11 +199,14 @@ So:
   is listed. One that only uses its star's core, such as a probe that
   imports the root package alone, is a leaf and needs no line.
 
-Every allowed dependency between regions points at a core of the same star
-or of a star one level away, so the only cycles left possible lie inside one
-core or one leaf, where Go already forbids package cycles. A snowflake
-therefore needs no cycle rule and no rule name of its own: its violations
-are `layer_violation`s, and each says why and what to do, such as:
+The rules do not rule out cycles between regions: an orchestrator wires a
+leaf that may use the orchestrator back, and a star's contracts and a
+branch's contracts may use each other. Go refuses any cycle of packages when
+it builds, but in TypeScript, JavaScript and Python such a cycle compiles,
+and the snowflake does not report it; `dependency_cycles` finds cycles only
+between the boundaries of a `modular` architecture. A snowflake has no rule
+name of its own: its violations are `layer_violation`s, and each says why
+and what to do, such as:
 
 ```
 leaf internal/blocks/www may not depend on contracts internal/contracts: a spoke may use only the core of its own star, internal/blocks, never the core of star . around it; re-export what it needs in the contracts of star internal/blocks (internal/blocks/contracts)
@@ -224,7 +228,9 @@ A dependency that breaks these rules is accepted only as an entry under
 - **Entries are directories**, relative to the repository root like every
   path in the file, so `internal/blocks` lists `internal/blocks/contracts`,
   not `contracts`, and never globs, so a new directory stays a spoke until
-  the file names it. An entry is the star's own directory, naming its own
+  the file names it. `*` and `?` are refused, since a directory name cannot
+  hold them on Windows; brackets are read as they are, so a file-routed
+  directory such as `app/[slug]` can be an entry or a star. An entry is the star's own directory, naming its own
   package, or one child of the star, reached through directories that hold
   no package. A child entry claims its package and every package nested
   under it.
@@ -242,10 +248,13 @@ A dependency that breaks these rules is accepted only as an entry under
 - **The stars must fit the code.** A package in a directory placement looks
   through, such as an `internal/doc.go` above the branch `internal/blocks`,
   fails the check with the misfit, since it would make `internal` a leaf
-  holding the branch. A base revision that does not fit is still compared,
-  with its misfit directories looked through.
+  holding the branch. So does an entry that holds no package of its own
+  while packages lie below it, such as `internal/stuff` holding only
+  `internal/stuff/a` and `internal/stuff/b`: name each package, so a new
+  one stays a spoke until the file names it. A base revision that does not
+  fit is still compared, with its misfit directories looked through.
 
-A star or entry that matches no module, such as a misspelled one, a star
+A star or entry that matches no module at all, such as a misspelled one, a star
 whose own package is not listed, and a star with leaves but an empty core are
 named in the check's notes.
 
@@ -259,12 +268,16 @@ is going.
 ```
 treaty.yaml: line 3: unknown key "starz"; did you mean "stars"?
 treaty.yaml: line 6: unknown key "core" under stars.internal; a star maps contracts and orchestrators
-treaty.yaml: line 5: invalid architecture: stars.internal must map contracts and orchestrators to lists of directories, such as internal: {contracts: ["internal/contracts"]}
+treaty.yaml: line 7: orchestrators is listed twice under stars.internal/blocks, first at line 6
+treaty.yaml: line 4: invalid architecture: stars."." is a list, the earlier shape of a star; split its entries into contracts and orchestrators, such as .: {contracts: ["internal/contracts"], orchestrators: ["."]}
+treaty.yaml: line 5: invalid architecture: stars.internal/blocks.orchestrators must be a list of directories, such as orchestrators: ["internal/blocks"]
+treaty.yaml: invalid architecture: stars apply only to the snowflake architecture
 treaty.yaml: invalid architecture: composition does not apply to the snowflake architecture: orchestrators do its work, so list main packages, factories and the public API among the orchestrators of their star
 treaty.yaml: invalid architecture: the snowflake's root star is the repository itself: declare "." under stars, around internal/blocks and internal/gate
 treaty.yaml: invalid architecture: orchestrators entry "cmd/*" of star . is a glob; name each package by its directory, so a new directory stays a spoke until treaty.yaml names it
 treaty.yaml: invalid architecture: contracts entry "internal/blocks/contracts" of star . lies inside branch internal/blocks, whose core is its own; list it under internal/blocks
 treaty.yaml: invalid architecture: the stars do not fit the code: star internal/blocks lies inside spoke internal of star .: internal holds a package, so it is a leaf holding everything below it; declare internal a star, or move its package into a child directory
+treaty.yaml: invalid architecture: the stars do not fit the code: orchestrators entry internal/stuff of star . holds no package of its own, only internal/stuff/a and internal/stuff/b below it; name each package, so a new one stays a spoke until treaty.yaml names it
 ```
 
 The snowflake is newer than Treaty v0.4.0. Until the next release, build
@@ -388,8 +401,9 @@ without fixing everything first, while the debt can't grow.
 `unclassified` for the layer architectures and `snowflake`; adding
 `ambiguous_boundaries` for `vertical`, and `dependency_cycles` too for
 `modular`. A snowflake needs no rule of its own: its violations are
-`layer_violation`s, its allowed dependencies leave no cycle between regions,
-and placement is never ambiguous. Keep `unclassified` in a snowflake's
+`layer_violation`s and placement is never ambiguous. It reports no cycles,
+though its rules allow some between regions (see
+[What may use what](#what-may-use-what)). Keep `unclassified` in a snowflake's
 `fail_on`: there it only ever means a star's own package that holds code but
 is listed nowhere, whose dependencies would otherwise go unchecked.
 
