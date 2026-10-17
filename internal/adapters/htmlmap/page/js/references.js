@@ -52,8 +52,9 @@ function drawReferences(svg, rel) {
   const tones = ["--ring-domain", "--ring-app", "--ring-adapter", "--ring-outer"];
   // A half ring, such as hexagonal composition, covers only the left, and
   // its label centers on the left half of its top edge. A snowflake's rings
-  // are its stars, cores and leaves, each at its own center, and are told
-  // apart by their place in the list, since many share a layer.
+  // are its stars, their core regions and contracts, and their leaves, each
+  // at its own center, and are told apart by their place in the list, since
+  // many share a layer.
   const starry = STAR_STYLES.includes(D.architecture), rings = D.layout.rings || [];
   for (let index = rings.length - 1; index >= 0; index--) {
     const ring = rings[index], x = ring.x || 0, y = ring.y || 0;
@@ -171,15 +172,16 @@ function drawReferences(svg, rel) {
     const g = el("g", { class: "module" + (rel && !rel.has(m.id) ? " dim" : ""), "data-module": m.id, tabindex: 0, role: "button", "aria-label": `Module ${m.id}, ${m.layer}`, "data-label": `${m.label || m.path} · ${placeName(m)}${m.design ? " · planned, not built" : ""}${m.removed ? " · removed" : ""}` }, svg);
     const hex = el("polygon", { points: hexPoints(p.x, p.y, S).map(q => q.join(",")).join(" "), fill: color("--module"), stroke: m.new ? color("--added") : m.removed ? color("--removed") : m.design ? color("--planned") : state.selected && state.selected.id === m.id ? color("--selection") : color("--hex-stroke"), "stroke-width": state.selected && state.selected.id === m.id ? 2.5 : 1.4, "vector-effect": "non-scaling-stroke" }, g);
     if (m.new || m.removed || m.design) hex.setAttribute("stroke-dasharray", "5 3");
-    // A snowflake core holds the star's contracts and orchestrators: a dot
-    // marks it, in the middle, or below a lone file's cell.
-    if (starry && m.layer === "core") {
+    // A snowflake's contracts carry a dot, in the middle, or below a lone
+    // file's cell.
+    if (starry && m.layer === "contracts") {
       const lone = (cellsOf[m.id] || []).length === 1, at = lone ? (S * Math.cos(Math.PI / 6) + (D.layout.cell_size || 0) * Math.cos(Math.PI / 6)) / 2 : 0;
       el("circle", { cx: p.x, cy: p.y + at, r: Math.max(2, S * 0.07), fill: color("--module-stroke"), "pointer-events": "none" }, g);
     }
     // Composition wires adapters into the core: a double outline marks the
-    // only modules allowed to depend on adapters.
-    if (m.layer === "composition") el("polygon", { points: hexPoints(p.x, p.y, S * 0.84).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--hex-stroke"), "stroke-width": 1, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
+    // only modules allowed to depend on adapters. In a snowflake composition
+    // is orchestration, so the outline marks the orchestrators.
+    if (m.layer === "composition" || starry && m.layer === "orchestrator") el("polygon", { points: hexPoints(p.x, p.y, S * 0.84).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--hex-stroke"), "stroke-width": 1, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
     // A boundary's public API is the only part other boundaries may use: a
     // bold outline marks it.
     if (m.public) el("polygon", { points: hexPoints(p.x, p.y, S * 1.12).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--module-stroke"), "stroke-width": 2.4, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
@@ -254,17 +256,18 @@ function drawReferences(svg, rel) {
     }
   }
 }
-// ringWords names a snowflake ring for people: a star, a star's core or a
-// leaf.
+// ringWords names a snowflake ring for people: a star, a star's core
+// region, its contracts or a leaf.
 function ringWords(ring) {
   if (ring.layer === "star") return `star ${ring.star}${starParent(ring.star) ? ` · branch of ${starParent(ring.star)}` : ""} · right-click to zoom to it`;
-  if (ring.layer === "core") return `core of star ${ring.star}: its contracts and orchestrators`;
-  if (ring.layer === "spoke") return `spoke ${ring.spoke} of star ${ring.star}`;
+  if (ring.layer === "core") return `core of star ${ring.star}: its orchestrators, around its contracts`;
+  if (ring.layer === "contracts") return `contracts of star ${ring.star}`;
+  if (ring.layer === "leaf") return `leaf ${ring.spoke} of star ${ring.star}`;
   return ring.label || ring.layer;
 }
-// regionKey names the snowflake region a module is in: a star's core, a
-// spoke, composition or unclassified.
-function regionKey(id) { const m = modules.get(id) || {}; return m.layer === "core" ? "core:" + m.star : m.layer === "spoke" ? "spoke:" + m.spoke : m.layer || ""; }
+// regionKey names the snowflake region a module is in: a star's contracts,
+// its orchestrators, a leaf, or unclassified.
+function regionKey(id) { const m = modules.get(id) || {}; return m.layer === "contracts" || m.layer === "orchestrator" ? m.layer + ":" + m.star : m.layer === "leaf" ? "leaf:" + m.spoke : m.layer || ""; }
 // laneEdges gives each allowed dependency in a snowflake its lane: the
 // dependencies between the same two regions run side by side, 5 units
 // apart, so they read as one bundle down an arm. Lanes are measured the

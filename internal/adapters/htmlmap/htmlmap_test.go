@@ -510,8 +510,8 @@ func TestTermsFindPlacingLines(t *testing.T) {
 	cases := `
 const hexagonal = ["version: 1", "architecture: hexagonal", "layers:", "  composition: [\"cmd/**\"]", "  domain:      [\"internal/graph/**\", \"internal/rules/**\"]", "  adapter:", "    driving:   [\"web/**\"]", "    driven:    [\"store/**\", \"queue/**\"]"];
 const vertical = ["architecture: vertical", "composition: ['cmd/**']", "boundaries:", "  orders:", "    - \"**/orders/**\"   # all of it", "  billing: ['web/billing/**', store/billing/**]", "layers:", "  api: [\"**/api\"]"];
-const snowflake = ["architecture: snowflake", "composition: [\".\", \"cmd/**\", \"internal/factory/**\"]", "stars: # each star's directory", "  \".\": []", "  internal: [\"internal/core/**\"]", "  internal/blocks: [\"internal/blocks/core/**\"]   # a branch"];
-const loose = ["architecture: snowflake", "stars:", "  internal/: [\"internal/core/**\"]", "  ./internal/gate: []", "  ./: []"];
+const snowflake = ["architecture: snowflake", "stars: # each star's directory", "  .:", "    contracts: [\"internal/contracts\"]", "    orchestrators:", "      - \".\"", "      - internal/assembly   # the wiring", "  internal/blocks:   # a branch", "    contracts: ['internal/blocks/contracts']", "    orchestrators: [\"internal/blocks/kit\"]", "  internal/gate: {contracts: [\"internal/gate/contracts\"], orchestrators: [\"internal/gate/pipeline\"]}"];
+const loose = ["architecture: snowflake", "stars:", "  internal/blocks/:", "    contracts: [\"internal/blocks/contracts\"]", "  ./internal/gate:", "  ./: {orchestrators: [\".\"]}"];
 const cases = [
   [hexagonal, ["composition"], "cmd/**", 4],
   [hexagonal, ["layers", "domain"], "internal/rules/**", 5],
@@ -522,14 +522,20 @@ const cases = [
   [vertical, ["boundaries", "billing"], "store/billing/**", 6],
   [vertical, ["layers", "api"], "**/api", 8],
   [vertical, ["shared"], "lib/**", 0],
-  [snowflake, ["composition"], "internal/factory/**", 2],
-  [snowflake, ["stars", "internal"], "internal/core/**", 5],
-  [snowflake, ["stars", "internal/blocks"], "internal/blocks/core/**", 6],
-  [snowflake, ["stars", "internal/blocks"], "", 6],
-  [snowflake, ["stars", "."], "", 4],
-  [loose, ["stars", "internal"], "internal/core/**", 3],
-  [loose, ["stars", "internal/gate"], "", 4],
-  [loose, ["stars", "."], "", 5],
+  [snowflake, ["stars", ".", "contracts"], "internal/contracts", 4],
+  [snowflake, ["stars", ".", "orchestrators"], ".", 6],
+  [snowflake, ["stars", ".", "orchestrators"], "internal/assembly", 7],
+  [snowflake, ["stars", "internal/blocks", "contracts"], "internal/blocks/contracts", 9],
+  [snowflake, ["stars", "internal/blocks", "orchestrators"], "internal/blocks/kit", 10],
+  [snowflake, ["stars", "internal/blocks"], "", 8],
+  [snowflake, ["stars", "."], "", 3],
+  [snowflake, ["stars", "internal/gate", "orchestrators"], "internal/gate/pipeline", 11],
+  [snowflake, ["stars", "internal/gate"], "", 11],
+  [snowflake, ["stars", "internal/missing"], "", 0],
+  [loose, ["stars", "internal/blocks", "contracts"], "internal/blocks/contracts", 4],
+  [loose, ["stars", "internal/gate"], "", 5],
+  [loose, ["stars", ".", "orchestrators"], ".", 6],
+  [loose, ["stars", "."], "", 6],
 ];
 for (const [lines, path, glob, want] of cases) {
   const got = locateReason(lines, { path, glob });
@@ -590,34 +596,38 @@ func TestSnowflakeLayout(t *testing.T) {
 	view := snowflakeView()
 	layout := ComputeLayout(view)
 	inscribed := math.Cos(math.Pi / 6)
-	stars, cores, spokes := map[string]Ring{}, map[string]Ring{}, map[string]Ring{}
-	var outside *Ring
-	for i, ring := range layout.Rings {
+	stars, cores, contracts, spokes := map[string]Ring{}, map[string]Ring{}, map[string]Ring{}, map[string]Ring{}
+	for _, ring := range layout.Rings {
 		switch ring.Layer {
 		case ringStar:
 			stars[ring.Star] = ring
 		case ringCore:
 			cores[ring.Star] = ring
+		case graph.LayerContracts:
+			contracts[ring.Star] = ring
 		case graph.LayerLeaf:
 			spokes[ring.Spoke] = ring
-		case graph.LayerComposition:
-			outside = &layout.Rings[i]
+		default:
+			t.Fatalf("a snowflake draws no %s ring: %+v", ring.Layer, ring)
 		}
 	}
 
-	if len(stars) != 3 || len(cores) != 3 || stars["."].Label != "agentportal-guard" || stars["internal/blocks"].Label != "blocks" || cores["internal/gate"].Label != "core" || spokes["internal/web"].Label != "web" {
-		t.Fatalf("a snowflake draws each star with its core and leaves: %+v", layout.Rings)
+	if len(stars) != 3 || len(cores) != 3 || len(contracts) != 3 || stars["."].Label != "agentportal-guard" || stars["internal/blocks"].Label != "blocks" || cores["internal/gate"].Label != "core" || contracts["internal/gate"].Label != "contracts" || spokes["internal/web"].Label != "web" {
+		t.Fatalf("a snowflake draws each star with its core, its contracts and its leaves: %+v", layout.Rings)
 	}
 
-	if outside == nil || outside.Radius <= stars["."].Radius {
-		t.Fatalf("the outer ring lies around the root star: %+v", layout.Rings)
+	// Rings come contracts first and stars last, each kind deepest first, so
+	// the page, drawing them in reverse, paints contracts over the core's
+	// band and every core over its star.
+	order := map[string]int{graph.LayerContracts: 0, ringCore: 1, graph.LayerLeaf: 2, ringStar: 3}
+	depth := map[string]int{}
+	for _, node := range view.Stars {
+		depth[node.Dir] = node.Depth
 	}
 
-	// Rings come cores first and stars last, so the page, drawing them in
-	// reverse, paints every core over its star.
-	order := map[string]int{ringCore: 0, graph.LayerLeaf: 1, ringStar: 2, graph.LayerComposition: 3}
 	for i := 1; i < len(layout.Rings); i++ {
-		if order[layout.Rings[i].Layer] < order[layout.Rings[i-1].Layer] {
+		before, after := layout.Rings[i-1], layout.Rings[i]
+		if order[after.Layer] < order[before.Layer] || after.Layer == before.Layer && after.Layer != graph.LayerLeaf && depth[after.Star] > depth[before.Star] {
 			t.Fatalf("rings are out of order at %d: %+v", i, layout.Rings)
 		}
 	}
@@ -634,16 +644,21 @@ func TestSnowflakeLayout(t *testing.T) {
 
 		size := layout.Sizes[module.ID]
 		switch module.Layer {
-		case graph.LayerContracts, graph.LayerOrchestrator:
-			if !within(p.X, p.Y, size, cores[module.Star]) {
-				t.Errorf("%s lies outside the core of %s: %+v in %+v", module.ID, module.Star, p, cores[module.Star])
+		case graph.LayerContracts:
+			if !within(p.X, p.Y, size, contracts[module.Star]) {
+				t.Errorf("%s lies outside the contracts of %s: %+v in %+v", module.ID, module.Star, p, contracts[module.Star])
+			}
+		case graph.LayerOrchestrator:
+			ring := contracts[module.Star]
+			if !within(p.X, p.Y, size, cores[module.Star]) || math.Hypot(p.X-ring.X, p.Y-ring.Y)-size < ring.Radius {
+				t.Errorf("%s lies outside the band between the core and the contracts of %s: %+v in %+v and %+v", module.ID, module.Star, p, cores[module.Star], ring)
 			}
 		case graph.LayerLeaf:
 			if !within(p.X, p.Y, size, spokes[module.Spoke]) {
 				t.Errorf("%s lies outside leaf %s: %+v in %+v", module.ID, module.Spoke, p, spokes[module.Spoke])
 			}
 		case graph.LayerUnclassified:
-			if p.Y <= 0 || math.Hypot(p.X, p.Y) < outside.Radius*inscribed {
+			if p.Y <= 0 || math.Hypot(p.X, p.Y)-size < stars["."].Radius {
 				t.Errorf("unclassified %s is not outside along the bottom: %+v", module.ID, p)
 			}
 		}
@@ -737,14 +752,23 @@ func TestSnowflakeLayoutKeepsUnlistedStars(t *testing.T) {
 		t.Fatalf("every module is placed: %+v", layout.Modules)
 	}
 
-	branch := 0
+	drawn := map[string]Ring{}
 	for _, ring := range layout.Rings {
-		if ring.Layer == ringStar && ring.Star == "internal/blocks" {
-			branch++
-		}
+		drawn[ring.Layer+":"+ring.Star] = ring
 	}
 
-	if branch != 1 {
-		t.Fatalf("the unlisted star internal/blocks is drawn as a branch: %+v", layout.Rings)
+	if _, branch := drawn[ringStar+":internal/blocks"]; !branch || len(drawn) != 8 {
+		t.Fatalf("the unlisted star internal/blocks is drawn as a branch, with an empty core and contracts: %+v", layout.Rings)
+	}
+
+	// An empty core keeps room for one module in each of its regions.
+	inner, outer := drawn[graph.LayerContracts+":internal/blocks"], drawn[ringCore+":internal/blocks"]
+	if inner.Radius*math.Cos(math.Pi/6) < moduleSize || outer.Radius*math.Cos(math.Pi/6) < inner.Radius+2*moduleSize {
+		t.Fatalf("an empty core has no room for a module: %+v and %+v", inner, outer)
+	}
+
+	contracts, orchestrator := layout.Modules["go:internal/contracts"], layout.Modules["go:."]
+	if root := drawn[graph.LayerContracts+":."]; math.Hypot(contracts.X-root.X, contracts.Y-root.Y) > 0.5 || math.Hypot(orchestrator.X-root.X, orchestrator.Y-root.Y) < root.Radius || orchestrator.Y >= root.Y || math.Abs(orchestrator.X-root.X) > 0.5 {
+		t.Fatalf("a lone contracts module sits at the center and its orchestrator outside the contracts, at the top: %+v, %+v", contracts, orchestrator)
 	}
 }

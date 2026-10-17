@@ -326,13 +326,13 @@ function inspect() {
   } else if (sel.type === "module") {
     const m = modules.get(sel.id); if (!m) return;
     box.appendChild(h("h3", {}, m.label || m.path));
-    dl(box, [["Id", m.id], ["Manifest", m.manifest || ""], ["Layer", STAR_STYLES.includes(D.architecture) ? placeName(m) : m.layer + (m.side ? ` (${m.side})` : "")], ["Placed by", (m.reasons || []).map(r => `${r.glob || "its directory"} (${r.path.join(" › ")})`).join("; "), "The treaty.yaml globs that place this module. The Terms tab marks their lines."], ["Boundary", m.boundary || ""], ["Claimed by", m.ambiguous ? m.ambiguous.join(" and ") + ", equally" : ""], ["API", m.public ? "public" : ""], ["Status", m.design ? "planned, not built" : m.new ? "new" : m.removed ? "removed" : ""]]);
+    dl(box, [["Id", m.id], ["Manifest", m.manifest || ""], ["Layer", STAR_STYLES.includes(D.architecture) ? placeName(m) + (m.star && m.layer !== "unclassified" ? ` of star ${m.star}` : "") : m.layer + (m.side ? ` (${m.side})` : "")], ["Placed by", (m.reasons || []).map(r => `${r.glob || "its directory"} (${r.path.join(" › ")})`).join("; "), "The treaty.yaml globs that place this module. The Terms tab marks their lines."], ["Boundary", m.boundary || ""], ["Claimed by", m.ambiguous ? m.ambiguous.join(" and ") + ", equally" : ""], ["API", m.public ? "public" : ""], ["Status", m.design ? "planned, not built" : m.new ? "new" : m.removed ? "removed" : ""]]);
     box.appendChild(h("p", {}, m.guidance));
     if (state.moved.has(m.id)) {
       const moved = h("p", {}, "You placed this module here. "), back = h("button", { type: "button" }, "Put it back");
       back.addEventListener("click", () => savePosition(m.id, null));
       moved.appendChild(back); box.appendChild(moved);
-    } else if (LIVE && !m.design) box.appendChild(h("p", { class: "hint" }, LAYERED_STYLES.includes(D.architecture) ? "Long-press the module to pick it up: drop it elsewhere in its band to place it, or in another layer to move it there in treaty.yaml." : STAR_STYLES.includes(D.architecture) ? "Long-press the module to pick it up: drop it elsewhere in its core or spoke to place it, or on its star's core, its own spoke or composition to move it there in treaty.yaml. A spoke is its directory, so moving to another spoke means moving the package's files." : "Long-press the module to pick it up: drop it elsewhere in its area to place it, or in another boundary, shared or composition to move it there in treaty.yaml."));
+    } else if (LIVE && !m.design) box.appendChild(h("p", { class: "hint" }, LAYERED_STYLES.includes(D.architecture) ? "Long-press the module to pick it up: drop it elsewhere in its band to place it, or in another layer to move it there in treaty.yaml." : STAR_STYLES.includes(D.architecture) ? "Long-press the module to pick it up: drop it elsewhere in its region to place it, on its star's contracts or orchestrators to move it into the core in treaty.yaml, or on its own spoke to take it out. A spoke is its directory, so moving to another spoke means moving the package's files." : "Long-press the module to pick it up: drop it elsewhere in its area to place it, or in another boundary, shared or composition to move it there in treaty.yaml."));
     const t = h("table", { class: "metrics" }); t.innerHTML = "<tr><th>Metric</th><th>Before</th><th>After</th></tr>";
     let group = null;
     for (const [key, name, abbr, about, format, under] of METRICS) {
@@ -354,8 +354,8 @@ function inspect() {
     sliceBlock(box, m.slice);
   } else if (sel.type === "edge") {
     const e = sel.edge;
-    // A snowflake end is named by its star's core or its spoke, since its
-    // layer alone does not say which.
+    // A snowflake end is named by its contracts or orchestrator entry or its
+    // leaf, since its layer alone does not say which.
     const where = (layer, m) => STAR_STYLES.includes(D.architecture) && m ? placeName(m) : layer;
     const end = key => { const g = groups.get(key), m = modules.get(key); return g ? { label: g.path + "/", layer: where(g.layer, modules.get(g.modules[0])) } : { label: m.label || m.path, layer: where(m.layer, m) }; };
     const a = end(e.from), b = end(e.to);

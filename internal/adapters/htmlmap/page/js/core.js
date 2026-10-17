@@ -31,6 +31,10 @@ function ingest(data) {
   addedLinks = new Set((D.added_links || []).map(linkKey));
   const note = document.getElementById("legend-public");
   if (note) note.hidden = D.architecture !== "modular";
+  // A snowflake has no composition: its orchestrators wear the double
+  // outline, and its contracts a dot.
+  const double = document.getElementById("legend-double");
+  if (double) double.textContent = STAR_STYLES.includes(D.architecture) ? "orchestrator · dot = contracts" : "composition";
   groups = new Map((D.layout.groups || []).map(g => [g.id, g]));
   groupOf = new Map();
   for (const g of D.layout.groups || []) for (const id of g.modules) if (!groupOf.has(id) || groups.get(groupOf.get(id)).depth < g.depth) groupOf.set(id, g.id);
@@ -60,7 +64,7 @@ const LONG_PRESS_MS = 450;
 // can move between them on the map.
 const LAYERED_STYLES = ["hexagonal", "clean", "layered"];
 // The architectures drawn as stars of stars, whose spokes are directories:
-// a module moves only into or out of a star's core, or to composition.
+// a module moves only into or out of a star's contracts or orchestrators.
 const STAR_STYLES = ["snowflake"];
 // Room kept between a moved module and the edge of the group around it.
 const GROUP_ROOM = 6;
@@ -212,11 +216,12 @@ function collapsedSignature() {
 }
 // placeName says where the architecture puts a module: its boundary, its
 // layer and side, and whether it is public, or the boundaries that tie
-// for it; in a snowflake, its star's core or its spoke.
+// for it; in a snowflake, the contracts or orchestrator entry that claims
+// it, or its leaf.
 function placeName(m) {
   if (m.ambiguous) return "claimed by " + m.ambiguous.join(" and ");
-  if (STAR_STYLES.includes(D.architecture) && m.layer === "core" && m.star) return `core of star ${m.star}`;
-  if (STAR_STYLES.includes(D.architecture) && m.layer === "spoke" && m.spoke) return `spoke ${m.spoke}`;
+  if (STAR_STYLES.includes(D.architecture) && (m.layer === "contracts" || m.layer === "orchestrator") && m.core_entry) return `${m.layer} ${m.core_entry}`;
+  if (STAR_STYLES.includes(D.architecture) && m.layer === "leaf" && m.spoke) return `leaf ${m.spoke}`;
   const within = m.boundary ? m.boundary + " · " : "";
   return within + m.layer + (m.side ? ` (${m.side})` : "") + (m.public ? " (public)" : "");
 }
@@ -254,20 +259,6 @@ function starParent(dir) { const star = (D.stars || []).find(s => s.dir === dir)
 function starsAround(dir) { const result = []; for (let at = dir; at; at = starParent(at)) { if (result.includes(at)) break; result.push(at); } return result; }
 // commonStar is the deepest star around both of two stars.
 function commonStar(a, b) { const outer = starsAround(b); return starsAround(a).find(dir => outer.includes(dir)) || ""; }
-// innermostStar is the deepest star whose directory holds a path, whatever
-// composition says about it.
-function innermostStar(path) {
-  let best = "";
-  for (const s of D.stars || []) if ((s.dir === "." || path === s.dir || path.startsWith(s.dir + "/")) && (!best || s.dir.length > best.length || best === ".")) best = s.dir;
-  return best;
-}
-// ownSpoke is the spoke of the innermost star that a path's directory
-// puts it in, or empty for a star's own package.
-function ownSpoke(path) {
-  const star = innermostStar(path); if (!star || star === path) return "";
-  const rest = star === "." ? path : path.slice(star.length + 1);
-  return (star === "." ? "" : star + "/") + rest.split("/")[0];
-}
 function openAncestors(moduleId) { for (const g of ancestors(groupOf.get(moduleId))) state.groupOpen[g.id] = true; }
 
 function related() {

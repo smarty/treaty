@@ -157,7 +157,7 @@ function paintPlacing(placed) {
   why.hidden = false;
   const name = module.label || module.path;
   if (!module.reasons || !module.reasons.length) {
-    why.textContent = module.ambiguous ? `${name} is claimed equally by boundaries ${module.ambiguous.join(" and ")}.` : module.layer === "none" ? `${name}: there is no architecture, so nothing places it.` : STAR_STYLES.includes(D.architecture) ? `${name} lies outside the root star and composition does not claim it, so it is unclassified and its dependencies are not checked.` : `No glob places ${name}, so it is unclassified and its dependencies are not checked.`;
+    why.textContent = module.ambiguous ? `${name} is claimed equally by boundaries ${module.ambiguous.join(" and ")}.` : module.layer === "none" ? `${name}: there is no architecture, so nothing places it.` : STAR_STYLES.includes(D.architecture) ? module.guidance || `${name} is unclassified, so its dependencies are not checked.` : `No glob places ${name}, so it is unclassified and its dependencies are not checked.`;
     return;
   }
 
@@ -167,31 +167,33 @@ function paintPlacing(placed) {
 }
 
 // starReason says why a snowflake places a module by its directory, for a
-// reason with no glob: a star's own package is in its core, and any other
-// module is in the spoke its directory names.
+// reason with no glob: a leaf, the spoke its directory names. A core
+// package's reason names its entry under contracts or orchestrators.
 function starReason(module, reason) {
-  const star = reason.path[reason.path.length - 1];
-  if (module.layer === "spoke") return `star ${star} places it in spoke ${module.spoke} by its directory`;
-  return `star ${star} places it in its core, since a star's own package is always in its core`;
+  return `star ${reason.path[reason.path.length - 1]} places it in leaf ${module.spoke} by its directory`;
 }
 
-// locateReason finds the line, from 1, where a glob that places a module is
-// listed under its key path, such as layers › domain, or the key's own line
-// when the glob is not found under it; 0 when the key is not found either.
-// Composition may sit at the top level or under layers.
+// locateReason finds the line, from 1, where a glob or entry that places a
+// module is listed under its key path, such as layers › domain or
+// stars › internal/gate › contracts, or the key's own line when it is not
+// found under it; 0 when the key is not found either. Composition may sit
+// at the top level or under layers. Under stars the deepest key found
+// stands in for the rest, so a star written inline, internal/gate:
+// {contracts: [...]}, marks its own line.
 function locateReason(lines, reason) {
   const paths = reason.path[0] === "composition" ? [["composition"], ["layers", "composition"]] : [reason.path];
   for (const path of paths) {
-    let from = 0, to = lines.length, indent = -1, keyLine = -1;
-    for (const [depth, key] of path.entries()) {
-      keyLine = childKey(lines, key, from, to, indent, path[0] === "stars" && depth === 1 ? starKey : String);
+    let from = 0, to = lines.length, indent = -1, found = -1, depth = 0;
+    for (const key of path) {
+      const keyLine = childKey(lines, key, from, to, indent, path[0] === "stars" && depth === 1 ? starKey : String);
       if (keyLine < 0) break;
-      indent = indentOf(lines[keyLine]); from = keyLine; to = blockEnd(lines, keyLine, indent);
+      found = keyLine; indent = indentOf(lines[keyLine]); from = keyLine; to = blockEnd(lines, keyLine, indent); depth++;
     }
 
-    if (keyLine < 0) continue;
+    // Under stars, the star's own key must be found at least.
+    if (depth < (path[0] === "stars" ? Math.min(2, path.length) : path.length)) continue;
     for (let i = from; i < to; i++) if (yamlTokens(lines[i], i === from).includes(reason.glob)) return i + 1;
-    return keyLine + 1;
+    return found + 1;
   }
 
   return 0;

@@ -24,9 +24,11 @@ function buildLegend() {
   swatch("added", " + added · "); swatch("removed", " − removed, dashed · "); swatch("changed", " Δ compatible, ! breaking, ~ implementation, → moved · "); swatch("planned", " dashed = planned, not built");
   legend.appendChild(h("br"));
   legend.appendChild(document.createTextNode("solid ▶ uses · dashed ▷ implements or embeds · "));
-  swatch("violation", " ! = rule violation, hollow when the base has it too · double hexagon = composition · inner cells = files, darker = more symbols; a file's contracts sit on the border facing it; a go.mod takes the first cell" + (LIVE ? " · long-press a module to move it" : ""));
+  swatch("violation", " ! = rule violation, hollow when the base has it too · double hexagon = ");
+  legend.appendChild(h("span", { id: "legend-double" }, "composition"));
+  legend.appendChild(document.createTextNode(" · inner cells = files, darker = more symbols; a file's contracts sit on the border facing it; a go.mod takes the first cell" + (LIVE ? " · long-press a module to move it" : "")));
   // The legend is built before a live map has its data, so ingest shows this
-  // note once it knows the architecture.
+  // note, and what the double hexagon marks, once it knows the architecture.
   legend.appendChild(h("span", { id: "legend-public", hidden: "" }, " · bold outline = public API"));
 }
 // setLegend shows or hides the key at the top of the map, remembering the

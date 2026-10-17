@@ -29,8 +29,8 @@ const (
 
 // ringStar is the layer of the ring drawn around a whole snowflake star,
 // its core and spokes inside it, and ringCore that of the ring around a
-// star's core region, its contracts and orchestrators. They are the map's
-// own names, not layers the rules know.
+// star's core region, its orchestrators in the band around its contracts'
+// ring. They are the map's own names, not layers the rules know.
 const (
 	ringCore = "core"
 	ringStar = "star"
@@ -121,9 +121,10 @@ type Region struct {
 
 // Ring is one layer's hexagon, from the center outward. Tone picks its
 // shade, and Left marks a ring drawn only on the left half. In a snowflake
-// a ring is a star, its core or one of its leaves, centered at X, Y: Star
-// names the star, Spoke the leaf, and Label is the text drawn on it. Every
-// other style centers its rings on the origin and leaves these empty.
+// a ring is a star, its core region, its contracts or one of its leaves,
+// centered at X, Y: Star names the star, Spoke the leaf, and Label is the
+// text drawn on it. Every other style centers its rings on the origin and
+// leaves these empty.
 type Ring struct {
 	Layer  string  `json:"layer"`
 	Tone   int     `json:"tone"`
@@ -156,17 +157,20 @@ type gridBlock struct {
 }
 
 // starShape is one snowflake star measured in its own frame, with its
-// outward axis along +x: its core's items around its center, its core's
-// radius, its spokes on a ring around the core, and the radius that holds
-// it all.
+// outward axis along +x: its contracts' items around its center inside
+// their ring, its orchestrators' items around those inside the core's
+// ring, its spokes on a ring around the core, and the radius that holds it
+// all.
 type starShape struct {
-	dir    string
-	label  string
-	depth  int
-	core   []*item
-	coreR  float64
-	spokes []*spokeShape
-	radius float64
+	dir           string
+	label         string
+	depth         int
+	contracts     []*item
+	contractsR    float64
+	orchestrators []*item
+	coreR         float64
+	spokes        []*spokeShape
+	radius        float64
 }
 
 // spokeShape is one spoke of a star. Slot is its place on the star's ring,
@@ -329,8 +333,9 @@ func (this *gridBlock) place(result *Layout, x, y float64) {
 // ComputeLayout places modules by the view's architecture: concentric rings
 // for hexagonal and clean, horizontal bands for layered, a grid of boundaries by
 // layer for vertical, islands for the boundaries of a modular monolith, and
-// for a snowflake each star as a core ringed by its spokes, its branches
-// smaller stars on that ring.
+// for a snowflake each star as a core region, its contracts inside its
+// orchestrators, ringed by its spokes, its branches smaller stars on that
+// ring.
 //
 // Notes:
 //   - Within each ring or region, directories with two or more children
@@ -521,46 +526,47 @@ func ringLayout(modules []app.MapModule, rings []string, sided bool) (result Lay
 }
 
 // snowflakeLayout draws a snowflake as a star of stars. Each star's core
-// sits at its center, ringed by its spokes: the root's on a full circle,
-// and a branch's, drawn as a smaller star on its parent's ring, on an arc
-// facing away from the parent's core, so the side toward that core stays
-// clear for the dependencies running into it. Composition has a half ring
-// of its own around the left of the root star, drawn even when empty so a
-// module can be moved there, and unclassified modules sit along the bottom
-// outside it.
+// region sits at its center as two nested hexagons: its contracts inside,
+// its orchestrators in the band around them. Its spokes ring the core: the
+// root's on a full circle, and a branch's, drawn as a smaller star on its
+// parent's ring, on an arc facing away from the parent's core, so the side
+// toward that core stays clear for the dependencies running into it.
+// Unclassified modules sit along the bottom outside the root star.
 //
 // Notes:
 //   - Stars are measured bottom-up in their own frames, then placed
 //     top-down, each branch turned to point away from its parent's core.
-//     A core's items turn with it, on a full circle that turns into
-//     itself; a leaf's packed modules are never turned, since the circle
-//     bounding them turns into itself.
-//   - Rings are emitted cores first, deepest first, then leaves, then stars,
-//     deepest first, then composition. The page draws them in reverse, so
-//     a core paints over its star.
+//     A core's items turn with it, on full circles that turn into
+//     themselves; a leaf's packed modules are never turned, since the
+//     circle bounding them turns into itself.
+//   - Rings are emitted contracts first, deepest first, then cores,
+//     deepest first, then leaves, then stars, deepest first. The page draws
+//     them in reverse, so contracts paint over their core's band and the
+//     band over its star.
 //   - A star the view's tree lacks but a module names is still drawn, so
 //     no module is left off the map.
 func snowflakeLayout(view app.MapView) (result Layout) {
 	result = Layout{Modules: map[string]Point{}, Size: moduleSize}
-	cores, leaves, loose := map[string][]app.MapModule{}, map[string][]app.MapModule{}, map[string][]app.MapModule{}
+	contracts, orchestrators, leaves := map[string][]app.MapModule{}, map[string][]app.MapModule{}, map[string][]app.MapModule{}
+	var unclassified []app.MapModule
 	for _, module := range view.Modules {
 		switch {
-		case (module.Layer == graph.LayerContracts || module.Layer == graph.LayerOrchestrator) && module.Star != "":
-			cores[module.Star] = append(cores[module.Star], module)
+		case module.Layer == graph.LayerContracts && module.Star != "":
+			contracts[module.Star] = append(contracts[module.Star], module)
+		case module.Layer == graph.LayerOrchestrator && module.Star != "":
+			orchestrators[module.Star] = append(orchestrators[module.Star], module)
 		case module.Layer == graph.LayerLeaf && module.Spoke != "":
 			leaves[module.Spoke] = append(leaves[module.Spoke], module)
-		case module.Layer == graph.LayerComposition:
-			loose[graph.LayerComposition] = append(loose[graph.LayerComposition], module)
 		default:
-			loose[graph.LayerUnclassified] = append(loose[graph.LayerUnclassified], module)
+			unclassified = append(unclassified, module)
 		}
 	}
 
 	root, nodes := starTree(view)
-	var rings [3][]Ring
+	var rings [4][]Ring
 	boundary := 0.0
 	if root != "" {
-		shape := measureStar(nodes, root, 0, cores, leaves)
+		shape := measureStar(nodes, root, 0, starModules{contracts: contracts, orchestrators: orchestrators, leaves: leaves})
 		shape.label = root
 		if root == "." && view.Root != "" {
 			shape.label = view.Root
@@ -570,38 +576,33 @@ func snowflakeLayout(view app.MapView) (result Layout) {
 		boundary = shape.radius
 	}
 
-	slices.SortStableFunc(rings[0], func(a, b Ring) int { return nodes[b.Star].Depth - nodes[a.Star].Depth })
-	slices.SortStableFunc(rings[2], func(a, b Ring) int { return nodes[b.Star].Depth - nodes[a.Star].Depth })
-	result.Rings = slices.Concat(rings[0], rings[1], rings[2])
-	arc := math.Pi * 0.75
-	composition := topItems(loose[graph.LayerComposition])
-	if len(composition) > 0 {
-		radius := math.Max(boundary+largest(composition)+ringGap, arcRadius(composition, math.Pi-arc/2, arc, false))
-		arrange(composition, radius, math.Pi-arc/2, arc, false)
-		boundary = hexRadius(math.Max(radius+largest(composition), boundary) + ringGap)
-	} else {
-		boundary = hexRadius(boundary/hexRadius(1) + moduleSize + 2*ringGap)
+	for _, deepestFirst := range []int{0, 1, 3} {
+		slices.SortStableFunc(rings[deepestFirst], func(a, b Ring) int { return nodes[b.Star].Depth - nodes[a.Star].Depth })
 	}
 
-	result.Rings = append(result.Rings, Ring{Layer: graph.LayerComposition, Tone: 3, Radius: round(boundary), Left: true, Label: graph.LayerComposition})
+	result.Rings = slices.Concat(rings[0], rings[1], rings[2], rings[3])
 	result.Extent = boundary + moduleSize
-	unclassified := topItems(loose[graph.LayerUnclassified])
-	if len(unclassified) > 0 {
-		radius := math.Max(boundary+largest(unclassified)+ringGap, arcRadius(unclassified, math.Pi/4, math.Pi/2, false))
-		arrange(unclassified, radius, math.Pi/4, math.Pi/2, false)
-		result.Extent = math.Max(result.Extent, radius+largest(unclassified)+moduleSize)
+	loose := topItems(unclassified)
+	if len(loose) > 0 {
+		radius := math.Max(boundary+largest(loose)+ringGap, arcRadius(loose, math.Pi/4, math.Pi/2, false))
+		arrange(loose, radius, math.Pi/4, math.Pi/2, false)
+		result.Extent = math.Max(result.Extent, radius+largest(loose)+moduleSize)
 	}
 
-	for _, placed := range composition {
-		emit(&result, placed, 0, 0, graph.LayerComposition, graph.LayerComposition, "", 0)
-	}
-
-	for _, placed := range unclassified {
+	for _, placed := range loose {
 		emit(&result, placed, 0, 0, graph.LayerUnclassified, graph.LayerUnclassified, "", 0)
 	}
 
 	sortGroups(&result)
 	return result
+}
+
+// starModules is a snowflake's modules by region: each star's contracts
+// and orchestrators by its directory, and each leaf's modules by the leaf's.
+type starModules struct {
+	contracts     map[string][]app.MapModule
+	orchestrators map[string][]app.MapModule
+	leaves        map[string][]app.MapModule
 }
 
 // starTree indexes a snowflake's stars by directory, with each star's
@@ -667,9 +668,11 @@ func starTree(view app.MapView) (root string, nodes map[string]*rules.StarNode) 
 // after sizing the branches inside it.
 //
 // Notes:
-//   - The core's top-level items go on a full circle around the center,
-//     and an empty core keeps room for one module, so a module can still
-//     be dropped there.
+//   - The contracts' top-level items go on a full circle around the
+//     center, a lone one at the center, and the orchestrators' on a full
+//     circle just outside the contracts' ring, from the top clockwise. An
+//     empty list keeps room for one module, so a module can still be
+//     dropped there.
 //   - Spokes, leaves and branches alike, go in directory order around the
 //     core: the root's on a full circle from the top, and a branch's on a
 //     240° arc centered on +x, leaving the 120° facing its parent's core
@@ -679,22 +682,35 @@ func starTree(view app.MapView) (root string, nodes map[string]*rules.StarNode) 
 //   - nodes: every star by its directory.
 //   - dir: the star to measure.
 //   - depth: how deep it sits, 0 for the root.
-//   - cores: each star's core modules.
-//   - leaves: each leaf's modules.
+//   - modules: the snowflake's modules by region.
 //
 // Returns:
 //   - result: the star's shape.
-func measureStar(nodes map[string]*rules.StarNode, dir string, depth int, cores, leaves map[string][]app.MapModule) (result *starShape) {
-	result = &starShape{dir: dir, label: path.Base(dir), depth: depth, core: topItems(cores[dir])}
+func measureStar(nodes map[string]*rules.StarNode, dir string, depth int, modules starModules) (result *starShape) {
+	result = &starShape{dir: dir, label: path.Base(dir), depth: depth, contracts: topItems(modules.contracts[dir]), orchestrators: topItems(modules.orchestrators[dir])}
 	radius := 0.0
-	if len(result.core) > 1 {
-		radius = arcRadius(result.core, 0, 2*math.Pi, true)
+	if len(result.contracts) > 1 {
+		radius = arcRadius(result.contracts, -math.Pi/2, 2*math.Pi, true)
 	}
 
-	arrange(result.core, radius, 0, 2*math.Pi, true)
-	result.coreR = hexRadius(moduleSize + ringGap)
-	if len(result.core) > 0 {
-		result.coreR = hexRadius(extent(result.core, radius) + ringGap)
+	arrange(result.contracts, radius, -math.Pi/2, 2*math.Pi, true)
+	result.contractsR = hexRadius(moduleSize + ringGap)
+	if len(result.contracts) > 0 {
+		result.contractsR = hexRadius(extent(result.contracts, radius) + ringGap)
+	}
+
+	result.coreR = hexRadius(result.contractsR + 2*moduleSize + ringGap)
+	if len(result.orchestrators) > 0 {
+		radius = math.Max(result.contractsR+largest(result.orchestrators)+ringGap, arcRadius(result.orchestrators, -math.Pi/2, 2*math.Pi, true))
+		arrange(result.orchestrators, radius, -math.Pi/2, 2*math.Pi, true)
+		// The first orchestrator sits at the top, and the rest follow it
+		// clockwise.
+		turn := -math.Pi/2 - math.Atan2(result.orchestrators[0].y, result.orchestrators[0].x)
+		for _, placed := range result.orchestrators {
+			placed.x, placed.y = rotate(placed.x, placed.y, turn)
+		}
+
+		result.coreR = hexRadius(math.Max(radius+largest(result.orchestrators), result.contractsR) + ringGap)
 	}
 
 	node := nodes[dir]
@@ -704,10 +720,10 @@ func measureStar(nodes map[string]*rules.StarNode, dir string, depth int, cores,
 	for _, spoke := range slices.Compact(spokes) {
 		shape := &spokeShape{dir: spoke}
 		if slices.Contains(node.Branches, spoke) {
-			shape.branch = measureStar(nodes, spoke, depth+1, cores, leaves)
+			shape.branch = measureStar(nodes, spoke, depth+1, modules)
 			shape.slot = &item{path: spoke, radius: shape.branch.radius}
 		} else {
-			shape.slot = &item{path: spoke, items: topItems(leaves[spoke])}
+			shape.slot = &item{path: spoke, items: topItems(modules.leaves[spoke])}
 			if len(shape.slot.items) == 0 {
 				continue
 			}
@@ -738,22 +754,28 @@ func measureStar(nodes map[string]*rules.StarNode, dir string, depth int, cores,
 	return result
 }
 
-// placeStar emits a measured star, its core, its leaves and, in turn, its
-// branches, with its center at x, y and its outward axis turned by angle.
+// placeStar emits a measured star, its contracts, its orchestrators, its
+// leaves and, in turn, its branches, with its center at x, y and its
+// outward axis turned by angle.
 //
 // Parameters:
 //   - result: the layout to emit into.
-//   - rings: the rings emitted so far: cores, leaves and stars.
+//   - rings: the rings emitted so far: contracts, cores, leaves and stars.
 //   - shape: the star.
 //   - x, y: where its center goes.
 //   - angle: how far its outward axis turns from +x.
-func placeStar(result *Layout, rings *[3][]Ring, shape *starShape, x, y, angle float64) {
-	tone := 2 + shape.depth%2
-	rings[2] = append(rings[2], Ring{Layer: ringStar, Tone: tone, Radius: round(shape.radius), X: round(x), Y: round(y), Star: shape.dir, Label: shape.label})
-	rings[0] = append(rings[0], Ring{Layer: ringCore, Tone: 0, Radius: round(shape.coreR), X: round(x), Y: round(y), Star: shape.dir, Label: ringCore})
-	for _, placed := range shape.core {
+func placeStar(result *Layout, rings *[4][]Ring, shape *starShape, x, y, angle float64) {
+	rings[3] = append(rings[3], Ring{Layer: ringStar, Tone: 3, Radius: round(shape.radius), X: round(x), Y: round(y), Star: shape.dir, Label: shape.label})
+	rings[1] = append(rings[1], Ring{Layer: ringCore, Tone: 1, Radius: round(shape.coreR), X: round(x), Y: round(y), Star: shape.dir, Label: ringCore})
+	rings[0] = append(rings[0], Ring{Layer: graph.LayerContracts, Tone: 0, Radius: round(shape.contractsR), X: round(x), Y: round(y), Star: shape.dir, Label: graph.LayerContracts})
+	for _, placed := range shape.contracts {
 		placed.x, placed.y = rotate(placed.x, placed.y, angle)
-		emit(result, placed, x, y, ringCore+":"+shape.dir, ringCore, "", 0)
+		emit(result, placed, x, y, graph.LayerContracts+":"+shape.dir, graph.LayerContracts, "", 0)
+	}
+
+	for _, placed := range shape.orchestrators {
+		placed.x, placed.y = rotate(placed.x, placed.y, angle)
+		emit(result, placed, x, y, graph.LayerOrchestrator+":"+shape.dir, graph.LayerOrchestrator, "", 0)
 	}
 
 	for _, spoke := range shape.spokes {
@@ -763,7 +785,7 @@ func placeStar(result *Layout, rings *[3][]Ring, shape *starShape, x, y, angle f
 			continue
 		}
 
-		rings[1] = append(rings[1], Ring{Layer: graph.LayerLeaf, Tone: 1, Radius: round(spoke.slot.radius), X: round(x + dx), Y: round(y + dy), Star: shape.dir, Spoke: spoke.dir, Label: path.Base(spoke.dir)})
+		rings[2] = append(rings[2], Ring{Layer: graph.LayerLeaf, Tone: 2, Radius: round(spoke.slot.radius), X: round(x + dx), Y: round(y + dy), Star: shape.dir, Spoke: spoke.dir, Label: path.Base(spoke.dir)})
 		for _, placed := range spoke.slot.items {
 			emit(result, placed, x+dx, y+dy, graph.LayerLeaf+":"+spoke.dir, graph.LayerLeaf, "", 0)
 		}

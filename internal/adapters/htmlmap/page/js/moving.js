@@ -11,8 +11,8 @@
 // another layer, or for vertical and modular in another boundary, shared or
 // composition, treaty.yaml is edited to move it there, and the rules and
 // checks follow. In a snowflake a spoke is its directory, so a module moves
-// only into or out of its star's core, or to composition. Escape puts it
-// back.
+// only into its star's contracts or orchestrators, between them, or out of
+// its star's core. Escape puts it back.
 let carry = null;
 function pickUp(id, clientX, clientY, pointerId) {
   const node = mapEl.querySelector(`[data-module="${CSS.escape(id)}"]`), p = D.layout.modules[id];
@@ -23,8 +23,8 @@ function pickUp(id, clientX, clientY, pointerId) {
   const at = toMap(clientX, clientY);
   carry = { id, node, from: bandOf(id), start: { x: p.x, y: p.y }, grab: { x: at.x - p.x, y: at.y - p.y }, at: { x: p.x, y: p.y }, target: null };
   liftCarried();
-  const elsewhere = LAYERED_STYLES.includes(D.architecture) ? "in another layer" : STAR_STYLES.includes(D.architecture) ? "on its star's core, its own spoke or composition" : "in another boundary, shared or composition";
-  setStatus(`Moving ${(modules.get(id) || {}).label || id}: drop it in its own area to place it, or ${elsewhere} to move it there in treaty.yaml · Esc puts it back`);
+  const starry = STAR_STYLES.includes(D.architecture), elsewhere = LAYERED_STYLES.includes(D.architecture) ? "in another layer" : starry ? "on its star's contracts, its orchestrators or its own spoke" : "in another boundary, shared or composition";
+  setStatus(`Moving ${(modules.get(id) || {}).label || id}: drop it in its own ${starry ? "region" : "area"} to place it, or ${elsewhere} to move it there in treaty.yaml · Esc puts it back`);
   moveCarry(clientX, clientY);
 }
 // liftCarried marks the carried module and fades its edges, again after a
@@ -69,24 +69,29 @@ function boundedVerdict(from, to) {
   return { ok: false, text: "Drop it on a boundary, shared or composition to place it" };
 }
 // starVerdict says what a drop does in a snowflake, where a spoke is its
-// directory: a module moves into the core of the innermost star holding it,
-// out of a core it is in by its exact path into its own directory's spoke,
-// or to composition.
+// directory, decided from the module's own star, spoke and entry: the top
+// of a position, or its star's own package, moves into the contracts or the
+// orchestrators of its star, or between them; a core package other than its
+// star's own moves out of the core to its own spoke. A core package has no
+// leaf ring of its own, so its star's backdrop stands for that spoke.
 function starVerdict(from, to) {
-  const m = modules.get(carry.id) || {}, path = m.path || "", holder = innermostStar(path);
-  if (to.layer === "composition") return { ok: true, move: true, text: "Move to composition in treaty.yaml" };
-  if (to.layer === "core") {
-    if (to.star === holder) return { ok: true, move: true, text: `Move into the core of star ${to.star} in treaty.yaml` };
-    return { ok: false, text: `A star's core is inside its directory; drop it on the core of its own star${holder ? `, star ${holder}` : ""}` };
+  const m = modules.get(carry.id) || {}, star = m.star || "", own = !!star && m.path === star;
+  const position = m.layer === "leaf" ? m.spoke : m.core_entry || "", top = own || m.path === position;
+  const core = layer => layer === "contracts" || layer === "orchestrator", list = layer => layer === "contracts" ? "contracts" : "orchestrators";
+  if (core(to.layer)) {
+    if (to.star !== star) return { ok: false, text: `A core package is a child of its own star: drop it on the core of star ${star}` };
+    if (!top) return { ok: false, text: `${position} holds it, and a core package is a whole child of its star: move ${position} into the core instead` };
+    if (core(from.layer)) return { ok: true, move: true, text: `Move from the ${list(from.layer)} to the ${list(to.layer)} of star ${star} in treaty.yaml` };
+    return { ok: true, move: true, text: to.layer === "contracts" ? `Move into the contracts of star ${star} in treaty.yaml` : `Move among the orchestrators of star ${star} in treaty.yaml` };
   }
-  if (to.layer === "spoke") {
-    if (to.spoke !== ownSpoke(path)) return { ok: false, text: `A spoke is its directory: move the package's files into ${to.spoke} to put it there` };
-    if (from.layer !== "core") return { ok: true, move: true, text: `Move to spoke ${to.spoke} in treaty.yaml` };
-    const glob = (m.reasons || []).map(r => r.glob).find(g => g && g !== path);
-    if (glob) return { ok: false, text: `The glob "${glob}" under stars › ${from.star} puts it in the core; edit that glob to take it out` };
-    return { ok: true, move: true, text: `Take it out of the core of star ${from.star} in treaty.yaml` };
+  const spoke = to.layer === "leaf" ? to.spoke : to.layer === "star" && to.star === star && core(from.layer) ? position : "";
+  if (spoke) {
+    if (own) return { ok: false, text: "A star's own package is always in its core: drop it on its contracts or orchestrators" };
+    if (from.layer === "leaf" || spoke !== position) return { ok: false, text: `A spoke is its directory: move the package's files into ${spoke} to put it there` };
+    if (!top) return { ok: false, text: `${position} holds it, and a core package is a whole child of its star: move ${position} out of the core instead` };
+    return { ok: true, move: true, text: `Take it out of the core of star ${star} in treaty.yaml`, target: { ...to, layer: "leaf", star, spoke, label: `leaf ${spoke}` } };
   }
-  return { ok: false, text: "Drop it on a core, its own spoke or composition" };
+  return { ok: false, text: "Drop it on its star's contracts, its orchestrators or its own spoke" };
 }
 function dropCarry(clientX, clientY) {
   moveCarry(clientX, clientY);
@@ -95,8 +100,9 @@ function dropCarry(clientX, clientY) {
   endCarry();
   savePosition(id, { x: Math.round(at.x * 10) / 10, y: Math.round(at.y * 10) / 10 });
   if (!verdict.move) { setStatus(""); return; }
-  setStatus(`moving ${(modules.get(id) || {}).label || id} to ${target.label}…`);
-  reclassify(id, target);
+  const to = verdict.target || target;
+  setStatus(`moving ${(modules.get(id) || {}).label || id} to ${to.label}…`);
+  reclassify(id, to);
 }
 function putBack(message) {
   endCarry();
@@ -161,15 +167,16 @@ function placeMoved() {
 // around the origin, as rings are drawn.
 function inHex(x, y, r) { const h = r * Math.sqrt(3) / 2; return Math.abs(y) <= h && Math.abs(x) * Math.sqrt(3) / 2 + Math.abs(y) / 2 <= h; }
 // bandOf is the band a module belongs to: its layer, and its side on a
-// hexagonal adapter ring; in a snowflake, its star's core or its spoke;
+// hexagonal adapter ring; in a snowflake, its star's contracts, its star's
+// orchestrators or its leaf;
 // for the architectures that place modules by directory, the area its
 // computed position lies in.
 function bandOf(id) {
   const m = modules.get(id) || {}, p = (D.layout.computed || D.layout.modules)[id];
   if (STAR_STYLES.includes(D.architecture)) {
-    if (m.layer === "core") return { key: "core:" + m.star, layer: "core", star: m.star, spoke: "" };
-    if (m.layer === "spoke") return { key: "spoke:" + m.spoke, layer: "spoke", star: m.star, spoke: m.spoke };
-    return { key: m.layer === "composition" ? "composition" : "unclassified", layer: m.layer === "composition" ? "composition" : "unclassified", star: "", spoke: "" };
+    if (m.layer === "contracts" || m.layer === "orchestrator") return { key: m.layer + ":" + m.star, layer: m.layer, star: m.star, spoke: "" };
+    if (m.layer === "leaf") return { key: "leaf:" + m.spoke, layer: "leaf", star: m.star, spoke: m.spoke };
+    return { key: "unclassified", layer: "unclassified", star: m.star || "", spoke: "" };
   }
   if (LAYERED_STYLES.includes(D.architecture)) {
     const side = D.architecture === "hexagonal" && m.layer === "adapter" ? m.side || "" : "";
@@ -204,8 +211,9 @@ function bandAt(x, y) {
   return { key: "region:" + hit, layer: r.layer || "", boundary: r.boundary || "", side: "", label: regionName(r), backdrop: "region:" + hit };
 }
 // starBandAt names the snowflake region under a map point: the smallest
-// ring whose hexagon holds it, a core, a leaf, a star or composition, or
-// unclassified outside them all.
+// ring whose hexagon holds it, a star's contracts, the band of its
+// orchestrators between its contracts and its core's outline, a leaf or a
+// star's backdrop, or unclassified outside them all.
 function starBandAt(rings, x, y) {
   let best = -1;
   rings.forEach((ring, i) => {
@@ -215,10 +223,10 @@ function starBandAt(rings, x, y) {
   });
   if (best < 0) return { key: "unclassified", layer: "unclassified", star: "", spoke: "", label: "unclassified", backdrop: "" };
   const ring = rings[best], backdrop = "ring:" + best;
-  if (ring.layer === "core") return { key: "core:" + ring.star, layer: "core", star: ring.star, spoke: "", label: `the core of star ${ring.star}`, backdrop };
-  if (ring.layer === "spoke") return { key: "spoke:" + ring.spoke, layer: "spoke", star: ring.star, spoke: ring.spoke, label: `spoke ${ring.spoke}`, backdrop };
-  if (ring.layer === "star") return { key: "star:" + ring.star, layer: "star", star: ring.star, spoke: "", label: `star ${ring.star}`, backdrop };
-  return { key: "composition", layer: "composition", star: "", spoke: "", label: "composition", backdrop };
+  if (ring.layer === "contracts") return { key: "contracts:" + ring.star, layer: "contracts", star: ring.star, spoke: "", label: `the contracts of star ${ring.star}`, backdrop };
+  if (ring.layer === "core") return { key: "orchestrator:" + ring.star, layer: "orchestrator", star: ring.star, spoke: "", label: `the orchestrators of star ${ring.star}`, backdrop };
+  if (ring.layer === "leaf") return { key: "leaf:" + ring.spoke, layer: "leaf", star: ring.star, spoke: ring.spoke, label: `leaf ${ring.spoke}`, backdrop };
+  return { key: "star:" + ring.star, layer: "star", star: ring.star, spoke: "", label: `star ${ring.star}`, backdrop };
 }
 // inComposition reports whether a point on the outer ring lies within the
 // arc its composition modules span, where composition shares that ring.
