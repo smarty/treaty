@@ -96,7 +96,7 @@ func proposal(g *graph.Graph, style string) (text string, err error) {
 			return "", fmt.Errorf("%w: found no directory with two or more packages to make boundaries of, so %s does not fit this code; choose another architecture, or write boundaries in treaty.yaml yourself", rules.ErrArchitecture, style)
 		}
 
-		if style == rules.StyleSnowflake {
+		if style == rules.StyleSnowflake && len(g.Modules) == 0 {
 			return "", fmt.Errorf("%w: found no packages to make a star of, so snowflake does not fit this code; choose another architecture, or write stars in treaty.yaml yourself", rules.ErrArchitecture)
 		}
 
@@ -637,11 +637,11 @@ func starDraft(g *graph.Graph, architecture rules.Architecture, fit *starFit) st
 	builder.WriteString("# A snowflake is a star of stars. Each star's core holds its contracts and its\n")
 	builder.WriteString("# orchestrators; every other child of a star that holds a package is a spoke, a\n")
 	builder.WriteString("# leaf or a branch, a star of its own, and directories that hold no package are\n")
-	builder.WriteString("# looked through. A spoke may use only its own star's core. A core's packages\n")
-	builder.WriteString("# may use each other; contracts may also use the contracts one star out or in,\n")
-	builder.WriteString("# and an orchestrator its own leaves, its branches' cores and the contracts\n")
-	builder.WriteString("# around it. Run treaty check to see the dependencies left that break these\n")
-	builder.WriteString("# rules, and move each behind a port.\n")
+	builder.WriteString("# looked through. A spoke may use only its own star's core. Contracts may use\n")
+	builder.WriteString("# their star's contracts and the contracts one star out or in, never a spoke or\n")
+	builder.WriteString("# an orchestrator; an orchestrator may use its star's core and leaves, its\n")
+	builder.WriteString("# branches' cores and the contracts around it. Run treaty check to see the\n")
+	builder.WriteString("# dependencies left that break these rules, and move each behind a port.\n")
 	writeStarTree(&builder, g, architecture, fit)
 	fmt.Fprintf(&builder, "version: %d\narchitecture: snowflake\nstars:\n", ConfigVersion)
 	for _, star := range architecture.Stars {
@@ -658,7 +658,7 @@ var breakNames = []struct{ kind, words string }{
 	{rules.BreakSideways, "between sibling spokes"},
 	{rules.BreakOut, "past the core of their own star"},
 	{rules.BreakIn, "into a branch beyond its core"},
-	{rules.BreakContracts, "from contracts to a spoke"},
+	{rules.BreakContracts, "from contracts to a spoke or an orchestrator"},
 }
 
 // writeStarTree writes the draft's comments on its stars: one line per

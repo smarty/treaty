@@ -303,6 +303,10 @@ func sliceStar(analysis *analysis, scope SliceScope) *SliceStar {
 		}
 	default:
 		result.Never = append(result.Never, "the leaves of star "+module.Star)
+		if len(node.Orchestrators) > 0 {
+			result.Never = append(result.Never, "the orchestrators of star "+module.Star)
+		}
+
 		for _, branch := range node.Branches {
 			result.Never = append(result.Never, "the orchestrators of branch "+branch)
 		}

@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	// BreakContracts is a snowflake dependency from contracts on a spoke.
+	// BreakContracts is a snowflake dependency from contracts on a spoke or
+	// on an orchestrator of their own star.
 	BreakContracts = "contracts"
 
 	// BreakIn is a snowflake dependency from a core into a branch beyond
@@ -44,10 +45,11 @@ var ErrMisfit = errors.New("the stars do not fit the code")
 // Notes:
 //   - A spoke may use only its own star's core region, never a sibling
 //     spoke and never the core of a star around its own.
-//   - A star's core packages may use each other. Contracts may also use
-//     the contracts of the star around them and of their branches, never a
-//     spoke. An orchestrator may also use its star's leaves, its branches'
-//     cores and the contracts of the star around it.
+//   - Contracts may use the contracts of their own star, of the star
+//     around it and of its branches, never a spoke and never an
+//     orchestrator. An orchestrator may use its own star's whole core, its
+//     star's leaves, its branches' cores and the contracts of the star
+//     around it.
 type Star struct {
 	Dir           string
 	Contracts     []string
@@ -482,8 +484,10 @@ func (this Architecture) snowflakeBreak(from, to Placement) (kind, rule string) 
 		}
 	case graph.LayerContracts:
 		switch {
-		case theirs == own && core:
+		case theirs == own && to.Layer == graph.LayerContracts:
 			return "", ""
+		case theirs == own && to.Layer == graph.LayerOrchestrator:
+			return BreakContracts, fmt.Sprintf("%s may not depend on %s: contracts never use an orchestrator; declare what it needs in contracts, and let %s implement it", starName(from), starName(to), to.Entry)
 		case to.Layer == graph.LayerLeaf:
 			return BreakContracts, fmt.Sprintf("%s may not depend on %s: contracts never use a spoke; declare what it needs in contracts, and let an orchestrator hand %s in", starName(from), starName(to), to.Spoke)
 		case to.Layer == graph.LayerContracts && (theirs == this.Parent(own) || this.Parent(theirs) == own):
@@ -597,7 +601,7 @@ func (this Architecture) starGuidance(placement Placement) string {
 	branches := this.branchesOf(dir)
 	switch placement.Layer {
 	case graph.LayerContracts:
-		parts := []string{"the core of star " + dir}
+		parts := []string{"the contracts of star " + dir}
 		if len(branches) > 0 {
 			parts = append(parts, fmt.Sprintf("the contracts of its %s %s", plural(len(branches), "branch", "branches"), joinAnd(branches)))
 		}
@@ -608,7 +612,7 @@ func (this Architecture) starGuidance(placement Placement) string {
 			holds = fmt.Sprintf("interfaces, value types and their pure methods, errors and constants, and what its spokes need from star %s, re-exported", parent)
 		}
 
-		return fmt.Sprintf("Contracts %s of %s: %s. They may use %s, never a spoke.", placement.Entry, where, holds, joinAnd(parts))
+		return fmt.Sprintf("Contracts %s of %s: %s. They may use %s, never a spoke or an orchestrator.", placement.Entry, where, holds, joinAnd(parts))
 	case graph.LayerOrchestrator:
 		parts := []string{"the core and the leaves of star " + dir}
 		if len(branches) > 0 {
@@ -650,8 +654,9 @@ func (this Architecture) starGuidance(placement Placement) string {
 }
 
 // starMayUse lists what a module placed in the star tree may depend on:
-// its own leaf, its star's contracts and orchestrators, its star's leaves,
-// its branches' cores and its parent's contracts, in that order.
+// its own leaf, its star's contracts and, but for contracts, its star's
+// orchestrators, its star's leaves, its branches' cores and its parent's
+// contracts, in that order.
 func (this Architecture) starMayUse(placement Placement) []string {
 	star := this.star(placement.Star)
 	if star == nil || placement.Layer == graph.LayerUnclassified {
@@ -671,7 +676,12 @@ func (this Architecture) starMayUse(placement Placement) []string {
 		result = append(result, starName(placement))
 	}
 
-	core(star, starRoles...)
+	if placement.Layer == graph.LayerContracts {
+		core(star, starRoles[0])
+	} else {
+		core(star, starRoles...)
+	}
+
 	if placement.Layer == graph.LayerLeaf {
 		return result
 	}
@@ -716,7 +726,7 @@ func (this Architecture) starSummary() string {
 	}
 
 	return "Rules (snowflake): the repository is a star of stars. Each star has a core, holding its contracts and its orchestrators, and spokes, its other children that hold a package, found by looking through directories that hold none: a spoke is a leaf, or a branch, a star of its own. " +
-		"A spoke may use only its own star's core. A star's core packages may use each other; contracts may also use the contracts of the star around them and of their branches, never a spoke; an orchestrator may also use its star's leaves, its branches' cores and the contracts of the star around it, never a branch's spokes. " +
+		"A spoke may use only its own star's core. Contracts may use the contracts of their own star, of the star around it and of its branches, never a spoke and never an orchestrator; an orchestrator may use its own star's core, its star's leaves, its branches' cores and the contracts of the star around it, never a branch's spokes. " +
 		"Nothing else: no dependency runs sideways, not even between the cores of sibling branches. Stars: " + strings.Join(stars, ", ") + "."
 }
 
@@ -740,7 +750,7 @@ func (this Architecture) validateStars() error {
 	seen := map[string]bool{}
 	for _, star := range this.Stars {
 		dir := star.Dir
-		if dir == "" || strings.ContainsAny(dir, "*?[") || slices.Contains(strings.Split(dir, "/"), "..") || strings.HasPrefix(dir, "/") || strings.HasPrefix(dir, "./") || (dir != "." && strings.HasSuffix(dir, "/")) {
+		if dir == "" || strings.ContainsAny(dir, wildcards) || slices.Contains(strings.Split(dir, "/"), "..") || strings.HasPrefix(dir, "/") || strings.HasPrefix(dir, "./") || (dir != "." && strings.HasSuffix(dir, "/")) {
 			return fmt.Errorf("%w: star %q must be a directory path relative to the repository root, not a glob", ErrArchitecture, dir)
 		}
 
@@ -783,6 +793,11 @@ func (this Architecture) validateStars() error {
 	return nil
 }
 
+// wildcards are the glob characters a star or an entry may not hold. They
+// cannot be in a directory's name on Windows, so a path holding one is a
+// glob; brackets can, as in app/[slug], so they are read literally.
+const wildcards = "*?"
+
 // validateEntry checks one entry of a star: a clean directory, not a glob,
 // inside the star and outside its branches, holding no star and no other
 // entry of the star.
@@ -794,7 +809,7 @@ func (this Architecture) validateEntry(star Star, role starRole, entry string) e
 	switch {
 	case !clean(entry):
 		return fmt.Errorf("%w: %s entry %q of star %s must be a directory path relative to the repository root, with no empty, . or .. segment", ErrArchitecture, role.list, entry, star.Dir)
-	case strings.ContainsAny(entry, "*?["):
+	case strings.ContainsAny(entry, wildcards):
 		return fmt.Errorf("%w: %s entry %q of star %s is a glob; name each package by its directory, so a new directory stays a spoke until treaty.yaml names it", ErrArchitecture, role.list, entry, star.Dir)
 	case !encloses(star.Dir, entry):
 		return fmt.Errorf("%w: %s entry %q of star %s lies outside %s; a star's core is inside its directory", ErrArchitecture, role.list, entry, star.Dir, star.Dir)

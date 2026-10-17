@@ -1084,7 +1084,7 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 	for _, c := range []struct{ module, want string }{
 		{"go:internal/blocks/www", "star: leaf internal/blocks/www of star internal/blocks, a branch of .\n  cores it may use: go:internal/blocks/contracts, go:internal/blocks/kit\n  never use: leaf internal/blocks/cleanse, the core of star . (reach it through internal/blocks/contracts)\n"},
 		{"go:internal/assembly", "star: orchestrator internal/assembly of star .\n  cores it may use: go:., go:internal/blocks/contracts, go:internal/blocks/kit, go:internal/contracts\n  leaves it wires: cmd/app, internal/cache, internal/plan, internal/web\n  never use: the spokes of branch internal/blocks\n"},
-		{"go:internal/blocks/contracts", "star: contracts internal/blocks/contracts of star internal/blocks, a branch of .\n  cores it may use: go:internal/blocks/kit, go:internal/contracts\n  never use: the leaves of star internal/blocks, the orchestrators of star .\n"},
+		{"go:internal/blocks/contracts", "star: contracts internal/blocks/contracts of star internal/blocks, a branch of .\n  cores it may use: go:internal/contracts\n  never use: the leaves of star internal/blocks, the orchestrators of star internal/blocks, the orchestrators of star .\n"},
 	} {
 		slice, err := service.Slice(c.module)
 		if err != nil {

@@ -220,13 +220,13 @@ func TestSnowflakeCheck(t *testing.T) {
 		{nested, "internal/gate/models/tiny", "internal/web", "leaf internal/gate/models/tiny may not depend on leaf internal/web: internal/gate and internal/web are sibling spokes of star ., and spokes never depend sideways; declare a port in the contracts of star . (internal/contracts), re-export it in the contracts of star internal/gate (internal/gate/contracts) and the contracts of star internal/gate/models (internal/gate/models/contracts), implement it in internal/web, and let the orchestrators of stars ., internal/gate and internal/gate/models hand it in"},
 		{guarded, "internal/blocks/www", "internal/gate/contracts", "leaf internal/blocks/www may not depend on contracts internal/gate/contracts: internal/blocks and internal/gate are sibling spokes of star ., and spokes never depend sideways, not even on a branch's core; declare what it needs in the contracts of star . (internal/contracts)"},
 
-		// A star's core packages use each other, contracts and orchestrators
-		// alike.
-		{guarded, "internal/contracts", "internal/executor", ""},
-		{guarded, "internal/contracts", ".", ""},
+		// An orchestrator uses its star's whole core; contracts use only
+		// its contracts, never an orchestrator.
 		{guarded, "internal/executor", "internal/contracts", ""},
 		{guarded, "internal/assembly", "internal/executor", ""},
-		{guarded, "internal/gate/contracts", "internal/gate/pipeline", ""},
+		{guarded, "internal/contracts", "internal/executor", "contracts internal/contracts may not depend on orchestrator internal/executor: contracts never use an orchestrator; declare what it needs in contracts, and let internal/executor implement it"},
+		{guarded, "internal/contracts", ".", "contracts internal/contracts may not depend on orchestrator .: contracts never use an orchestrator; declare what it needs in contracts, and let . implement it"},
+		{guarded, "internal/gate/contracts", "internal/gate/pipeline", "contracts internal/gate/contracts may not depend on orchestrator internal/gate/pipeline: contracts never use an orchestrator; declare what it needs in contracts, and let internal/gate/pipeline implement it"},
 		// Contracts use the contracts one star out and one star in.
 		{guarded, "internal/blocks/contracts", "internal/contracts", ""},
 		{guarded, "internal/contracts", "internal/blocks/contracts", ""},
@@ -300,7 +300,8 @@ func TestSnowflakeBreak(t *testing.T) {
 		{"internal/assembly", "internal/blocks/www", BreakIn},
 		{"internal/contracts", "internal/gate/pipeline", BreakIn},
 		{"internal/contracts", "internal/web", BreakContracts},
-		{"internal/contracts", "internal/executor", ""},
+		{"internal/contracts", "internal/executor", BreakContracts},
+		{"internal/executor", "internal/contracts", ""},
 	} {
 		if got := architecture.Break(architecture.Resolve(c.from), architecture.Resolve(c.to)); got != c.kind {
 			t.Errorf("Break(%s, %s) = %q, want %q", c.from, c.to, got, c.kind)
@@ -478,6 +479,8 @@ func TestSnowflakeValidate(t *testing.T) {
 		{Style: StyleSnowflake, Stars: []Star{{Dir: ".", Contracts: []string{"."}}}},
 		{Style: StyleSnowflake, Stars: []Star{{Dir: ".", Orchestrators: []string{"."}}, {Dir: "internal/billing"}, {Dir: "internal/orders", Contracts: []string{"internal/orders/ports"}, Orchestrators: []string{"internal/orders"}}}},
 		{Style: StyleSnowflake, Stars: []Star{{Dir: ".", Contracts: []string{"internal/web/port"}}}},
+		// A file-routed directory's brackets are part of its name.
+		{Style: StyleSnowflake, Stars: []Star{{Dir: ".", Orchestrators: []string{"app/[slug]"}}, {Dir: "app/[lang]"}}},
 	} {
 		if err := valid.Validate(); err != nil {
 			t.Errorf("%+v: %v", valid.Stars, err)
@@ -552,10 +555,10 @@ func TestSnowflakeGuidanceMayUseSummary(t *testing.T) {
 			[]string{"contracts internal/contracts", "orchestrator .", "orchestrator internal/assembly", "orchestrator internal/executor", "the leaves of star .", "contracts internal/blocks/contracts", "orchestrator internal/blocks/kit", "contracts internal/gate/contracts", "orchestrator internal/gate/pipeline"}},
 		{"internal/blocks/kit", "Orchestrator internal/blocks/kit of star internal/blocks, a branch of .: wires its star. It may use the core and the leaves of star internal/blocks and the contracts of star . around it, nothing else.",
 			[]string{"contracts internal/blocks/contracts", "orchestrator internal/blocks/kit", "the leaves of star internal/blocks", "contracts internal/contracts"}},
-		{"internal/contracts", "Contracts internal/contracts of star .: interfaces, value types and their pure methods, errors and constants. They may use the core of star . and the contracts of its branches internal/blocks and internal/gate, never a spoke.",
-			[]string{"contracts internal/contracts", "orchestrator .", "orchestrator internal/assembly", "orchestrator internal/executor", "contracts internal/blocks/contracts", "contracts internal/gate/contracts"}},
-		{"internal/blocks/contracts", "Contracts internal/blocks/contracts of star internal/blocks, a branch of .: interfaces, value types and their pure methods, errors and constants, and what its spokes need from star ., re-exported. They may use the core of star internal/blocks and the contracts of star . around it, never a spoke.",
-			[]string{"contracts internal/blocks/contracts", "orchestrator internal/blocks/kit", "contracts internal/contracts"}},
+		{"internal/contracts", "Contracts internal/contracts of star .: interfaces, value types and their pure methods, errors and constants. They may use the contracts of star . and the contracts of its branches internal/blocks and internal/gate, never a spoke or an orchestrator.",
+			[]string{"contracts internal/contracts", "contracts internal/blocks/contracts", "contracts internal/gate/contracts"}},
+		{"internal/blocks/contracts", "Contracts internal/blocks/contracts of star internal/blocks, a branch of .: interfaces, value types and their pure methods, errors and constants, and what its spokes need from star ., re-exported. They may use the contracts of star internal/blocks and the contracts of star . around it, never a spoke or an orchestrator.",
+			[]string{"contracts internal/blocks/contracts", "contracts internal/contracts"}},
 		{"internal/plan", "Leaf internal/plan of star .: may use itself and the core of star ., never a sibling spoke. To use a sibling, depend on a port in the contracts of star . and let an orchestrator of star . hand the sibling in.",
 			[]string{"leaf internal/plan", "contracts internal/contracts", "orchestrator .", "orchestrator internal/assembly", "orchestrator internal/executor"}},
 		{"internal/blocks/www", "Leaf internal/blocks/www of star internal/blocks, a branch of .: may use itself and the core of star internal/blocks, never a sibling spoke or the core of star . around it. To use a sibling, depend on a port in the contracts of star internal/blocks and let an orchestrator of star internal/blocks hand the sibling in; what it needs from star . comes re-exported through those contracts.",
@@ -591,7 +594,7 @@ func TestSnowflakeGuidanceMayUseSummary(t *testing.T) {
 	// Stars are listed root first, whatever order treaty.yaml gives.
 	slices.Reverse(architecture.Stars)
 	want := "Rules (snowflake): the repository is a star of stars. Each star has a core, holding its contracts and its orchestrators, and spokes, its other children that hold a package, found by looking through directories that hold none: a spoke is a leaf, or a branch, a star of its own. " +
-		"A spoke may use only its own star's core. A star's core packages may use each other; contracts may also use the contracts of the star around them and of their branches, never a spoke; an orchestrator may also use its star's leaves, its branches' cores and the contracts of the star around it, never a branch's spokes. " +
+		"A spoke may use only its own star's core. Contracts may use the contracts of their own star, of the star around it and of its branches, never a spoke and never an orchestrator; an orchestrator may use its own star's core, its star's leaves, its branches' cores and the contracts of the star around it, never a branch's spokes. " +
 		"Nothing else: no dependency runs sideways, not even between the cores of sibling branches. " +
 		"Stars: . (contracts internal/contracts; orchestrators ., internal/assembly and internal/executor), internal/blocks (branch of .; contracts internal/blocks/contracts; orchestrators internal/blocks/kit), internal/gate (branch of .; contracts internal/gate/contracts; orchestrators internal/gate/pipeline)."
 	if got := architecture.Summary(); got != want {
