@@ -22,6 +22,7 @@ type ModuleReport struct {
 	Public   bool          `json:"public,omitempty"`
 	Star     string        `json:"star,omitempty"`
 	Spoke    string        `json:"spoke,omitempty"`
+	Entry    string        `json:"entry,omitempty"`
 	Before   *rules.Metric `json:"before,omitempty"`
 	Metrics  rules.Metric  `json:"metrics"`
 }
@@ -63,7 +64,10 @@ func (this *Service) checkReport(base string, analysis *analysis) (result Report
 	result = analysis.report()
 	result.Notes = append(this.notes(base, analysis), result.Notes...)
 	result.Notes = append(result.Notes, staleNotes(analysis.stale)...)
-	result.Notes = append(result.Notes, analysis.config.Architecture.Unmatched(analysis.modulePaths())...)
+	result.Notes = append(result.Notes, analysis.config.Architecture.Notes()...)
+	if analysis.baseMisfit != "" {
+		result.Notes = append(result.Notes, fmt.Sprintf("the base does not fit the stars: %s; its misfit directories are looked through, so existing violations are matched approximately", analysis.baseMisfit))
+	}
 	if analysis.config.Unversioned {
 		result.Notes = append(result.Notes, unversionedNote)
 	}
@@ -124,7 +128,7 @@ func (this *analysis) report() Report {
 	result.Modules = []ModuleReport{}
 
 	for _, module := range this.head.Modules {
-		entry := ModuleReport{ID: module.ID, Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Star: module.Star, Spoke: module.Spoke, Metrics: this.metrics[module.ID]}
+		entry := ModuleReport{ID: module.ID, Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Star: module.Star, Spoke: module.Spoke, Entry: module.CoreEntry, Metrics: this.metrics[module.ID]}
 		if before, ok := this.baseMetrics[module.ID]; ok {
 			entry.Before = &before
 		}
@@ -137,12 +141,7 @@ func (this *analysis) report() Report {
 
 // modulePaths lists the paths of the head graph's modules.
 func (this *analysis) modulePaths() []string {
-	result := make([]string, 0, len(this.head.Modules))
-	for _, module := range this.head.Modules {
-		result = append(result, module.Path)
-	}
-
-	return result
+	return modulePaths(this.head)
 }
 
 // judge marks each finding that counts toward the failures or warnings, as

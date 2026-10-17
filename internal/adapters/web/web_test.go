@@ -520,9 +520,11 @@ func TestMoveModulesBetweenBoundaries(t *testing.T) {
 func TestMoveModulesInASnowflake(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "go.mod", "module example.com/shop\n")
-	write(t, root, "treaty.yaml", "version: 1\narchitecture: snowflake\ncomposition: [\"cmd/**\"]\nstars:\n  internal: [\"internal/core/**\"]\n  internal/orders: []\n")
-	write(t, root, "internal/core/core.go", "package core\n\ntype Order struct{ ID string }\n")
-	write(t, root, "internal/web/port/port.go", "package port\n\ntype Fetcher interface{ Fetch() }\n")
+	write(t, root, "treaty.yaml", "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"internal/contracts\"] # what the spokes share\n  internal/orders:\n")
+	write(t, root, "internal/contracts/contracts.go", "package contracts\n\ntype Order struct{ ID string }\n")
+	write(t, root, "internal/contracts/grades/grades.go", "package grades\n\ntype Grade int\n")
+	write(t, root, "internal/web/web.go", "package web\n\ntype Fetcher interface{ Fetch() }\n")
+	write(t, root, "internal/plan/plan.go", "package plan\n\nfunc Run() {}\n")
 	write(t, root, "internal/orders/orders.go", "package orders\n\nfunc Place() {}\n")
 	write(t, root, "internal/orders/tax/tax.go", "package tax\n\nfunc Rate() int { return 1 }\n")
 	git(t, root, "init", "-q")
@@ -548,28 +550,46 @@ func TestMoveModulesInASnowflake(t *testing.T) {
 		return result
 	}
 
-	if got := module("go:internal/web/port"); got.Layer != "spoke" || got.Star != "internal" || got.Spoke != "internal/web" {
-		t.Fatalf("the port starts in spoke internal/web: %+v", got)
+	if got := module("go:internal/web"); got.Layer != "leaf" || got.Star != "." || got.Spoke != "internal/web" {
+		t.Fatalf("web starts in leaf internal/web: %+v", got)
 	}
 
-	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web/port","layer":"core","star":"internal"}`, http.StatusOK)
-	if got := module("go:internal/web/port"); got.Layer != "core" || got.Star != "internal" || got.Spoke != "" {
-		t.Fatalf("the port should be in the core of internal: %+v", got)
+	// Into the contracts of ., between the lists, and out to its spoke.
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web","layer":"contracts","star":"."}`, http.StatusOK)
+	if got := module("go:internal/web"); got.Layer != "contracts" || got.Star != "." || got.CoreEntry != "internal/web" || got.Spoke != "" {
+		t.Fatalf("web should be in the contracts of .: %+v", got)
 	}
 
-	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web/port","layer":"spoke","star":"internal","spoke":"internal/web"}`, http.StatusOK)
-	if got := module("go:internal/web/port"); got.Spoke != "internal/web" {
-		t.Fatalf("the port should be back in its spoke: %+v", got)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web","layer":"orchestrator","star":"."}`, http.StatusOK)
+	if got := module("go:internal/web"); got.Layer != "orchestrator" || got.CoreEntry != "internal/web" {
+		t.Fatalf("web should be among the orchestrators of .: %+v", got)
 	}
 
-	// A spoke is its directory, and a star's core is inside the star.
-	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web/port","layer":"spoke","star":"internal","spoke":"internal/orders"}`, http.StatusBadRequest)
-	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web/port","layer":"core","star":"internal/orders"}`, http.StatusBadRequest)
-	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/orders/tax","layer":"core","star":"internal"}`, http.StatusBadRequest)
-	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/orders/tax","layer":"core","star":"internal/orders"}`, http.StatusOK)
-	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/orders/tax","layer":"composition"}`, http.StatusOK)
-	if got := module("go:internal/orders/tax"); got.Layer != "composition" || got.Star != "" {
-		t.Fatalf("tax should be composition: %+v", got)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web","layer":"leaf","star":".","spoke":"internal/web"}`, http.StatusOK)
+	if got := module("go:internal/web"); got.Layer != "leaf" || got.Spoke != "internal/web" {
+		t.Fatalf("web should be back in its spoke: %+v", got)
+	}
+
+	// A nested package, another star's core, another spoke, an own package
+	// out of its core and composition are refused.
+	for _, body := range []string{
+		`{"module":"go:internal/contracts/grades","layer":"orchestrator","star":"."}`,
+		`{"module":"go:internal/web","layer":"contracts","star":"internal/orders"}`,
+		`{"module":"go:internal/orders/tax","layer":"contracts","star":"."}`,
+		`{"module":"go:internal/web","layer":"leaf","star":".","spoke":"internal/plan"}`,
+		`{"module":"go:internal/orders","layer":"leaf","star":"internal/orders","spoke":"internal/orders"}`,
+		`{"module":"go:internal/web","layer":"composition"}`,
+	} {
+		post(t, base+"/api/reclassify", "application/json", body, http.StatusBadRequest)
+	}
+
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/orders","layer":"orchestrator","star":"internal/orders"}`, http.StatusOK)
+	if got := module("go:internal/orders"); got.Layer != "orchestrator" || got.Star != "internal/orders" || got.CoreEntry != "internal/orders" {
+		t.Fatalf("orders should be the orchestrator of its own star: %+v", got)
+	}
+
+	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), `contracts: ["internal/contracts"] # what the spokes share`) || !strings.Contains(string(data), `orchestrators: ["internal/orders"]`) {
+		t.Fatalf("treaty.yaml:\n%s", data)
 	}
 }
 

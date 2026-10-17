@@ -36,9 +36,10 @@ var (
 )
 
 // Architecture is the dependency rules of one codebase: a style, and the
-// globs that place each module. Every style shares two rules: composition may
-// depend on everything, and nothing may depend on composition. Unclassified
-// modules are reported on their own and never checked.
+// globs that place each module. Every style but the snowflake shares two
+// rules: composition may depend on everything, and nothing may depend on
+// composition. Unclassified modules are reported on their own and never
+// checked.
 //
 // Notes:
 //   - The none style is no architecture at all, and the default: every
@@ -54,7 +55,11 @@ var (
 //   - Shared code may be used by every boundary, and may itself use only
 //     shared code.
 //   - Stars are the snowflake style's, in the order treaty.yaml lists
-//     them, each a directory and the globs of its core: see Star.
+//     them, each a directory and the entries of its contracts and its
+//     orchestrators: see Star. A snowflake has no composition: its
+//     orchestrators do that work. Bind fits it to one tree's modules, so
+//     placement can look through directories that hold none; copies share
+//     the binding.
 type Architecture struct {
 	Style       string
 	Composition []string
@@ -63,6 +68,8 @@ type Architecture struct {
 	Boundaries  []Boundary
 	Public      []string
 	Stars       []Star
+
+	bound *starBinding
 }
 
 // Boundary is one named group of modules and the globs that gather them.
@@ -82,8 +89,11 @@ type Layer struct {
 }
 
 // Placement is where the architecture puts one module. For the snowflake
-// style, Layer is core or spoke, Star is the directory of the star holding
-// the module, and Spoke is its spoke's directory, empty for a core.
+// style, Layer is contracts, orchestrator or leaf, Star is the directory of
+// the star holding the module, Spoke is its leaf's directory, for a leaf,
+// and Entry is the contracts or orchestrators entry that claims it, for a
+// core package. An unclassified module has its star, and a misfit, one a
+// lenient binding looks through, also its directory as Spoke.
 type Placement struct {
 	Layer     string
 	Side      string
@@ -92,6 +102,7 @@ type Placement struct {
 	Ambiguous []string
 	Star      string
 	Spoke     string
+	Entry     string
 }
 
 // Same reports whether two placements put a module in the same place.
@@ -100,11 +111,11 @@ type Placement struct {
 //   - other: the placement to compare with.
 //
 // Returns:
-//   - result: true when layer, side, boundary, public, ambiguity, star and
-//     spoke match.
+//   - result: true when layer, side, boundary, public, ambiguity, star,
+//     spoke and entry match.
 func (this Placement) Same(other Placement) bool {
 	return this.Layer == other.Layer && this.Side == other.Side && this.Boundary == other.Boundary && this.Public == other.Public && slices.Equal(this.Ambiguous, other.Ambiguous) &&
-		this.Star == other.Star && this.Spoke == other.Spoke
+		this.Star == other.Star && this.Spoke == other.Spoke && this.Entry == other.Entry
 }
 
 // Violation is a module edge that breaks a rule of the architecture. It has
@@ -161,15 +172,23 @@ func (this Violation) First() (file string, line int, detail string) {
 }
 
 // Assign places every module of the graph, using the first glob that matches
-// its path. Modules that match nothing become Unclassified.
+// its path. Modules that match nothing become Unclassified. A snowflake is
+// first bound to the graph's own modules, leniently, so a graph is never
+// placed with another tree's directories.
 //
 // Parameters:
 //   - g: the graph whose modules are placed.
 func (this Architecture) Assign(g *graph.Graph) {
+	paths := make([]string, 0, len(g.Modules))
 	for _, module := range g.Modules {
-		placement := this.Resolve(module.Path)
+		paths = append(paths, module.Path)
+	}
+
+	bound, _ := this.Bind(paths)
+	for _, module := range g.Modules {
+		placement := bound.Resolve(module.Path)
 		module.Layer, module.Side, module.Boundary, module.Public, module.Ambiguous = placement.Layer, placement.Side, placement.Boundary, placement.Public, placement.Ambiguous
-		module.Star, module.Spoke = placement.Star, placement.Spoke
+		module.Star, module.Spoke, module.CoreEntry = placement.Star, placement.Spoke, placement.Entry
 	}
 }
 
@@ -224,7 +243,7 @@ func (this Architecture) Check(from, to Placement) (allowed bool, rule string) {
 // Returns:
 //   - result: one or two sentences.
 func (this Architecture) Guidance(placement Placement) string {
-	if this.Style == StyleSnowflake && placement.Layer != graph.LayerComposition {
+	if this.Style == StyleSnowflake {
 		return this.starGuidance(placement)
 	}
 
@@ -361,7 +380,9 @@ func (this Architecture) MayUse(placement Placement) []string {
 //   - For the modular style, a module is public when it matches a public
 //     glob or, with none given, when it is at the top of its boundary: it
 //     matches one of the boundary's globs without the trailing /**.
-//   - For the snowflake style, see resolveSnowflake.
+//   - For the snowflake style, see resolveSnowflake. An unbound snowflake
+//     looks through every directory but its stars, its entries and the
+//     path itself.
 //
 // Parameters:
 //   - modulePath: the module path relative to the repository root.
@@ -450,10 +471,10 @@ type Reason struct {
 // Notes:
 //   - Composition may also be listed under layers for hexagonal; its path
 //     is composition either way.
-//   - For the snowflake style, a core module placed by a glob or an exact
-//     path has that entry at stars and the star's directory. A star's own
-//     package and a spoke are placed by their directory, so their reason
-//     has the star's key and an empty glob.
+//   - For the snowflake style, a core package has the entry that claims
+//     it, at stars, the star's directory and contracts or orchestrators. A
+//     leaf is placed by its directory, so its reason has the star's key and
+//     an empty glob.
 //
 // Parameters:
 //   - modulePath: the module's path relative to the repository root.
@@ -497,12 +518,13 @@ func (this Architecture) Reasons(modulePath string) (result []Reason) {
 			return nil
 		}
 
-		glob := ""
-		if star := this.star(placement.Star); star != nil && placement.Layer == graph.LayerCore {
-			glob = pick(star.Core)
+		for _, role := range starRoles {
+			if placement.Layer == role.layer {
+				return []Reason{{Path: []string{"stars", placement.Star, role.list}, Glob: placement.Entry}}
+			}
 		}
 
-		return []Reason{{Path: []string{"stars", placement.Star}, Glob: glob}}
+		return []Reason{{Path: []string{"stars", placement.Star}, Glob: ""}}
 	case placement.Layer == graph.LayerShared:
 		return []Reason{{Path: []string{"shared"}, Glob: pick(this.Shared)}}
 	case len(placement.Ambiguous) > 0:
@@ -644,8 +666,8 @@ func (this Architecture) Summary() string {
 //
 // Errors:
 //   - ErrArchitecture: an unknown style, a layer name the style does not
-//     allow, a boundary without a name or globs, a star that does not fit
-//     the star tree, or a setting the style does not use.
+//     allow, a boundary without a name or globs, a star or an entry that
+//     does not fit the star tree, or a setting the style does not use.
 func (this Architecture) Validate() error {
 	if !slices.Contains(Styles, this.Style) {
 		return fmt.Errorf("%w: unknown architecture %q; use one of %s", ErrArchitecture, this.Style, strings.Join(Styles, ", "))
@@ -933,5 +955,5 @@ func boundaryPath(next map[string][]string, start, goal string) []string {
 }
 
 func placementOf(module *graph.Module) Placement {
-	return Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous, Star: module.Star, Spoke: module.Spoke}
+	return Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous, Star: module.Star, Spoke: module.Spoke, Entry: module.CoreEntry}
 }

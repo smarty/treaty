@@ -356,22 +356,21 @@ func (this *analysis) allowed(from, to string) (result string, err error) {
 // portLimit caps the ports the allowed tool names for one dependency.
 const portLimit = 5
 
-// ports suggests, for a dependency the snowflake refuses, the interfaces
-// in a core that the depending module may use and that something in the
-// child it reached for already implements, so the dependency can go
-// through a port instead. Other styles, and dependencies on or from
-// composition or unclassified modules, get no line.
+// ports suggests, for a dependency the snowflake refuses sideways or out to
+// an orchestrator, the interfaces in a core that the depending module may
+// use and that something in the child it reached for already implements,
+// so the dependency can go through a port instead. Other styles, other
+// refusals and dependencies on or from unclassified modules get no line.
 func (this *analysis) ports(from, to rules.Placement) string {
 	architecture := this.config.Architecture
-	placed := func(place rules.Placement) bool {
-		return place.Layer == graph.LayerCore || place.Layer == graph.LayerSpoke
-	}
-
-	if architecture.Style != rules.StyleSnowflake || !placed(from) || !placed(to) {
+	switch kind := architecture.Break(from, to); {
+	case kind == rules.BreakSideways:
+	case kind == rules.BreakOut && to.Layer == graph.LayerOrchestrator:
+	default:
 		return ""
 	}
 
-	star, child := rules.Crossing(from, to)
+	star, child := architecture.Crossing(from, to)
 	var found []string
 	seen := map[string]bool{}
 	for _, edge := range this.head.Edges {
@@ -385,7 +384,7 @@ func (this *analysis) ports(from, to rules.Placement) string {
 		}
 
 		owner, inside := this.head.Module(implementation.Module), this.head.Module(port.Module)
-		if owner == nil || inside == nil || !rules.Encloses(child, owner.Path) || inside.Layer != graph.LayerCore {
+		if owner == nil || inside == nil || !rules.Encloses(child, owner.Path) {
 			continue
 		}
 
@@ -398,7 +397,7 @@ func (this *analysis) ports(from, to rules.Placement) string {
 	}
 
 	if len(found) == 0 {
-		return fmt.Sprintf("ports: nothing in %s implements an interface in a core %s may use; declare one in the core of star %s\n", child, placeName(from), star)
+		return fmt.Sprintf("ports: nothing in %s implements an interface %s may use; declare one in the contracts of star %s\n", child, placeName(from), star)
 	}
 
 	sort.Strings(found)
@@ -406,7 +405,7 @@ func (this *analysis) ports(from, to rules.Placement) string {
 		found = found[:portLimit]
 	}
 
-	return fmt.Sprintf("ports: %s, which %s may use; depend on the port, and let composition hand %s in\n", strings.Join(found, "; "), placeName(from), child)
+	return fmt.Sprintf("ports: %s, which %s may use; depend on the port, and let the orchestrators hand %s in\n", strings.Join(found, "; "), placeName(from), child)
 }
 
 // find lists the symbols whose id contains query, contracts first.
@@ -585,7 +584,7 @@ func (this *analysis) overview() (result string) {
 		builder.WriteString("note: " + unversionedNote + "\n")
 	}
 
-	starTree(&builder, this.config.Architecture, g)
+	starTree(&builder, this.config.Architecture)
 	for _, layer := range overviewOrder(this.config.Architecture, byLayer) {
 		modules := byLayer[layer]
 		if len(modules) == 0 {
@@ -721,8 +720,8 @@ func changeDetail(change rules.Change) string {
 
 // overviewOrder lists the overview's groups: hexagonal and clean from the
 // center outward, layered from the top down, and boundaries by name, with
-// composition, shared and unclassified around them. A snowflake lists
-// composition, then each star from the root down, its core before its
+// composition, shared and unclassified around them. A snowflake lists each
+// star from the root down, its contracts, its orchestrators and its
 // leaves, then unclassified.
 func overviewOrder(architecture rules.Architecture, groups map[string][]*graph.Module) []string {
 	if architecture.Style == rules.StyleHexagonal {
@@ -730,11 +729,18 @@ func overviewOrder(architecture rules.Architecture, groups map[string][]*graph.M
 	}
 
 	if architecture.Style == rules.StyleSnowflake {
-		result := []string{graph.LayerComposition}
-		for _, star := range architecture.Tree(groupPaths(groups)) {
-			result = append(result, placeName(rules.Placement{Layer: graph.LayerCore, Star: star.Dir}))
+		var result []string
+		for _, star := range architecture.Tree() {
+			for _, entry := range star.Contracts {
+				result = append(result, placeName(rules.Placement{Layer: graph.LayerContracts, Star: star.Dir, Entry: entry}))
+			}
+
+			for _, entry := range star.Orchestrators {
+				result = append(result, placeName(rules.Placement{Layer: graph.LayerOrchestrator, Star: star.Dir, Entry: entry}))
+			}
+
 			for _, leaf := range star.Leaves {
-				result = append(result, placeName(rules.Placement{Layer: graph.LayerSpoke, Star: star.Dir, Spoke: leaf}))
+				result = append(result, placeName(rules.Placement{Layer: graph.LayerLeaf, Star: star.Dir, Spoke: leaf}))
 			}
 		}
 
@@ -767,13 +773,14 @@ func overviewOrder(architecture rules.Architecture, groups map[string][]*graph.M
 
 // placeName names a placement for people: its layer and side, its
 // boundary and the layer inside it, and whether it is public; in a
-// snowflake, the core of its star or its spoke.
+// snowflake, contracts or orchestrator and its entry, or leaf and its
+// directory.
 func placeName(place rules.Placement) string {
 	switch {
-	case place.Spoke != "":
-		return "spoke " + place.Spoke
-	case place.Star != "":
-		return "core of star " + place.Star
+	case place.Layer == graph.LayerContracts, place.Layer == graph.LayerOrchestrator:
+		return place.Layer + " " + place.Entry
+	case place.Layer == graph.LayerLeaf:
+		return "leaf " + place.Spoke
 	case place.Boundary == "":
 		if place.Side != "" {
 			return fmt.Sprintf("%s (%s)", place.Layer, place.Side)
@@ -789,27 +796,10 @@ func placeName(place rules.Placement) string {
 	}
 }
 
-// groupPaths lists the paths of every module in the overview's groups.
-func groupPaths(groups map[string][]*graph.Module) (result []string) {
-	for _, modules := range groups {
-		for _, module := range modules {
-			result = append(result, module.Path)
-		}
-	}
-
-	sort.Strings(result)
-	return result
-}
-
 // starTree writes a snowflake's stars for the overview, one line each: the
-// star, its core, its leaves and its branches.
-func starTree(builder *strings.Builder, architecture rules.Architecture, g *graph.Graph) {
-	paths := make([]string, 0, len(g.Modules))
-	for _, module := range g.Modules {
-		paths = append(paths, module.Path)
-	}
-
-	stars := architecture.Tree(paths)
+// star, its contracts and orchestrators, its leaves and its branches.
+func starTree(builder *strings.Builder, architecture rules.Architecture) {
+	stars := architecture.Tree()
 	if len(stars) == 0 {
 		return
 	}
@@ -821,7 +811,7 @@ func starTree(builder *strings.Builder, architecture rules.Architecture, g *grap
 			name += " (branch of " + star.Parent + ")"
 		}
 
-		fmt.Fprintf(builder, "  %s  core %s", name, strings.Join(append([]string{star.Dir}, star.Core...), ", "))
+		fmt.Fprintf(builder, "  %s  contracts %s  orchestrators %s", name, listOrNone(star.Contracts), listOrNone(star.Orchestrators))
 		if len(star.Leaves) > 0 {
 			fmt.Fprintf(builder, "  leaves %s", strings.Join(star.Leaves, ", "))
 		}
@@ -843,7 +833,7 @@ func placeOf(g *graph.Graph, module string) rules.Placement {
 }
 
 func placement(module *graph.Module) rules.Placement {
-	return rules.Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous, Star: module.Star, Spoke: module.Spoke}
+	return rules.Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous, Star: module.Star, Spoke: module.Spoke, Entry: module.CoreEntry}
 }
 
 func moduleEdgeSet(g *graph.Graph) map[string]bool {

@@ -120,11 +120,14 @@ func TestLoadRejectsBadArchitectures(t *testing.T) {
 		"architecture: none\nlayers:\n  data: [\"x\"]\n",
 		"architecture: none\ncomposition: [\"cmd/**\"]\n",
 		"architecture: snowflake\n",
-		"architecture: hexagonal\nstars:\n  internal: []\n",
+		"architecture: hexagonal\nstars:\n  .:\n",
 		"architecture: snowflake\nstars: [\"internal\"]\n",
-		"architecture: snowflake\nstars:\n  internal: [\"internal/core/**\"]\nboundaries:\n  orders: [\"x/**\"]\n",
-		"architecture: snowflake\nstars:\n  internal: []\n  pkg: []\n",
-		"architecture: snowflake\nstars:\n  \"internal/*\": []\n",
+		"architecture: snowflake\nstars:\n  internal: [\"internal/core/**\"]\n",
+		"architecture: snowflake\nstars:\n  .:\nboundaries:\n  orders: [\"x/**\"]\n",
+		"architecture: snowflake\nstars:\n  internal:\n  pkg:\n",
+		"architecture: snowflake\nstars:\n  .:\n  \"internal/*\":\n",
+		"architecture: snowflake\ncomposition: [\"cmd/**\"]\nstars:\n  .:\n",
+		"architecture: snowflake\nstars:\n  .: {orchestrators: [\"cmd/*\"]}\n",
 	} {
 		root := t.TempDir()
 		if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(text), 0o644); err != nil {
@@ -333,12 +336,28 @@ func TestLoadRejectsWhatItCannotRead(t *testing.T) {
 		{"a misspelled key", "version: 1\narchitecure: clean\n", ErrUnknownKey, `line 2: unknown key "architecure"; did you mean "architecture"?`},
 		{"a key from a newer treaty", "version: 1\nmutation:\n  scope: all\n", ErrUnknownKey, `unknown key "mutation"; a newer treaty may know it`},
 		{"a misspelled rules key", "rules:\n  fail_one: [breaking_changes]\n", ErrUnknownKey, `line 2: unknown key "fail_one" under rules; did you mean "fail_on"?`},
-		{"a misspelled stars key", "version: 1\narchitecture: snowflake\nstarz:\n  internal: []\n", ErrUnknownKey, `line 3: unknown key "starz"; did you mean "stars"?`},
-		{"stars under another architecture", "architecture: hexagonal\nstars:\n  internal: []\n", rules.ErrArchitecture, "treaty.yaml: invalid architecture: stars apply only to the snowflake architecture"},
-		{"stars as a list", "architecture: snowflake\nstars: [\"internal\"]\n", rules.ErrArchitecture, "stars must map each star's directory to the globs of its core"},
-		{"a glob for a star", "architecture: snowflake\nstars:\n  \"internal/*\": []\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: star "internal/*" must be a directory path relative to the repository root, not a glob`},
-		{"a core of every child", "architecture: snowflake\nstars:\n  internal: [\"internal/**\"]\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: core glob "internal/**" of star internal does not name a directory of its own; start it with a child directory of internal, such as internal/core/**`},
-		{"layers under snowflake", "architecture: snowflake\nstars:\n  internal: []\nlayers:\n  web: [\"web/**\"]\n", rules.ErrArchitecture, "treaty.yaml: invalid architecture: layers, shared, boundaries and public do not apply to the snowflake architecture; a star's core is what its spokes share"},
+		{"a misspelled stars key", "version: 1\narchitecture: snowflake\nstarz:\n  .:\n", ErrUnknownKey, `line 3: unknown key "starz"; did you mean "stars"?`},
+		{"a core under a star", "version: 1\narchitecture: snowflake\nstars:\n  .:\n  internal:\n    core: [\"internal/core\"]\n", ErrUnknownKey, `treaty.yaml: line 6: unknown key "core" under stars.internal; a star maps contracts and orchestrators`},
+		{"a misspelled orchestrators key", "architecture: snowflake\nstars:\n  .:\n    orchestrator: [\".\"]\n", ErrUnknownKey, `line 4: unknown key "orchestrator" under stars..; did you mean "orchestrators"?`},
+		{"stars under another architecture", "architecture: hexagonal\nstars:\n  .:\n", rules.ErrArchitecture, "treaty.yaml: invalid architecture: stars apply only to the snowflake architecture"},
+		{"stars as a list", "architecture: snowflake\nstars: [\"internal\"]\n", rules.ErrArchitecture, "treaty.yaml: invalid architecture: stars must map each star's directory to its contracts and orchestrators"},
+		{"a star as a list", "version: 1\narchitecture: snowflake\nstars:\n  .:\n  internal: [\"internal/core/**\"]\n", rules.ErrArchitecture, `treaty.yaml: line 5: invalid architecture: stars.internal must map contracts and orchestrators to lists of directories, such as internal: {contracts: ["internal/contracts"]}`},
+		{"a star as a word", "architecture: snowflake\nstars:\n  .: internal\n", rules.ErrArchitecture, `line 3: invalid architecture: stars.. must map contracts and orchestrators to lists of directories`},
+		{"contracts that are not a list", "architecture: snowflake\nstars:\n  .:\n    contracts: {a: b}\n", nil, "treaty.yaml: stars...contracts: "},
+		{"composition", "architecture: snowflake\ncomposition: [\"cmd/**\"]\nstars:\n  .:\n", rules.ErrArchitecture, "treaty.yaml: invalid architecture: composition does not apply to the snowflake architecture: orchestrators do its work, so list main packages, factories and the public API among the orchestrators of their star"},
+		{"no stars", "architecture: snowflake\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: the snowflake architecture needs its stars: declare the repository, ".", with its contracts and orchestrators, such as .: {contracts: ["internal/contracts"], orchestrators: ["."]}`},
+		{"a glob for a star", "architecture: snowflake\nstars:\n  .:\n  \"internal/*\":\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: star "internal/*" must be a directory path relative to the repository root, not a glob`},
+		{"a star listed twice", "architecture: snowflake\nstars:\n  .:\n  internal:\n  internal/:\n", rules.ErrArchitecture, "treaty.yaml: invalid architecture: star internal is listed twice"},
+		{"no root", "architecture: snowflake\nstars:\n  internal/gate:\n  internal/blocks:\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: the snowflake's root star is the repository itself: declare "." under stars, around internal/blocks and internal/gate`},
+		{"an unclean entry", "architecture: snowflake\nstars:\n  .: {contracts: [\"./contracts\"]}\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: contracts entry "./contracts" of star . must be a directory path relative to the repository root, with no empty, . or .. segment`},
+		{"a glob entry", "architecture: snowflake\nstars:\n  .: {orchestrators: [\"cmd/*\"]}\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: orchestrators entry "cmd/*" of star . is a glob; name each package by its directory, so a new directory stays a spoke until treaty.yaml names it`},
+		{"an entry outside its star", "architecture: snowflake\nstars:\n  .:\n  internal: {contracts: [\"pkg/contracts\"]}\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: contracts entry "pkg/contracts" of star internal lies outside internal; a star's core is inside its directory`},
+		{"an entry inside a branch", "architecture: snowflake\nstars:\n  .: {contracts: [\"internal/blocks/contracts\"]}\n  internal/blocks:\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: contracts entry "internal/blocks/contracts" of star . lies inside branch internal/blocks, whose core is its own; list it under internal/blocks`},
+		{"an entry holding a star", "architecture: snowflake\nstars:\n  .: {orchestrators: [\"internal\"]}\n  internal/blocks:\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: orchestrators entry "internal" of star . holds star internal/blocks; a core package is one package and those nested in it, never a star`},
+		{"an entry holding an entry", "architecture: snowflake\nstars:\n  .: {contracts: [\"internal/contracts\", \"internal/contracts/grades\"]}\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: contracts entry "internal/contracts" of star . holds entry internal/contracts/grades, which it covers already; drop the inner one`},
+		{"an entry listed twice", "architecture: snowflake\nstars:\n  .: {orchestrators: [\"internal/executor\", \"internal/executor\"]}\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: orchestrators entry "internal/executor" of star . is listed twice`},
+		{"an entry in both lists", "architecture: snowflake\nstars:\n  .: {contracts: [\"internal/executor\"], orchestrators: [\"internal/executor\"]}\n", rules.ErrArchitecture, `treaty.yaml: invalid architecture: "internal/executor" is listed under both the contracts and the orchestrators of star .; a core package is one or the other`},
+		{"layers under snowflake", "architecture: snowflake\nstars:\n  .:\nlayers:\n  web: [\"web/**\"]\n", rules.ErrArchitecture, "treaty.yaml: invalid architecture: layers, shared, boundaries and public do not apply to the snowflake architecture; a star's core is what its spokes share"},
 		{"a misspelled adapter side", "layers:\n  adapter:\n    drivng: [\"web/**\"]\n", ErrUnknownKey, `unknown key "drivng" under layers.adapter; did you mean "driving"?`},
 		{"a misspelled rule", "rules:\n  fail_on: [breaking_changes, layer_violations]\n", ErrUnknownRule, `line 2: fail_on: unknown rule "layer_violations"; did you mean "layer_violation"?`},
 		{"a finding that is not a rule", "rules:\n  fail_on: [new_contract]\n", ErrUnknownRule, "fail_on takes breaking_changes, layer_violation, dependency_cycles, unclassified, ambiguous_boundaries"},
@@ -361,7 +380,7 @@ func TestLoadRejectsWhatItCannotRead(t *testing.T) {
 			}
 
 			_, found, err := NewConfig(root).Load()
-			if !found || !errors.Is(err, c.want) {
+			if !found || err == nil || (c.want != nil && !errors.Is(err, c.want)) {
 				t.Fatalf("found %t, err %v, want %v", found, err, c.want)
 			}
 
@@ -374,23 +393,26 @@ func TestLoadRejectsWhatItCannotRead(t *testing.T) {
 
 func TestLoadSnowflake(t *testing.T) {
 	root := t.TempDir()
-	text := `# Snowflake: the code under internal is a star of stars.
+	text := `# Snowflake: the repository is a star of stars.
 version: 1
 architecture: snowflake
-composition: [".", "cmd/**", "internal/factory/**"]
-stars: # each star's directory -> the globs of its core
-  internal: ["internal/core/**"]
-  internal/gate/: ["internal/gate/core/**"]
-  internal/blocks: ["internal/blocks/core/**"]
-  internal/rules: []
-  internal/version:
+stars: # each star's directory -> its contracts and orchestrators
+  .:
+    contracts:     ["internal/contracts"]
+    orchestrators: [".", "internal/assembly", "internal/executor"]
+  internal/blocks/: {contracts: ["internal/blocks/contracts"], orchestrators: ["internal/blocks/kit"]}
+  ./internal/gate:
+    contracts: ["internal/gate/contracts"]
+    orchestrators: ["internal/gate/pipeline"]
+  internal/billing:
+  internal/reports: {}
 rules:
   fail_on: [breaking_changes, layer_violation, unclassified]
   ignore:
     - finding: layer_violation
       target: go:internal/plan -> go:internal/tracer
       fingerprint: "3f9c0a1d7b22"
-      reason: The plan executor still calls the tracer directly; it moves behind a Tracer port in internal/core next
+      reason: The planner still calls the tracer directly; it moves behind a Tracer port in internal/contracts next
 `
 	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(text), 0o644); err != nil {
 		t.Fatal(err)
@@ -402,13 +424,14 @@ rules:
 	}
 
 	// The keys under stars are the config's own directories, not keys
-	// treaty knows, and keep their order; internal/gate/ names a directory.
+	// treaty knows, and keep their order; internal/blocks/ and
+	// ./internal/gate name directories, and entries are kept as written.
 	want := []rules.Star{
-		{Dir: "internal", Core: []string{"internal/core/**"}},
-		{Dir: "internal/gate", Core: []string{"internal/gate/core/**"}},
-		{Dir: "internal/blocks", Core: []string{"internal/blocks/core/**"}},
-		{Dir: "internal/rules", Core: []string{}},
-		{Dir: "internal/version"},
+		{Dir: ".", Contracts: []string{"internal/contracts"}, Orchestrators: []string{".", "internal/assembly", "internal/executor"}},
+		{Dir: "internal/blocks", Contracts: []string{"internal/blocks/contracts"}, Orchestrators: []string{"internal/blocks/kit"}},
+		{Dir: "internal/gate", Contracts: []string{"internal/gate/contracts"}, Orchestrators: []string{"internal/gate/pipeline"}},
+		{Dir: "internal/billing"},
+		{Dir: "internal/reports"},
 	}
 
 	if config.Architecture.Style != rules.StyleSnowflake || !reflect.DeepEqual(config.Architecture.Stars, want) {
@@ -419,17 +442,17 @@ rules:
 		t.Errorf("a sideways dependency is ignored like any other violation: %+v", config.Ignores)
 	}
 
-	if got := config.Architecture.Resolve("internal/gate/tagger"); got.Layer != graph.LayerSpoke || got.Star != "internal/gate" || got.Spoke != "internal/gate/tagger" {
-		t.Errorf("internal/gate/tagger resolved to %+v", got)
-	}
-
-	bad := strings.Replace(text, "internal/rules: []", "internal/rules:\n    core: [\"x\"]", 1)
-	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(bad), 0o644); err != nil {
+	bound, err := config.Architecture.Bind([]string{".", "internal/contracts", "internal/gate/contracts", "internal/gate/pipeline", "internal/gate/tagger"})
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, _, err := NewConfig(root).Load(); err == nil || !strings.Contains(err.Error(), "stars.internal/rules") {
-		t.Errorf("a star's core is a list of globs, not a mapping: %v", err)
+	if got := bound.Resolve("internal/gate/tagger"); !got.Same(rules.Placement{Layer: graph.LayerLeaf, Star: "internal/gate", Spoke: "internal/gate/tagger"}) {
+		t.Errorf("internal/gate/tagger resolved to %+v", got)
+	}
+
+	if got := bound.Resolve("internal/gate/pipeline"); !got.Same(rules.Placement{Layer: graph.LayerOrchestrator, Star: "internal/gate", Entry: "internal/gate/pipeline"}) {
+		t.Errorf("internal/gate/pipeline resolved to %+v", got)
 	}
 }
 
@@ -601,16 +624,19 @@ func TestPlaceInSnowflake(t *testing.T) {
 	const original = `# Our snowflake.
 version: 1
 architecture: snowflake
-composition: ["cmd/**"]
 stars:
-  internal: ["internal/core/**"] # contracts and orchestrators
-  internal/blocks/: []
+  .:
+    contracts: # what every spoke shares
+      - internal/contracts
+    orchestrators: ["."]
+  internal/blocks/: {contracts: ["internal/blocks/contracts"]}
   internal/gate:
 rules:
   fail_on: [breaking_changes, layer_violation]
 `
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(original), 0o644); err != nil {
+	file := filepath.Join(root, ConfigFile)
+	if err := os.WriteFile(file, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -630,47 +656,78 @@ rules:
 			t.Fatalf("%s resolves to %+v, want %+v", path, got, placement)
 		}
 
-		data, _ := os.ReadFile(filepath.Join(root, ConfigFile))
+		data, _ := os.ReadFile(file)
 		return string(data)
 	}
 
-	// A port moves into the core by its exact path, comments kept, and out
-	// again into its directory's spoke.
-	text := place("internal/web/port", rules.Placement{Layer: graph.LayerCore, Star: "internal"})
-	if !strings.Contains(text, "# Our snowflake.") || !strings.Contains(text, `internal: ["internal/core/**", "internal/web/port"] # contracts and orchestrators`) {
-		t.Fatalf("the port joins the core of internal:\n%s", text)
+	// A leaf moves into the contracts of its star by its directory,
+	// appended to a block list with its comment kept; then among the
+	// orchestrators, and out again to its own spoke.
+	text := place("internal/web", rules.Placement{Layer: graph.LayerContracts, Star: ".", Entry: "internal/web"})
+	if !strings.Contains(text, "# Our snowflake.") || !strings.Contains(text, "contracts: # what every spoke shares\n      - internal/contracts\n      - internal/web\n") {
+		t.Fatalf("internal/web joins the contracts of .:\n%s", text)
 	}
 
-	if text = place("internal/web/port", rules.Placement{Layer: graph.LayerSpoke, Star: "internal", Spoke: "internal/web"}); strings.Contains(text, "internal/web/port") {
-		t.Fatalf("the port leaves the core:\n%s", text)
+	text = place("internal/web", rules.Placement{Layer: graph.LayerOrchestrator, Star: ".", Entry: "internal/web"})
+	if !strings.Contains(text, `orchestrators: [".", "internal/web"]`) || strings.Contains(text, "- internal/web") {
+		t.Fatalf("internal/web moves from the contracts to the orchestrators of .:\n%s", text)
+	}
+
+	if text = place("internal/web", rules.Placement{Layer: graph.LayerLeaf, Star: ".", Spoke: "internal/web"}); strings.Contains(text, "internal/web") {
+		t.Fatalf("internal/web leaves the core:\n%s", text)
 	}
 
 	// A star whose key has a trailing slash, or no value yet, takes a
-	// module into its core all the same.
-	place("internal/blocks/www", rules.Placement{Layer: graph.LayerCore, Star: "internal/blocks"})
-	if text = place("internal/gate/model", rules.Placement{Layer: graph.LayerCore, Star: "internal/gate"}); !strings.Contains(text, `internal/gate: ["internal/gate/model"]`) {
-		t.Fatalf("a star with no value gets a list:\n%s", text)
+	// module into its core all the same, its list created as a flow list,
+	// contracts before orchestrators.
+	if text = place("internal/blocks/kit", rules.Placement{Layer: graph.LayerOrchestrator, Star: "internal/blocks", Entry: "internal/blocks/kit"}); !strings.Contains(text, `internal/blocks/: {contracts: ["internal/blocks/contracts"], orchestrators: ["internal/blocks/kit"]}`) {
+		t.Fatalf("a star written inline gets its orchestrators:\n%s", text)
 	}
 
-	// A move to composition beats the star's own package.
-	place("internal/gate", rules.Placement{Layer: graph.LayerComposition})
-
-	// A wildcard still places the module in the core, so it cannot leave
-	// it by a move; the error names the glob.
-	if _, err := config.Place("internal/core/trust", rules.Placement{Layer: graph.LayerSpoke, Star: "internal", Spoke: "internal/core"}); !errors.Is(err, rules.ErrArchitecture) || !strings.Contains(err.Error(), `"internal/core/**" under stars.internal`) {
-		t.Fatalf("a core glob keeps it: %v", err)
+	if text = place("internal/gate/contracts", rules.Placement{Layer: graph.LayerContracts, Star: "internal/gate", Entry: "internal/gate/contracts"}); !strings.Contains(text, "internal/gate:\n    contracts: [\"internal/gate/contracts\"]\n") {
+		t.Fatalf("a star with no value gets a mapping with its list:\n%s", text)
 	}
 
-	// Another star's core lies outside the module's directory.
-	if _, err := config.Place("internal/plan", rules.Placement{Layer: graph.LayerCore, Star: "internal/blocks"}); !errors.Is(err, rules.ErrArchitecture) {
-		t.Fatalf("a move into another star's core: %v", err)
+	if text = place("internal/gate", rules.Placement{Layer: graph.LayerOrchestrator, Star: "internal/gate", Entry: "internal/gate"}); !strings.Contains(text, "    contracts: [\"internal/gate/contracts\"]\n    orchestrators: [\"internal/gate\"]\n") {
+		t.Fatalf("a star's own package joins its orchestrators:\n%s", text)
 	}
 
-	if _, err := config.Place("internal/plan", rules.Placement{Layer: graph.LayerCore, Star: "internal/orders"}); !errors.Is(err, rules.ErrArchitecture) || !strings.Contains(err.Error(), `no star "internal/orders"`) {
-		t.Fatalf("a move never creates a star: %v", err)
+	// An edit that changes nothing does not write.
+	before, _ := os.ReadFile(file)
+	if err := os.Chmod(file, 0o444); err != nil {
+		t.Fatal(err)
 	}
 
-	if _, err := config.Place("internal/plan", rules.Placement{Layer: graph.LayerSpoke, Star: "internal", Spoke: "internal/web"}); !errors.Is(err, rules.ErrArchitecture) || !strings.Contains(err.Error(), "a spoke is its directory") {
-		t.Fatalf("a spoke is its directory: %v", err)
+	if _, err := config.Place("internal/gate", rules.Placement{Layer: graph.LayerOrchestrator, Star: "internal/gate", Entry: "internal/gate"}); err != nil {
+		t.Fatalf("a move that changes nothing: %v", err)
+	}
+
+	if _, err := config.Place("internal/plan", rules.Placement{Layer: graph.LayerLeaf, Star: ".", Spoke: "internal/plan"}); err != nil {
+		t.Fatalf("a leaf moved to its own spoke: %v", err)
+	}
+
+	if err := os.Chmod(file, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if after, _ := os.ReadFile(file); string(after) != string(before) {
+		t.Fatalf("an edit that changes nothing rewrote treaty.yaml:\n%s", after)
+	}
+
+	for _, c := range []struct {
+		name, path string
+		placement  rules.Placement
+		says       string
+	}{
+		{"a nested package", "internal/contracts/grades", rules.Placement{Layer: graph.LayerOrchestrator, Star: "."}, "internal/contracts holds it, and a core package is a whole child of its star: move internal/contracts into the core instead"},
+		{"another star's core", "internal/plan", rules.Placement{Layer: graph.LayerContracts, Star: "internal/blocks"}, "a core package is a child of its own star: drop it on the core of star ."},
+		{"a missing star", "internal/plan", rules.Placement{Layer: graph.LayerContracts, Star: "internal/orders"}, `no star "internal/orders"`},
+		{"another spoke", "internal/plan", rules.Placement{Layer: graph.LayerLeaf, Star: ".", Spoke: "internal/web"}, "a spoke is its directory: move the package's files into internal/web to put it there"},
+		{"an own package out of its core", ".", rules.Placement{Layer: graph.LayerLeaf, Star: ".", Spoke: "."}, "a star's own package is always in its core: drop it on its contracts or orchestrators"},
+		{"composition", "cmd/app", rules.Placement{Layer: graph.LayerComposition}, "composition does not apply to the snowflake architecture"},
+	} {
+		if _, err := config.Place(c.path, c.placement); !errors.Is(err, rules.ErrArchitecture) || !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.says)
+		}
 	}
 }

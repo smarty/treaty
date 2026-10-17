@@ -28,9 +28,13 @@ const (
 )
 
 // ringStar is the layer of the ring drawn around a whole snowflake star,
-// its core and spokes inside it. It is the map's own name, not a layer the
-// rules know.
-const ringStar = "star"
+// its core and spokes inside it, and ringCore that of the ring around a
+// star's core region, its contracts and orchestrators. They are the map's
+// own names, not layers the rules know.
+const (
+	ringCore = "core"
+	ringStar = "star"
+)
 
 // Cell is one file drawn inside its module's hexagon, at an offset from the
 // module's center. Angle is the direction of the cell from the center, where
@@ -541,9 +545,9 @@ func snowflakeLayout(view app.MapView) (result Layout) {
 	cores, leaves, loose := map[string][]app.MapModule{}, map[string][]app.MapModule{}, map[string][]app.MapModule{}
 	for _, module := range view.Modules {
 		switch {
-		case module.Layer == graph.LayerCore && module.Star != "":
+		case (module.Layer == graph.LayerContracts || module.Layer == graph.LayerOrchestrator) && module.Star != "":
 			cores[module.Star] = append(cores[module.Star], module)
-		case module.Layer == graph.LayerSpoke && module.Spoke != "":
+		case module.Layer == graph.LayerLeaf && module.Spoke != "":
 			leaves[module.Spoke] = append(leaves[module.Spoke], module)
 		case module.Layer == graph.LayerComposition:
 			loose[graph.LayerComposition] = append(loose[graph.LayerComposition], module)
@@ -611,11 +615,11 @@ func snowflakeLayout(view app.MapView) (result Layout) {
 func starTree(view app.MapView) (root string, nodes map[string]*rules.StarNode) {
 	nodes = map[string]*rules.StarNode{}
 	for _, star := range view.Stars {
-		nodes[star.Dir] = &rules.StarNode{Dir: star.Dir, Core: star.Core, Leaves: slices.Clone(star.Leaves)}
+		nodes[star.Dir] = &rules.StarNode{Dir: star.Dir, Contracts: star.Contracts, Orchestrators: star.Orchestrators, Leaves: slices.Clone(star.Leaves)}
 	}
 
 	for _, module := range view.Modules {
-		if (module.Layer == graph.LayerCore || module.Layer == graph.LayerSpoke) && module.Star != "" && nodes[module.Star] == nil {
+		if (module.Layer == graph.LayerContracts || module.Layer == graph.LayerOrchestrator || module.Layer == graph.LayerLeaf) && module.Star != "" && nodes[module.Star] == nil {
 			nodes[module.Star] = &rules.StarNode{Dir: module.Star}
 		}
 	}
@@ -651,7 +655,7 @@ func starTree(view app.MapView) (root string, nodes map[string]*rules.StarNode) 
 	}
 
 	for _, module := range view.Modules {
-		if node := nodes[module.Star]; module.Layer == graph.LayerSpoke && node != nil && module.Spoke != "" && !slices.Contains(node.Leaves, module.Spoke) {
+		if node := nodes[module.Star]; module.Layer == graph.LayerLeaf && node != nil && module.Spoke != "" && !slices.Contains(node.Leaves, module.Spoke) {
 			node.Leaves = append(node.Leaves, module.Spoke)
 		}
 	}
@@ -746,10 +750,10 @@ func measureStar(nodes map[string]*rules.StarNode, dir string, depth int, cores,
 func placeStar(result *Layout, rings *[3][]Ring, shape *starShape, x, y, angle float64) {
 	tone := 2 + shape.depth%2
 	rings[2] = append(rings[2], Ring{Layer: ringStar, Tone: tone, Radius: round(shape.radius), X: round(x), Y: round(y), Star: shape.dir, Label: shape.label})
-	rings[0] = append(rings[0], Ring{Layer: graph.LayerCore, Tone: 0, Radius: round(shape.coreR), X: round(x), Y: round(y), Star: shape.dir, Label: graph.LayerCore})
+	rings[0] = append(rings[0], Ring{Layer: ringCore, Tone: 0, Radius: round(shape.coreR), X: round(x), Y: round(y), Star: shape.dir, Label: ringCore})
 	for _, placed := range shape.core {
 		placed.x, placed.y = rotate(placed.x, placed.y, angle)
-		emit(result, placed, x, y, graph.LayerCore+":"+shape.dir, graph.LayerCore, "", 0)
+		emit(result, placed, x, y, ringCore+":"+shape.dir, ringCore, "", 0)
 	}
 
 	for _, spoke := range shape.spokes {
@@ -759,9 +763,9 @@ func placeStar(result *Layout, rings *[3][]Ring, shape *starShape, x, y, angle f
 			continue
 		}
 
-		rings[1] = append(rings[1], Ring{Layer: graph.LayerSpoke, Tone: 1, Radius: round(spoke.slot.radius), X: round(x + dx), Y: round(y + dy), Star: shape.dir, Spoke: spoke.dir, Label: path.Base(spoke.dir)})
+		rings[1] = append(rings[1], Ring{Layer: graph.LayerLeaf, Tone: 1, Radius: round(spoke.slot.radius), X: round(x + dx), Y: round(y + dy), Star: shape.dir, Spoke: spoke.dir, Label: path.Base(spoke.dir)})
 		for _, placed := range spoke.slot.items {
-			emit(result, placed, x+dx, y+dy, graph.LayerSpoke+":"+spoke.dir, graph.LayerSpoke, "", 0)
+			emit(result, placed, x+dx, y+dy, graph.LayerLeaf+":"+spoke.dir, graph.LayerLeaf, "", 0)
 		}
 	}
 }

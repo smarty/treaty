@@ -34,6 +34,10 @@ var (
 		"rules":          {"fail_on", "warn_on", "ignore"},
 		"layers.adapter": {graph.SideDriving, graph.SideDriven},
 	}
+
+	// starKeys are the keys of each star under stars, whose own keys are
+	// directories.
+	starKeys = []string{"contracts", "orchestrators"}
 )
 
 // decodeConfig reads treaty.yaml strictly. A version newer than this
@@ -119,6 +123,14 @@ func checkKeys(mapping *yaml.Node, path string) error {
 		}
 
 		inner := strings.TrimPrefix(path+"."+key.Value, ".")
+		if path == "" && key.Value == "stars" && entry.Kind == yaml.MappingNode {
+			if err := checkStarKeys(entry); err != nil {
+				return err
+			}
+
+			continue
+		}
+
 		if path == "" && key.Value == "layers" && entry.Kind == yaml.MappingNode {
 			// Layer names are the config's own, so only the hexagonal
 			// adapter, whose sides are fixed, has keys to check.
@@ -134,6 +146,26 @@ func checkKeys(mapping *yaml.Node, path string) error {
 		if _, ok := configKeys[inner]; ok && entry.Kind == yaml.MappingNode {
 			if err := checkKeys(entry, inner); err != nil {
 				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkStarKeys refuses a key under a star other than contracts and
+// orchestrators. A star that is not a mapping is left for the
+// architecture to refuse.
+func checkStarKeys(stars *yaml.Node) error {
+	for i := 0; i+1 < len(stars.Content); i += 2 {
+		dir, star := stars.Content[i].Value, stars.Content[i+1]
+		if star.Kind != yaml.MappingNode {
+			continue
+		}
+
+		for j := 0; j+1 < len(star.Content); j += 2 {
+			if key := star.Content[j]; !slices.Contains(starKeys, key.Value) {
+				return fmt.Errorf("line %d: %w %q under stars.%s; %s", key.Line, ErrUnknownKey, key.Value, dir, suggest(key.Value, starKeys, "a star maps contracts and orchestrators"))
 			}
 		}
 	}

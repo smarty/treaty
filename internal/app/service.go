@@ -47,6 +47,10 @@ type analysis struct {
 	// stale are the entries of rules.ignore whose target is gone.
 	stale []Ignore
 
+	// baseMisfit is the first directory a snowflake's stars do not fit in
+	// the base tree, which its binding looked through.
+	baseMisfit string
+
 	// proofs is what the head tree's tests show about each contract.
 	proofs map[string]rules.ContractProof
 
@@ -126,14 +130,28 @@ func (this *Service) analyze(baseRef string) (*analysis, error) {
 		}
 	}
 
-	result := this.analyzeGraphs(config, revision{graph: head, tests: this.discover(this.root, head)}, base, baseRef)
+	result, err := this.analyzeGraphs(config, revision{graph: head, tests: this.discover(this.root, head)}, base, baseRef)
+	if err != nil {
+		return nil, err
+	}
+
 	result.baseSources = base.sources
 	return result, nil
 }
 
 // analyzeGraphs scores a head graph, and its diff from base when base has a
-// graph. It assigns layers to both graphs.
-func (this *Service) analyzeGraphs(config Config, head, base revision, baseRef string) *analysis {
+// graph. It assigns layers to both graphs. A snowflake is bound to the head
+// strictly, so stars that do not fit the working tree fail the analysis as
+// an invalid treaty.yaml does, and to the base leniently, which notes a
+// misfit and goes on; the analysis keeps the head's binding for every later
+// placement.
+func (this *Service) analyzeGraphs(config Config, head, base revision, baseRef string) (*analysis, error) {
+	bound, err := config.Architecture.Bind(modulePaths(head.graph))
+	if err != nil {
+		return nil, fmt.Errorf("treaty.yaml: %w", err)
+	}
+
+	config.Architecture = bound
 	result := &analysis{config: config, head: head.graph, base: base.graph, baseRef: baseRef}
 	measured := map[string]bool{}
 	for _, suite := range this.suites {
@@ -145,6 +163,8 @@ func (this *Service) analyzeGraphs(config Config, head, base revision, baseRef s
 	result.metrics = rules.Metrics(head.graph)
 	result.proofs = rules.Proof(head.graph, head.tests, measured, result.metrics)
 	if base.graph != nil {
+		baseBound, _ := config.Architecture.Bind(modulePaths(base.graph))
+		result.baseMisfit = baseBound.Misfit()
 		config.Architecture.Assign(base.graph)
 		result.baseMetrics = rules.Metrics(base.graph)
 		rules.Proof(base.graph, base.tests, measured, result.baseMetrics)
@@ -153,6 +173,16 @@ func (this *Service) analyzeGraphs(config Config, head, base revision, baseRef s
 	}
 
 	result.findings, result.stale = applyIgnores(rules.Rank(head.graph, base.graph, result.changes, result.violations), config.Ignores, head.graph)
+	return result, nil
+}
+
+// modulePaths lists the paths of a graph's modules.
+func modulePaths(g *graph.Graph) []string {
+	result := make([]string, 0, len(g.Modules))
+	for _, module := range g.Modules {
+		result = append(result, module.Path)
+	}
+
 	return result
 }
 

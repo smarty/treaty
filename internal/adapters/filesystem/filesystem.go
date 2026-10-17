@@ -477,15 +477,11 @@ func (this configFile) architecture() (result rules.Architecture, err error) {
 	}
 
 	if this.Stars.Kind != 0 && this.Stars.Kind != yaml.MappingNode {
-		return result, fmt.Errorf("%w: stars must map each star's directory to the globs of its core", rules.ErrArchitecture)
+		return result, fmt.Errorf("%w: stars must map each star's directory to its contracts and orchestrators", rules.ErrArchitecture)
 	}
 
 	for i := 0; i+1 < len(this.Stars.Content); i += 2 {
 		dir, value := this.Stars.Content[i].Value, this.Stars.Content[i+1]
-		var globs []string
-		if err := value.Decode(&globs); err != nil {
-			return result, fmt.Errorf("stars.%s: %w", dir, err)
-		}
 
 		// A glob keeps its spelling for Validate to refuse; only a
 		// directory is cleaned, so internal/ and internal name one star.
@@ -493,7 +489,12 @@ func (this configFile) architecture() (result rules.Architecture, err error) {
 			dir = path.Clean(dir)
 		}
 
-		result.Stars = append(result.Stars, rules.Star{Dir: dir, Core: globs})
+		star, err := decodeStar(dir, value)
+		if err != nil {
+			return result, err
+		}
+
+		result.Stars = append(result.Stars, star)
 	}
 
 	if this.Layers.Kind != 0 && this.Layers.Kind != yaml.MappingNode {
@@ -552,6 +553,33 @@ func (this configFile) architecture() (result rules.Architecture, err error) {
 
 	result.Layers = listed
 	return result, result.Validate()
+}
+
+// decodeStar reads one star's value: a mapping of contracts and
+// orchestrators to lists of directories, or nothing yet, written as null or
+// {}. Its entries are kept as written, for Validate to judge.
+func decodeStar(dir string, star *yaml.Node) (result rules.Star, err error) {
+	result.Dir = dir
+	if star.Kind == yaml.ScalarNode && star.Tag == "!!null" {
+		return result, nil
+	}
+
+	if star.Kind != yaml.MappingNode {
+		return result, fmt.Errorf("line %d: %w: stars.%s must map contracts and orchestrators to lists of directories, such as %s: {contracts: [%q]}", star.Line, rules.ErrArchitecture, dir, dir, path.Join(dir, "contracts"))
+	}
+
+	for _, list := range []struct {
+		key     string
+		entries *[]string
+	}{{"contracts", &result.Contracts}, {"orchestrators", &result.Orchestrators}} {
+		if node := value(star, list.key); node != nil {
+			if err := node.Decode(list.entries); err != nil {
+				return result, fmt.Errorf("stars.%s.%s: %w", dir, list.key, err)
+			}
+		}
+	}
+
+	return result, nil
 }
 
 func (this *Workspace) designPath(name string) (string, error) {

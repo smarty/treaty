@@ -24,11 +24,12 @@ const (
 	LayerApplication  = "application"
 	LayerBoundary     = "boundary"
 	LayerComposition  = "composition"
-	LayerCore         = "core"
+	LayerContracts    = "contracts"
 	LayerDomain       = "domain"
+	LayerLeaf         = "leaf"
 	LayerNone         = "none"
+	LayerOrchestrator = "orchestrator"
 	LayerShared       = "shared"
-	LayerSpoke        = "spoke"
 	LayerUnclassified = "unclassified"
 
 	SideDriven  = "driven"
@@ -88,9 +89,10 @@ type Import struct {
 // go.mod, when there is one. Boundary names the boundary holding the module,
 // for the vertical and modular architectures, and Public marks a boundary's
 // packages that other boundaries may use. Ambiguous lists the boundaries
-// that tie for a module, which then sits in none of them. Star is the
-// directory of the star holding the module, for the snowflake
-// architecture, and Spoke is its spoke's directory, empty for a core.
+// that tie for a module, which then sits in none of them. For the snowflake
+// architecture, Star is the directory of the star holding the module; Spoke
+// is its leaf's directory, for a leaf; and CoreEntry is the contracts or
+// orchestrators entry of treaty.yaml that claims it, for a core package.
 type Module struct {
 	ID        string   `json:"id"`
 	Language  string   `json:"language"`
@@ -106,6 +108,7 @@ type Module struct {
 	Ambiguous []string `json:"ambiguous,omitempty"`
 	Star      string   `json:"star,omitempty"`
 	Spoke     string   `json:"spoke,omitempty"`
+	CoreEntry string   `json:"core_entry,omitempty"`
 	Files     []string `json:"files"`
 }
 

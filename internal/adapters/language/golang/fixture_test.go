@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -809,44 +810,62 @@ func TestIgnoredFindings(t *testing.T) {
 	}
 }
 
+// snowflakeRepo writes files into a git repository, and runs git there.
+type snowflakeRepo struct {
+	t    *testing.T
+	root string
+}
+
+func newSnowflakeRepo(t *testing.T, files map[string]string) *snowflakeRepo {
+	t.Helper()
+	result := &snowflakeRepo{t: t, root: t.TempDir()}
+	result.write(files)
+	return result
+}
+
+func (this *snowflakeRepo) write(files map[string]string) {
+	this.t.Helper()
+	for name, text := range files {
+		file := filepath.Join(this.root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			this.t.Fatal(err)
+		}
+
+		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+			this.t.Fatal(err)
+		}
+	}
+}
+
+func (this *snowflakeRepo) git(args ...string) {
+	this.t.Helper()
+	if output, err := exec.Command("git", append([]string{"-C", this.root, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...).CombinedOutput(); err != nil {
+		this.t.Fatalf("git %v: %v %s", args, err, output)
+	}
+}
+
+func (this *snowflakeRepo) service() *app.Service {
+	return app.NewService(this.root, filesystem.NewConfig(this.root), NewExtractor(), []app.Dialect{NewDialect()},
+		gitvcs.New(this.root), filesystem.NewWorkspace(this.root), &viewRecorder{}, filesystem.NewAgentConfig(this.t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+}
+
 func TestIgnoredSidewaysDependency(t *testing.T) {
-	root := t.TempDir()
-	write := func(files map[string]string) {
-		for name, text := range files {
-			file := filepath.Join(root, filepath.FromSlash(name))
-			if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-				t.Fatal(err)
-			}
-
-			if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
-	git := func(args ...string) {
-		if output, err := exec.Command("git", append([]string{"-C", root, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v %s", args, err, output)
-		}
-	}
-
-	write(map[string]string{
-		"go.mod":                  "module example.com/m\n",
-		"treaty.yaml":             "version: 1\narchitecture: snowflake\ncomposition: [\"cmd/**\"]\nstars:\n  internal: [\"internal/core/**\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
-		"cmd/app/main.go":         "package main\n\nimport (\n\t\"example.com/m/internal/plan\"\n\t\"example.com/m/internal/web\"\n)\n\nfunc main() { plan.Run(web.Fetcher{}) }\n",
-		"internal/core/core.go":   "package core\n\n// Fetcher fetches a page.\ntype Fetcher interface{ Fetch() string }\n",
-		"internal/plan/plan.go":   "package plan\n\nimport \"example.com/m/internal/core\"\n\n// Run runs a plan.\nfunc Run(fetcher core.Fetcher) { fetcher.Fetch() }\n",
-		"internal/web/web.go":     "package web\n\n// Fetcher fetches pages.\ntype Fetcher struct{}\n\n// Fetch fetches a page.\nfunc (Fetcher) Fetch() string { return \"\" }\n",
-		"internal/web/helpers.go": "package web\n\n// Title names a page.\nfunc Title() string { return \"\" }\n",
-		".gitignore":              ".treaty/\n",
+	repo := newSnowflakeRepo(t, map[string]string{
+		"go.mod":                          "module example.com/m\n",
+		"treaty.yaml":                     "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"internal/contracts\"]\n    orchestrators: [\"cmd/app\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
+		"cmd/app/main.go":                 "package main\n\nimport (\n\t\"example.com/m/internal/plan\"\n\t\"example.com/m/internal/web\"\n)\n\nfunc main() { plan.Run(web.Fetcher{}) }\n",
+		"internal/contracts/contracts.go": "package contracts\n\n// Fetcher fetches a page.\ntype Fetcher interface{ Fetch() string }\n",
+		"internal/plan/plan.go":           "package plan\n\nimport \"example.com/m/internal/contracts\"\n\n// Run runs a plan.\nfunc Run(fetcher contracts.Fetcher) { fetcher.Fetch() }\n",
+		"internal/web/web.go":             "package web\n\n// Fetcher fetches pages.\ntype Fetcher struct{}\n\n// Fetch fetches a page.\nfunc (Fetcher) Fetch() string { return \"\" }\n",
+		"internal/web/helpers.go":         "package web\n\n// Title names a page.\nfunc Title() string { return \"\" }\n",
+		".gitignore":                      ".treaty/\n",
 	})
-	git("init", "-q")
-	git("add", ".")
-	git("commit", "-q", "-m", "base")
+	repo.git("init", "-q")
+	repo.git("add", ".")
+	repo.git("commit", "-q", "-m", "base")
 
-	config := filesystem.NewConfig(root)
-	service := app.NewService(root, config, NewExtractor(), []app.Dialect{NewDialect()},
-		gitvcs.New(root), filesystem.NewWorkspace(root), &viewRecorder{}, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	config := filesystem.NewConfig(repo.root)
+	service := repo.service()
 	check := func() app.Report {
 		t.Helper()
 		report, err := service.Check("HEAD")
@@ -873,12 +892,12 @@ func TestIgnoredSidewaysDependency(t *testing.T) {
 		t.Fatalf("a clean snowflake: %v", report.Failures)
 	}
 
-	// The plan spoke calls its sibling web directly.
-	write(map[string]string{"internal/plan/plan.go": "package plan\n\nimport (\n\t\"example.com/m/internal/core\"\n\t\"example.com/m/internal/web\"\n)\n\n// Run runs a plan.\nfunc Run(fetcher core.Fetcher) { fetcher.Fetch(); web.Title() }\n"})
+	// The plan leaf calls its sibling web directly.
+	repo.write(map[string]string{"internal/plan/plan.go": "package plan\n\nimport (\n\t\"example.com/m/internal/contracts\"\n\t\"example.com/m/internal/web\"\n)\n\n// Run runs a plan.\nfunc Run(fetcher contracts.Fetcher) { fetcher.Fetch(); web.Title() }\n"})
 	report := check()
 	finding := violation(report)
 	if !slices.Equal(report.Failures, []string{"1 layer violation(s)"}) || finding.Target != "go:internal/plan -> go:internal/web" ||
-		!strings.Contains(finding.Detail, "spoke internal/plan may not depend on spoke internal/web: internal/plan and internal/web are sibling spokes of star internal") {
+		!strings.Contains(finding.Detail, "leaf internal/plan may not depend on leaf internal/web: internal/plan and internal/web are sibling spokes of star ., and spokes never depend sideways; declare a port in the contracts of star . (internal/contracts), implement it in internal/web, and let an orchestrator of star . hand it in") {
 		t.Fatalf("sideways: failures %v, %+v", report.Failures, finding)
 	}
 
@@ -893,8 +912,8 @@ func TestIgnoredSidewaysDependency(t *testing.T) {
 
 	// Turning the dependency around is another edge: it counts, and the
 	// entry for the edge that is gone is stale.
-	write(map[string]string{
-		"internal/plan/plan.go":   "package plan\n\nimport \"example.com/m/internal/core\"\n\n// Run runs a plan.\nfunc Run(fetcher core.Fetcher) { fetcher.Fetch() }\n\n// Name names a plan.\nfunc Name() string { return \"\" }\n",
+	repo.write(map[string]string{
+		"internal/plan/plan.go":   "package plan\n\nimport \"example.com/m/internal/contracts\"\n\n// Run runs a plan.\nfunc Run(fetcher contracts.Fetcher) { fetcher.Fetch() }\n\n// Name names a plan.\nfunc Name() string { return \"\" }\n",
 		"internal/web/helpers.go": "package web\n\nimport \"example.com/m/internal/plan\"\n\n// Title names a page.\nfunc Title() string { return plan.Name() }\n",
 	})
 	report = check()
@@ -909,49 +928,39 @@ func TestIgnoredSidewaysDependency(t *testing.T) {
 	}
 
 	// Once the base has it, it is existing debt and does not fail.
-	git("add", ".")
-	git("commit", "-q", "-m", "sideways")
+	repo.git("add", ".")
+	repo.git("commit", "-q", "-m", "sideways")
 	if report = check(); len(report.Failures) != 0 || !violation(report).Existing {
 		t.Fatalf("existing: failures %v, %+v", report.Failures, violation(report))
 	}
 
 	// A misspelled star holds no module, and the check says so rather than
 	// quietly checking less.
-	write(map[string]string{"treaty.yaml": "version: 1\narchitecture: snowflake\ncomposition: [\"cmd/**\"]\nstars:\n  internal: [\"internal/core/**\"]\n  internal/wbe: [\"internal/wbe/core/**\"]\n"})
+	repo.write(map[string]string{"treaty.yaml": "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"internal/contracts\"]\n    orchestrators: [\"cmd/app\"]\n  internal/wbe:\n"})
 	if report = check(); !slices.Contains(report.Notes, "treaty.yaml declares star internal/wbe under stars, but no module lies in it; check the directory's spelling") {
 		t.Fatalf("notes: %v", report.Notes)
 	}
 }
 
 func TestSnowflakeFromInitToTheTools(t *testing.T) {
-	root := t.TempDir()
-	for name, text := range map[string]string{
-		"go.mod":                             "module example.com/m\n",
-		"m.go":                               "package m\n\nimport \"example.com/m/internal/factory\"\n\n// Run runs the guard.\nfunc Run() { factory.New() }\n",
-		"cmd/app/main.go":                    "package main\n\nimport \"example.com/m\"\n\nfunc main() { m.Run() }\n",
-		"internal/factory/factory.go":        "package factory\n\nimport (\n\t\"example.com/m/internal/blocks\"\n\t\"example.com/m/internal/blocks/cleanse\"\n\t\"example.com/m/internal/blocks/www\"\n\t\"example.com/m/internal/plan\"\n\t\"example.com/m/internal/web\"\n)\n\n// New wires the guard.\nfunc New() { plan.Run(web.Client{}); blocks.Run(www.Step{}, cleanse.Step{}) }\n",
-		"internal/core/core.go":              "package core\n\n// Fetcher fetches a page.\ntype Fetcher interface{ Fetch() string }\n",
-		"internal/plan/plan.go":              "package plan\n\nimport \"example.com/m/internal/core\"\n\n// Run runs a plan.\nfunc Run(fetcher core.Fetcher) { fetcher.Fetch() }\n",
-		"internal/web/web.go":                "package web\n\nimport \"example.com/m/internal/core\"\n\n// Client fetches pages.\ntype Client struct{}\n\n// Fetch fetches a page.\nfunc (Client) Fetch() string { return \"\" }\n\nvar _ core.Fetcher = Client{}\n",
-		"internal/blocks/blocks.go":          "package blocks\n\nimport \"example.com/m/internal/blocks/core\"\n\n// Run runs the steps.\nfunc Run(steps ...core.Step) {\n\tfor _, step := range steps {\n\t\tstep.Do()\n\t}\n}\n",
-		"internal/blocks/core/core.go":       "package core\n\nimport \"example.com/m/internal/core\"\n\n// Step is one block.\ntype Step interface{ Do() }\n\n// Source is where a step reads from.\ntype Source = core.Fetcher\n",
-		"internal/blocks/www/www.go":         "package www\n\nimport \"example.com/m/internal/blocks/core\"\n\n// Step reads the web.\ntype Step struct{}\n\n// Do reads.\nfunc (Step) Do() {}\n\nvar _ core.Step = Step{}\n",
-		"internal/blocks/cleanse/cleanse.go": "package cleanse\n\nimport \"example.com/m/internal/blocks/core\"\n\n// Step cleans text.\ntype Step struct{}\n\n// Do cleans.\nfunc (Step) Do() {}\n\nvar _ core.Step = Step{}\n",
-	} {
-		file := filepath.Join(root, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-			t.Fatal(err)
-		}
-
-		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	repo := newSnowflakeRepo(t, map[string]string{
+		"go.mod":                                 "module example.com/m\n",
+		"m.go":                                   "package m\n\nimport \"example.com/m/internal/assembly\"\n\n// Run runs the guard.\nfunc Run() { assembly.New() }\n",
+		"cmd/app/main.go":                        "package main\n\nimport \"example.com/m\"\n\nfunc main() { m.Run() }\n",
+		"internal/assembly/assembly.go":          "package assembly\n\nimport (\n\t\"example.com/m/internal/blocks/kit\"\n\t\"example.com/m/internal/plan\"\n\t\"example.com/m/internal/web\"\n)\n\n// New wires the guard.\nfunc New() { plan.Run(web.Client{}); kit.Run() }\n",
+		"internal/contracts/contracts.go":        "package contracts\n\n// Fetcher fetches a page.\ntype Fetcher interface{ Fetch() string }\n",
+		"internal/plan/plan.go":                  "package plan\n\nimport \"example.com/m/internal/contracts\"\n\n// Run runs a plan.\nfunc Run(fetcher contracts.Fetcher) { fetcher.Fetch() }\n",
+		"internal/web/web.go":                    "package web\n\nimport \"example.com/m/internal/contracts\"\n\n// Client fetches pages.\ntype Client struct{}\n\n// Fetch fetches a page.\nfunc (Client) Fetch() string { return \"\" }\n\nvar _ contracts.Fetcher = Client{}\n",
+		"internal/blocks/contracts/contracts.go": "package contracts\n\nimport \"example.com/m/internal/contracts\"\n\n// Step is one block.\ntype Step interface{ Do() }\n\n// Source is where a step reads from.\ntype Source = contracts.Fetcher\n",
+		"internal/blocks/kit/kit.go":             "package kit\n\nimport (\n\t\"example.com/m/internal/blocks/cleanse\"\n\t\"example.com/m/internal/blocks/contracts\"\n\t\"example.com/m/internal/blocks/www\"\n)\n\n// Run runs the steps.\nfunc Run() {\n\tfor _, step := range []contracts.Step{www.Step{}, cleanse.Step{}} {\n\t\tstep.Do()\n\t}\n}\n",
+		"internal/blocks/www/www.go":             "package www\n\nimport \"example.com/m/internal/blocks/contracts\"\n\n// Step reads the web.\ntype Step struct{}\n\n// Do reads.\nfunc (Step) Do() {}\n\nvar _ contracts.Step = Step{}\n",
+		"internal/blocks/cleanse/cleanse.go":     "package cleanse\n\nimport \"example.com/m/internal/blocks/contracts\"\n\n// Step cleans text.\ntype Step struct{}\n\n// Do cleans.\nfunc (Step) Do() {}\n\nvar _ contracts.Step = Step{}\n",
+	})
 
 	recorder := &viewRecorder{}
-	config := filesystem.NewConfig(root)
-	service := app.NewService(root, config, NewExtractor(), []app.Dialect{NewDialect()},
-		nil, filesystem.NewWorkspace(root), recorder, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	config := filesystem.NewConfig(repo.root)
+	service := app.NewService(repo.root, config, NewExtractor(), []app.Dialect{NewDialect()},
+		nil, filesystem.NewWorkspace(repo.root), recorder, filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
 
 	// init drafts the stars, and the draft loads and passes.
 	if _, err := service.Init(rules.StyleSnowflake); err != nil {
@@ -963,10 +972,13 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []rules.Star{{Dir: "internal", Core: []string{"internal/core/**"}}, {Dir: "internal/blocks", Core: []string{"internal/blocks/core/**"}}}
-	if architecture := loaded.Architecture; !slices.Equal(architecture.Composition, []string{".", "cmd/**", "internal/factory/**"}) || len(architecture.Stars) != 2 ||
-		architecture.Stars[0].Dir != want[0].Dir || !slices.Equal(architecture.Stars[0].Core, want[0].Core) || architecture.Stars[1].Dir != want[1].Dir || !slices.Equal(architecture.Stars[1].Core, want[1].Core) {
-		t.Fatalf("init drafted %+v", architecture)
+	want := []rules.Star{
+		{Dir: ".", Contracts: []string{"internal/contracts"}, Orchestrators: []string{".", "internal/assembly"}},
+		{Dir: "internal/blocks", Contracts: []string{"internal/blocks/contracts"}, Orchestrators: []string{"internal/blocks/kit"}},
+	}
+
+	if !reflect.DeepEqual(loaded.Architecture.Stars, want) {
+		t.Fatalf("init drafted %+v", loaded.Architecture.Stars)
 	}
 
 	report, err := service.Check("")
@@ -978,10 +990,20 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 		t.Fatalf("the draft passes: %v %+v", report.Failures, report.Violations)
 	}
 
-	// Every copy of a placement carries the star and the spoke.
+	// Every copy of a placement carries the star, the leaf and the entry.
+	var paths []string
 	for _, module := range report.Modules {
-		got := rules.Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Star: module.Star, Spoke: module.Spoke}
-		if want := loaded.Architecture.Resolve(strings.TrimPrefix(module.ID, "go:")); !got.Same(want) {
+		paths = append(paths, strings.TrimPrefix(module.ID, "go:"))
+	}
+
+	bound, err := loaded.Architecture.Bind(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, module := range report.Modules {
+		got := rules.Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Star: module.Star, Spoke: module.Spoke, Entry: module.Entry}
+		if want := bound.Resolve(strings.TrimPrefix(module.ID, "go:")); !got.Same(want) {
 			t.Errorf("the report places %s in %+v, not %+v", module.ID, got, want)
 		}
 	}
@@ -990,13 +1012,13 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if view := recorder.view; !slices.Equal(view.Layers, []string{"core", "spoke"}) || len(view.Stars) != 2 || view.Stars[1].Parent != "internal" {
+	if view := recorder.view; !slices.Equal(view.Layers, []string{"contracts", "orchestrator", "leaf"}) || !reflect.DeepEqual(view.Stars, bound.Tree()) || view.Stars[1].Parent != "." {
 		t.Fatalf("the map's layers %v and stars %+v", view.Layers, view.Stars)
 	}
 
 	for _, module := range recorder.view.Modules {
-		got := rules.Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous, Star: module.Star, Spoke: module.Spoke}
-		if want := loaded.Architecture.Resolve(module.Path); !got.Same(want) {
+		got := rules.Placement{Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous, Star: module.Star, Spoke: module.Spoke, Entry: module.CoreEntry}
+		if want := bound.Resolve(module.Path); !got.Same(want) {
 			t.Errorf("the map places %s in %+v, not %+v", module.ID, got, want)
 		}
 	}
@@ -1004,13 +1026,15 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 	// allowed gives the rule, and the ports that already stand for what
 	// the spoke reached for, or says to declare one.
 	for _, c := range []struct{ from, to, want string }{
-		{"internal/plan", "internal/web", "not allowed: go:internal/plan (spoke internal/plan) → go:internal/web (spoke internal/web)\n" +
-			"rule: spoke internal/plan may not depend on spoke internal/web: internal/plan and internal/web are sibling spokes of star internal, and spokes never depend sideways; declare a port in the core of star internal, implement it in internal/web, and let composition hand it in\n" +
-			"ports: go:internal/web:Client implements go:internal/core:Fetcher, which spoke internal/plan may use; depend on the port, and let composition hand internal/web in\n" +
-			"spoke internal/plan may depend on: spoke internal/plan, core of internal (internal, internal/core/**)\n"},
-		{"internal/plan", "internal/blocks/www", "ports: nothing in internal/blocks implements an interface in a core spoke internal/plan may use; declare one in the core of star internal\n"},
-		{"internal/blocks/www", "internal/core", "allowed: go:internal/blocks/www (spoke internal/blocks/www) → go:internal/core (core of star internal)\n"},
-		{"internal/plan", "internal/blocks/new", "go:internal/plan (spoke internal/plan) → internal/blocks/new (not built) (spoke internal/blocks/new)\n"},
+		{"internal/plan", "internal/web", "not allowed: go:internal/plan (leaf internal/plan) → go:internal/web (leaf internal/web)\n" +
+			"rule: leaf internal/plan may not depend on leaf internal/web: internal/plan and internal/web are sibling spokes of star ., and spokes never depend sideways; declare a port in the contracts of star . (internal/contracts), implement it in internal/web, and let an orchestrator of star . hand it in\n" +
+			"ports: go:internal/web:Client implements go:internal/contracts:Fetcher, which leaf internal/plan may use; depend on the port, and let the orchestrators hand internal/web in\n" +
+			"leaf internal/plan may depend on: leaf internal/plan, contracts internal/contracts, orchestrator ., orchestrator internal/assembly\n"},
+		{"internal/blocks/www", "internal/contracts", "not allowed: go:internal/blocks/www (leaf internal/blocks/www) → go:internal/contracts (contracts internal/contracts)\n" +
+			"rule: leaf internal/blocks/www may not depend on contracts internal/contracts: a spoke may use only the core of its own star, internal/blocks, never the core of star . around it; re-export what it needs in the contracts of star internal/blocks (internal/blocks/contracts)\n"},
+		{"internal/assembly", "internal/blocks/www", "rule: orchestrator internal/assembly may not depend on leaf internal/blocks/www: an orchestrator may use a branch only through its core, and internal/blocks/www is a spoke of branch internal/blocks; let an orchestrator of star internal/blocks (internal/blocks/kit) build it, and use that\n"},
+		{"internal/blocks/www", "internal/blocks/contracts", "allowed: go:internal/blocks/www (leaf internal/blocks/www) → go:internal/blocks/contracts (contracts internal/blocks/contracts)\n"},
+		{"internal/plan", "internal/blocks/new", "go:internal/plan (leaf internal/plan) → internal/blocks/new (not built) (leaf internal/blocks/new)\n"},
 	} {
 		got, err := service.Allowed(c.from, c.to)
 		if err != nil || !strings.Contains(got, c.want) {
@@ -1024,36 +1048,112 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"Rules (snowflake): the code is a star of stars.",
-		"\nstars\n  internal  core internal, internal/core/**  leaves internal/plan, internal/web  branches internal/blocks\n  internal/blocks (branch of internal)  core internal/blocks, internal/blocks/core/**  leaves internal/blocks/cleanse, internal/blocks/www\n",
-		"\ncomposition\n",
-		"\ncore of star internal\n  go:internal/core",
-		"\nspoke internal/blocks/www\n  go:internal/blocks/www",
+		"Rules (snowflake): the repository is a star of stars.",
+		"\nstars\n  .  contracts internal/contracts  orchestrators ., internal/assembly  leaves cmd/app, internal/plan, internal/web  branches internal/blocks\n  internal/blocks (branch of .)  contracts internal/blocks/contracts  orchestrators internal/blocks/kit  leaves internal/blocks/cleanse, internal/blocks/www\n",
+		"\ncontracts internal/contracts\n  go:internal/contracts",
+		"\norchestrator .\n  go:.",
+		"\nleaf internal/blocks/www\n  go:internal/blocks/www",
 	} {
 		if !strings.Contains(overview, want) {
 			t.Errorf("the overview lacks %q:\n%s", want, overview)
 		}
 	}
 
-	if strings.Index(overview, "\ncore of star internal\n") > strings.Index(overview, "\nspoke internal/plan\n") || strings.Index(overview, "\nspoke internal/web\n") > strings.Index(overview, "\ncore of star internal/blocks\n") {
-		t.Errorf("each star lists its core, then its leaves, before the stars inside it:\n%s", overview)
+	order := []string{"\ncontracts internal/contracts\n", "\norchestrator .\n", "\norchestrator internal/assembly\n", "\nleaf cmd/app\n", "\nleaf internal/web\n", "\ncontracts internal/blocks/contracts\n", "\norchestrator internal/blocks/kit\n", "\nleaf internal/blocks/www\n"}
+	for i := 1; i < len(order); i++ {
+		if strings.Index(overview, order[i-1]) > strings.Index(overview, order[i]) {
+			t.Errorf("each star lists its contracts, its orchestrators, then its leaves, before the stars inside it: %q comes after %q\n%s", order[i-1], order[i], overview)
+		}
 	}
 
-	slice, err := service.Slice("go:internal/blocks/www")
+	if strings.Contains(overview, "\ncomposition\n") {
+		t.Errorf("a snowflake has no composition group:\n%s", overview)
+	}
+
+	for _, c := range []struct{ module, want string }{
+		{"go:internal/blocks/www", "star: leaf internal/blocks/www of star internal/blocks, a branch of .\n  cores it may use: go:internal/blocks/contracts, go:internal/blocks/kit\n  never use: leaf internal/blocks/cleanse, the core of star . (reach it through internal/blocks/contracts)\n"},
+		{"go:internal/assembly", "star: orchestrator internal/assembly of star .\n  cores it may use: go:., go:internal/blocks/contracts, go:internal/blocks/kit, go:internal/contracts\n  leaves it wires: cmd/app, internal/plan, internal/web\n  never use: the spokes of branch internal/blocks\n"},
+		{"go:internal/blocks/contracts", "star: contracts internal/blocks/contracts of star internal/blocks, a branch of .\n  cores it may use: go:internal/blocks/kit, go:internal/contracts\n  never use: the leaves of star internal/blocks, the orchestrators of star .\n"},
+	} {
+		slice, err := service.Slice(c.module)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if text := slice.Text(); !strings.Contains(text, c.want) {
+			t.Errorf("the slice of %s lacks\n%s\ngot\n%s", c.module, c.want, text)
+		}
+	}
+}
+
+func TestSnowflakeMisfitsAndOwnPackages(t *testing.T) {
+	repo := newSnowflakeRepo(t, map[string]string{
+		"go.mod":                                 "module example.com/m\n",
+		"treaty.yaml":                            "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"internal/contracts\"]\n  internal/blocks:\n    contracts: [\"internal/blocks/contracts\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
+		"internal/contracts/contracts.go":        "package contracts\n\n// Fetcher fetches a page.\ntype Fetcher interface{ Fetch() string }\n",
+		"internal/blocks/contracts/contracts.go": "package contracts\n\nimport \"example.com/m/internal/contracts\"\n\n// Source is where a block reads from.\ntype Source = contracts.Fetcher\n",
+		"internal/blocks/www/www.go":             "package www\n\nimport \"example.com/m/internal/blocks/contracts\"\n\n// Read reads a source.\nfunc Read(source contracts.Source) string { return source.Fetch() }\n",
+		"internal/doc.go":                        "// Package internal holds the guard's packages.\npackage internal\n",
+		".gitignore":                             ".treaty/\n",
+	})
+	repo.git("init", "-q")
+	repo.git("add", ".")
+	repo.git("commit", "-q", "-m", "base")
+	service := repo.service()
+
+	// A package in internal, which the stars look through, fails the check.
+	misfit := "treaty.yaml: invalid architecture: the stars do not fit the code: star internal/blocks lies inside spoke internal of star .: internal holds a package, so it is a leaf holding everything below it; declare internal a star, or move its package into a child directory"
+	if _, err := service.Check(""); !errors.Is(err, rules.ErrArchitecture) || !errors.Is(err, rules.ErrMisfit) || err.Error() != misfit {
+		t.Fatalf("a misfit: %v", err)
+	}
+
+	// Removed in the head, it is only noted in the base.
+	if err := os.Remove(filepath.Join(repo.root, "internal", "doc.go")); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.Check("HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if star := slice.Star; star == nil || star.Dir != "internal/blocks" || star.Parent != "internal" || star.Role != "spoke" || star.Spoke != "internal/blocks/www" ||
-		!slices.Equal(star.Cores, []string{"go:internal/blocks", "go:internal/blocks/core", "go:internal/core"}) || !slices.Equal(star.Siblings, []string{"internal/blocks/cleanse"}) {
-		t.Fatalf("the slice's star: %+v", slice.Star)
+	if len(report.Failures) != 0 || !slices.Contains(report.Notes, "the base does not fit the stars: star internal/blocks lies inside spoke internal of star .; its misfit directories are looked through, so existing violations are matched approximately") {
+		t.Fatalf("a misfit base: failures %v, notes %v", report.Failures, report.Notes)
 	}
 
-	if text := slice.Text(); !strings.Contains(text, "star: spoke internal/blocks/www of star internal/blocks, a branch of internal\n  cores it may use: go:internal/blocks, go:internal/blocks/core, go:internal/core\n  never use: internal/blocks/cleanse\n") {
-		t.Fatalf("the slice's text:\n%s", text)
+	// A star's own package, unlisted, is unclassified and fails.
+	repo.write(map[string]string{"internal/blocks/blocks.go": "// Package blocks runs the blocks.\npackage blocks\n"})
+	if report, err = service.Check(""); err != nil {
+		t.Fatal(err)
 	}
 
-	if slice, err = service.Slice("go:internal/core"); err != nil || slice.Star == nil || !slices.Equal(slice.Star.OwnSpokes, []string{"internal/blocks (branch)", "internal/plan", "internal/web"}) {
-		t.Fatalf("a core's own spokes: %+v %v", slice.Star, err)
+	if !slices.Equal(report.Failures, []string{"1 unclassified module(s)"}) || !slices.Contains(report.Notes, "star internal/blocks holds a package of its own, internal/blocks, which treaty.yaml lists in neither its contracts nor its orchestrators, so it is unclassified; list it in one of them") {
+		t.Fatalf("an unlisted own package: failures %v, notes %v", report.Failures, report.Notes)
+	}
+
+	repo.write(map[string]string{"treaty.yaml": "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"internal/contracts\"]\n  internal/blocks:\n    contracts: [\"internal/blocks/contracts\"]\n    orchestrators: [\"internal/blocks\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n"})
+	if report, err = service.Check(""); err != nil || len(report.Failures) != 0 {
+		t.Fatalf("a listed own package: failures %v, %v", report.Failures, err)
+	}
+}
+
+func TestSnowflakeReadsNoTests(t *testing.T) {
+	repo := newSnowflakeRepo(t, map[string]string{
+		"go.mod":                          "module example.com/m\n",
+		"treaty.yaml":                     "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"internal/contracts\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
+		"internal/contracts/contracts.go": "package contracts\n\n// Fetcher fetches a page.\ntype Fetcher interface{ Fetch() string }\n",
+		"internal/plan/plan.go":           "package plan\n\n// Name names a plan.\nfunc Name() string { return \"\" }\n",
+		"internal/web/web.go":             "package web\n\n// Title names a page.\nfunc Title() string { return \"\" }\n",
+		"internal/web/web_test.go":        "package web\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/internal/plan\"\n)\n\nfunc TestTitle(t *testing.T) { _ = plan.Name() }\n",
+	})
+
+	// A test importing a sibling spoke is not read as a dependency.
+	report, err := repo.service().Check("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Failures) != 0 || len(report.Violations) != 0 {
+		t.Fatalf("tests are not checked: failures %v, violations %+v", report.Failures, report.Violations)
 	}
 }

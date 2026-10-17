@@ -602,3 +602,60 @@ func TestPackagesKeepTheImportedModule(t *testing.T) {
 		t.Fatalf("round trip lost %d thing(s):\n%s", len(differences), strings.Join(differences, "\n"))
 	}
 }
+
+func TestSnowflake(t *testing.T) {
+	root := t.TempDir()
+	config := "version: 1\narchitecture: snowflake\nstars:\n  .:\n  shop:\n    contracts: [\"shop/contracts\"]\n    orchestrators: [\"shop\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n"
+	for name, text := range map[string]string{
+		"treaty.yaml":                config,
+		"shop/__init__.py":           "from shop.orders import place\nfrom shop.billing import charge\n",
+		"shop/contracts/__init__.py": "class Order:\n    pass\n",
+		"shop/orders/__init__.py":    "from shop.contracts import Order\n\ndef place():\n    return Order()\n",
+		"shop/billing/__init__.py":   "from shop.orders import place\n\ndef charge():\n    return place()\n",
+		"tools/report.py":            "from shop.contracts import Order\n\ndef report():\n    return Order()\n",
+	} {
+		file := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	service := newService(t, root)
+	report, err := service.Check("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// shop's own package wires its leaves; billing reaches orders sideways,
+	// and tools, a leaf of the root, reaches into the branch shop.
+	var violations []string
+	for _, violation := range report.Violations {
+		violations = append(violations, violation.From+" -> "+violation.To)
+	}
+
+	if want := []string{"py:shop/billing -> py:shop/orders", "py:tools -> py:shop/contracts"}; !slices.Equal(violations, want) {
+		t.Fatalf("violations: got %q, want %q", violations, want)
+	}
+
+	if rule := report.Violations[1].Rule; !strings.Contains(rule, "leaf tools may not depend on contracts shop/contracts: tools and shop are sibling spokes of star ., and spokes never depend sideways, not even on a branch's core") {
+		t.Errorf("rule: %s", rule)
+	}
+
+	// Unlisted, the star's own package is unclassified, noted and failing.
+	unlisted := strings.Replace(config, "    orchestrators: [\"shop\"]\n", "", 1)
+	if err := os.WriteFile(filepath.Join(root, "treaty.yaml"), []byte(unlisted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if report, err = service.Check(""); err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Contains(report.Failures, "1 unclassified module(s)") || !slices.ContainsFunc(report.Notes, func(note string) bool { return strings.HasPrefix(note, "star shop holds a package of its own, shop,") }) {
+		t.Fatalf("unlisted: failures %v, notes %v", report.Failures, report.Notes)
+	}
+}

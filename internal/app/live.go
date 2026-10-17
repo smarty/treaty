@@ -549,7 +549,11 @@ func (this *Live) build(baseline Baseline, preview string) (*analysis, []byte, e
 	}
 
 	current := revision{graph: head, tests: this.service.discover(this.service.root, head)}
-	result := this.service.analyzeGraphs(config, current, base, baseline.Label)
+	result, err := this.service.analyzeGraphs(config, current, base, baseline.Label)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	result.baseSources = base.sources
 	shown := result
 	if preview != "" && preview != config.Architecture.Style {
@@ -560,7 +564,10 @@ func (this *Live) build(baseline Baseline, preview string) (*analysis, []byte, e
 			previewBase.graph = base.graph.Clone()
 		}
 
-		shown = this.service.analyzeGraphs(fitted, revision{graph: head.Clone(), tests: current.tests}, previewBase, baseline.Label)
+		if shown, err = this.service.analyzeGraphs(fitted, revision{graph: head.Clone(), tests: current.tests}, previewBase, baseline.Label); err != nil {
+			return nil, nil, err
+		}
+
 		shown.baseSources = base.sources
 		shown.previewed = true
 	}

@@ -276,40 +276,83 @@ func starGraph(paths []string, uses [][2]string) *graph.Graph {
 	return g
 }
 
-func TestProposeStarsReproducesTheReorganization(t *testing.T) {
-	spokes := []string{"internal/ai", "internal/anthropic", "internal/plan", "internal/tensors", "internal/tracer", "internal/web"}
+// guardGraph is agentportal-guard's import graph: its target tree under the
+// snowflake's second version, or, before its move, its tree as it is.
+func guardGraph(moved bool) *graph.Graph {
+	leaves := []string{"internal/ai", "internal/anthropic", "internal/plan", "internal/tensors", "internal/tracer", "internal/web"}
 	blocks := []string{"internal/blocks/cleanse", "internal/blocks/spotlight", "internal/blocks/summarize", "internal/blocks/www"}
 	gate := []string{"internal/gate/presence", "internal/gate/tagger"}
-	paths := []string{".", "cmd/guardprobe", "internal/factory", "internal/core", "internal/core/trust", "internal/blocks", "internal/blocks/core", "internal/gate", "internal/gate/core"}
-	paths = append(append(append(paths, spokes...), blocks...), gate...)
+	if !moved {
+		paths := append([]string{".", "cmd/guardprobe", "internal/core", "internal/factory", "internal/blocks/core", "internal/gate/core"}, slices.Concat(leaves, blocks, gate)...)
+		uses := [][2]string{
+			{"cmd/guardprobe", "."}, {".", "internal/factory"}, {".", "internal/plan"}, {"internal/factory", "internal/core"},
+			{"internal/blocks/core", "internal/core"}, {"internal/gate/core", "internal/core"},
+		}
+
+		for _, leaf := range leaves {
+			uses = append(uses, [2]string{"internal/factory", leaf})
+		}
+
+		for _, leaf := range []string{"internal/ai", "internal/plan", "internal/tracer", "internal/web"} {
+			uses = append(uses, [2]string{leaf, "internal/core"})
+		}
+
+		for _, leaf := range blocks {
+			uses = append(uses, [2]string{"internal/factory", leaf}, [2]string{leaf, "internal/blocks/core"}, [2]string{leaf, "internal/core"})
+		}
+
+		for _, leaf := range gate {
+			uses = append(uses, [2]string{"internal/factory", leaf}, [2]string{leaf, "internal/gate/core"}, [2]string{leaf, "internal/core"})
+		}
+
+		return starGraph(paths, uses)
+	}
+
+	paths := append([]string{".", "cmd/guardprobe", "internal/contracts", "internal/assembly", "internal/executor", "internal/blocks/contracts", "internal/blocks/kit", "internal/gate/contracts", "internal/gate/pipeline"}, slices.Concat(leaves, blocks, gate)...)
 	uses := [][2]string{
-		{"cmd/guardprobe", "."}, {".", "internal/factory"}, {".", "internal/core"},
-		{"internal/core", "internal/core/trust"},
-		{"internal/blocks", "internal/blocks/core"}, {"internal/blocks/core", "internal/core"},
-		{"internal/gate", "internal/gate/core"}, {"internal/gate/core", "internal/core"},
+		{"cmd/guardprobe", "."}, {".", "internal/assembly"}, {".", "internal/plan"}, {"internal/executor", "internal/contracts"},
+		{"internal/assembly", "internal/contracts"}, {"internal/assembly", "internal/executor"},
+		{"internal/assembly", "internal/blocks/kit"}, {"internal/assembly", "internal/blocks/contracts"}, {"internal/assembly", "internal/gate/pipeline"}, {"internal/assembly", "internal/gate/contracts"},
+		{"internal/plan", "internal/executor"},
+		{"internal/blocks/contracts", "internal/contracts"}, {"internal/gate/contracts", "internal/contracts"},
+		{"internal/blocks/kit", "internal/blocks/contracts"}, {"internal/blocks/kit", "internal/contracts"},
+		{"internal/gate/pipeline", "internal/gate/contracts"}, {"internal/gate/pipeline", "internal/contracts"},
 	}
 
-	for _, spoke := range append(append(append([]string{"internal/blocks", "internal/gate"}, spokes...), blocks...), gate...) {
-		uses = append(uses, [2]string{"internal/factory", spoke}, [2]string{spoke, "internal/core"})
+	for _, leaf := range leaves {
+		uses = append(uses, [2]string{"internal/assembly", leaf})
 	}
 
-	for _, spoke := range blocks {
-		uses = append(uses, [2]string{spoke, "internal/blocks/core"})
+	for _, leaf := range []string{"internal/ai", "internal/plan", "internal/tracer", "internal/web"} {
+		uses = append(uses, [2]string{leaf, "internal/contracts"})
 	}
 
-	for _, spoke := range gate {
-		uses = append(uses, [2]string{spoke, "internal/gate/core"})
+	for _, leaf := range blocks {
+		uses = append(uses, [2]string{"internal/blocks/kit", leaf}, [2]string{leaf, "internal/blocks/contracts"})
 	}
 
-	g := starGraph(paths, uses)
+	for _, leaf := range gate {
+		uses = append(uses, [2]string{"internal/gate/pipeline", leaf}, [2]string{leaf, "internal/gate/contracts"})
+	}
+
+	return starGraph(paths, uses)
+}
+
+func TestProposeStarsReproducesTheGuard(t *testing.T) {
+	g := guardGraph(true)
 	architecture, text := propose(g, rules.StyleSnowflake)
 	want := `version: 1
 architecture: snowflake
-composition: [".", "cmd/**", "internal/factory/**"]
-stars: # each star's directory -> the globs of its core; a star's own package is in its core
-  internal: ["internal/core/**"]
-  internal/blocks: ["internal/blocks/core/**"]
-  internal/gate: ["internal/gate/core/**"]
+stars:
+  .:
+    contracts: ["internal/contracts"]
+    orchestrators: [".", "internal/assembly", "internal/executor"]
+  internal/blocks:
+    contracts: ["internal/blocks/contracts"]
+    orchestrators: ["internal/blocks/kit"]
+  internal/gate:
+    contracts: ["internal/gate/contracts"]
+    orchestrators: ["internal/gate/pipeline"]
 rules:
   fail_on: [breaking_changes, layer_violation, unclassified]
 `
@@ -318,8 +361,9 @@ rules:
 	}
 
 	for _, line := range []string{
-		"#   internal  core internal, internal/core/**; leaves internal/ai, internal/anthropic, internal/plan, internal/tensors, internal/tracer, internal/web; branches internal/blocks, internal/gate\n",
-		"#   internal/blocks  branch of internal; core internal/blocks, internal/blocks/core/**; leaves internal/blocks/cleanse, internal/blocks/spotlight, internal/blocks/summarize, internal/blocks/www\n",
+		"#   .  contracts internal/contracts; orchestrators ., internal/assembly, internal/executor; leaves cmd/guardprobe, internal/ai, internal/anthropic, internal/plan, internal/tensors, internal/tracer, internal/web; branches internal/blocks, internal/gate\n",
+		"#   internal/blocks  branch of .; contracts internal/blocks/contracts; orchestrators internal/blocks/kit; leaves internal/blocks/cleanse, internal/blocks/spotlight, internal/blocks/summarize, internal/blocks/www\n",
+		"#   internal/gate  branch of .; contracts internal/gate/contracts; orchestrators internal/gate/pipeline; leaves internal/gate/presence, internal/gate/tagger\n",
 		"# treaty check lists no dependency that breaks these rules.\n",
 	} {
 		if !strings.Contains(text, line) {
@@ -331,9 +375,14 @@ rules:
 		t.Fatal(err)
 	}
 
-	architecture.Assign(g)
-	if violations := architecture.Violations(g); len(violations) > 0 {
-		t.Fatalf("the reorganization has no violations: %+v", violations)
+	bound, err := architecture.Bind(modulePaths(g))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bound.Assign(g)
+	if violations := bound.Violations(g); len(violations) > 0 {
+		t.Fatalf("the guard's target tree has no violations: %+v", violations)
 	}
 
 	if adopted, err := proposal(g, rules.StyleSnowflake); err != nil || adopted != text {
@@ -341,27 +390,80 @@ rules:
 	}
 }
 
-func TestProposeStarsOnCodeNotYetASnowflake(t *testing.T) {
+func TestProposeStarsOnTheGuardBeforeItsMove(t *testing.T) {
+	architecture, text := propose(guardGraph(false), rules.StyleSnowflake)
+	want := []rules.Star{
+		{Dir: ".", Contracts: []string{"internal/core"}, Orchestrators: []string{".", "internal/factory"}},
+		{Dir: "internal/blocks", Contracts: []string{"internal/blocks/core"}, Orchestrators: []string{}},
+		{Dir: "internal/gate", Contracts: []string{"internal/gate/core"}, Orchestrators: []string{}},
+	}
+
+	if !reflect.DeepEqual(architecture.Stars, want) {
+		t.Fatalf("stars %+v", architecture.Stars)
+	}
+
+	for _, line := range []string{
+		"# treaty check lists 12 dependencies that break these rules: 6 past the core of their own star, 6 into a branch beyond its core.\n",
+		"# internal/core, internal/blocks/core and internal/gate/core are contracts by their name. Core is the map's region of a star, not a package: name each for what it holds, such as internal/contracts, and move any orchestrator in it to a package of its own.\n",
+		"# No orchestrators in internal/blocks yet: nothing may wire its leaves, since an orchestrator of star . may use a branch only through its core. Create one, such as internal/blocks/assembly, and build them there.\n",
+		"# No orchestrators in internal/gate yet: nothing may wire its leaves, since an orchestrator of star . may use a branch only through its core. Create one, such as internal/gate/assembly, and build them there.\n",
+	} {
+		if !strings.Contains(text, line) {
+			t.Errorf("the draft lacks %q:\n%s", line, text)
+		}
+	}
+}
+
+func TestProposeStarsLooksThroughContainers(t *testing.T) {
 	g := starGraph(
-		[]string{"cmd/guard", "internal/trust", "internal/plan", "internal/web", "internal/blocks", "internal/blocks/contracts", "internal/blocks/www", "scripts/x"},
+		[]string{".", "cmd/a", "cmd/b", "internal/contracts", "internal/x", "pkg/x", "pkg/y"},
 		[][2]string{
-			{"cmd/guard", "internal/plan"}, {"internal/plan", "internal/trust"}, {"internal/web", "internal/trust"},
-			{"internal/plan", "internal/web"}, {"internal/plan", "internal/blocks/contracts"},
-			{"internal/blocks", "internal/blocks/contracts"}, {"internal/blocks/www", "internal/blocks/contracts"},
-			{"internal/blocks/contracts", "internal/trust"}, {"internal/plan", "internal/blocks"}, {"internal/plan", "internal/blocks/www"},
+			{"cmd/a", "."}, {"cmd/b", "."}, {".", "internal/contracts"},
+			{"internal/x", "internal/contracts"}, {"pkg/x", "internal/contracts"}, {"pkg/y", "internal/contracts"}, {"pkg/x", "pkg/y"},
 		},
 	)
 
 	architecture, text := propose(g, rules.StyleSnowflake)
-	want := []rules.Star{{Dir: "internal", Core: []string{"internal/trust/**"}}, {Dir: "internal/blocks", Core: []string{"internal/blocks/contracts/**"}}}
-	if !reflect.DeepEqual(architecture.Stars, want) || !slices.Equal(architecture.Composition, []string{"cmd/**"}) {
-		t.Fatalf("stars %+v, composition %v", architecture.Stars, architecture.Composition)
+	want := []rules.Star{{Dir: ".", Contracts: []string{".", "internal/contracts"}, Orchestrators: []string{}}}
+	if !reflect.DeepEqual(architecture.Stars, want) {
+		t.Fatalf("stars %+v", architecture.Stars)
 	}
 
 	for _, line := range []string{
-		"# treaty check lists 4 dependencies that break these rules: 4 between sibling spokes.\n",
-		"# Unclassified, outside the root star and not composition: scripts/x\n",
-		"  internal/blocks: [\"internal/blocks/contracts/**\"]\n",
+		"#   .  contracts ., internal/contracts; orchestrators none; leaves cmd/a, cmd/b, internal/x, pkg/x, pkg/y\n",
+		"# treaty check lists 1 dependency that breaks these rules: 1 between sibling spokes.\n",
+	} {
+		if !strings.Contains(text, line) {
+			t.Errorf("the draft lacks %q:\n%s", line, text)
+		}
+	}
+
+	// A main package that wires two leaves is an orchestrator.
+	g = starGraph(
+		[]string{"cmd/app", "internal/contracts", "internal/plan", "internal/web"},
+		[][2]string{{"cmd/app", "internal/plan"}, {"cmd/app", "internal/web"}, {"internal/plan", "internal/contracts"}, {"internal/web", "internal/contracts"}},
+	)
+
+	if architecture, _ = propose(g, rules.StyleSnowflake); !slices.Equal(architecture.Stars[0].Orchestrators, []string{"cmd/app"}) || !slices.Equal(architecture.Stars[0].Contracts, []string{"internal/contracts"}) {
+		t.Fatalf("stars %+v", architecture.Stars)
+	}
+}
+
+func TestProposeStarsWithoutContracts(t *testing.T) {
+	g := starGraph(
+		[]string{"cmd/x", "lib/a", "lib/b", "lib/c", "lib/d"},
+		[][2]string{{"cmd/x", "lib/c"}, {"lib/a", "lib/b"}, {"lib/b", "lib/a"}, {"lib/c", "lib/a"}, {"lib/d", "lib/a"}},
+	)
+
+	architecture, text := propose(g, rules.StyleSnowflake)
+	if len(architecture.Stars) != 1 || len(architecture.Stars[0].Contracts) != 0 {
+		t.Fatalf("stars %+v", architecture.Stars)
+	}
+
+	for _, line := range []string{
+		"# No contracts in . yet: its spokes may use only its orchestrators. Create contracts and move what they share there.\n",
+		"# Candidates for contracts: lib/a.\n",
+		"  .:\n    contracts: []\n",
 	} {
 		if !strings.Contains(text, line) {
 			t.Errorf("the draft lacks %q:\n%s", line, text)
@@ -371,33 +473,10 @@ func TestProposeStarsOnCodeNotYetASnowflake(t *testing.T) {
 	if err := architecture.Validate(); err != nil {
 		t.Fatal(err)
 	}
-
-	// A star with no child its siblings could share says so, and names the
-	// children that two or more siblings use.
-	g = starGraph(
-		[]string{"cmd/x", "lib/a", "lib/b", "lib/c"},
-		[][2]string{{"cmd/x", "lib/c"}, {"lib/a", "lib/b"}, {"lib/b", "lib/a"}, {"lib/c", "lib/a"}},
-	)
-
-	architecture, text = propose(g, rules.StyleSnowflake)
-	if len(architecture.Stars) != 1 || len(architecture.Stars[0].Core) != 0 {
-		t.Fatalf("stars %+v", architecture.Stars)
-	}
-
-	for _, line := range []string{
-		"# No core in lib yet: every dependency between its children is sideways. Create lib/core and move the contracts there.\n",
-		"# Candidates for lib/core: lib/a.\n",
-		"  lib: []\n",
-	} {
-		if !strings.Contains(text, line) {
-			t.Errorf("the draft lacks %q:\n%s", line, text)
-		}
-	}
 }
 
-func TestProposeStarsRefusesProgramsAlone(t *testing.T) {
-	g := starGraph([]string{"cmd/a", "cmd/b"}, nil)
-	if _, err := proposal(g, rules.StyleSnowflake); !errors.Is(err, rules.ErrArchitecture) || !strings.Contains(err.Error(), "found no packages outside composition to make a star of, so snowflake does not fit this code") {
-		t.Fatalf("programs alone: %v", err)
+func TestProposeStarsRefusesAnEmptyTree(t *testing.T) {
+	if _, err := proposal(graph.New(), rules.StyleSnowflake); !errors.Is(err, rules.ErrArchitecture) || !strings.Contains(err.Error(), "invalid architecture: found no packages to make a star of, so snowflake does not fit this code; choose another architecture, or write stars in treaty.yaml yourself") {
+		t.Fatalf("an empty tree: %v", err)
 	}
 }

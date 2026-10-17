@@ -35,8 +35,9 @@ type MapEdge struct {
 
 // MapModule is one module hexagon on the map. Boundary is the boundary
 // holding it, Public marks a boundary's public API, and Ambiguous lists the
-// boundaries that tie for it. Star and Spoke place it in a snowflake: the
-// star holding it, and its spoke, empty for a core.
+// boundaries that tie for it. Star, Spoke and CoreEntry place it in a
+// snowflake: the star holding it, its leaf for a leaf, and the contracts or
+// orchestrators entry claiming it for a core package.
 // Removed marks a module only the base has; RemovedFiles are files the base
 // had in a module that is still there. Name is what its language calls it,
 // such as a Go package name. Entry and Private mark a module code outside
@@ -57,6 +58,7 @@ type MapModule struct {
 	Public    bool     `json:"public,omitempty"`
 	Star      string   `json:"star,omitempty"`
 	Spoke     string   `json:"spoke,omitempty"`
+	CoreEntry string   `json:"core_entry,omitempty"`
 	New       bool     `json:"new"`
 	Removed   bool     `json:"removed,omitempty"`
 	Design    bool     `json:"design"`
@@ -102,8 +104,9 @@ type MapSymbol struct {
 
 // MapView is everything the renderer draws, built in the same run.
 // Architecture is the style that picks the layout, and Layers its layer
-// names, innermost or lowest first: core and spoke for a snowflake, whose
-// Stars are its star tree, so an empty core or star is still drawn.
+// names, innermost or lowest first: contracts, orchestrator and leaf for a
+// snowflake, whose Stars are its star tree, so an empty core or star is
+// still drawn.
 type MapView struct {
 	Title        string           `json:"title"`
 	Root         string           `json:"root"`
@@ -203,7 +206,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 	}
 
 	if architecture.Style == rules.StyleSnowflake {
-		view.Layers, view.Stars = []string{graph.LayerCore, graph.LayerSpoke}, architecture.Tree(analysis.modulePaths())
+		view.Layers, view.Stars = []string{graph.LayerContracts, graph.LayerOrchestrator, graph.LayerLeaf}, architecture.Tree()
 	}
 
 	themes, err := this.themes.Themes()
@@ -255,7 +258,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 		entry := MapModule{
 			ID: module.ID, Path: module.Path, Label: label(module), Name: module.Name, Entry: module.Entry, Private: module.Private,
 			Language: module.Language, Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous,
-			Star: module.Star, Spoke: module.Spoke,
+			Star: module.Star, Spoke: module.Spoke, CoreEntry: module.CoreEntry,
 			Files: module.Files, Manifest: module.Manifest, Metrics: analysis.metrics[module.ID], Guidance: architecture.Guidance(placement(module)),
 			New: analysis.base != nil && analysis.base.Module(module.ID) == nil,
 		}
@@ -342,7 +345,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 				place := architecture.Resolve(modulePath)
 				view.Modules = append(view.Modules, MapModule{
 					ID: element.Module, Path: modulePath, Label: modulePath, Language: language, Layer: place.Layer, Side: place.Side,
-					Boundary: place.Boundary, Public: place.Public, Ambiguous: place.Ambiguous, Star: place.Star, Spoke: place.Spoke, Design: true, Guidance: architecture.Guidance(place),
+					Boundary: place.Boundary, Public: place.Public, Ambiguous: place.Ambiguous, Star: place.Star, Spoke: place.Spoke, CoreEntry: place.Entry, Design: true, Guidance: architecture.Guidance(place),
 				})
 			}
 
@@ -470,7 +473,7 @@ func removed(analysis *analysis, view *MapView, changes map[string]rules.Change)
 		view.Modules = append(view.Modules, MapModule{
 			ID: module.ID, Path: module.Path, Label: label(module), Name: module.Name, Entry: module.Entry, Private: module.Private,
 			Language: module.Language, Layer: module.Layer, Side: module.Side, Boundary: module.Boundary, Public: module.Public, Ambiguous: module.Ambiguous,
-			Star: module.Star, Spoke: module.Spoke,
+			Star: module.Star, Spoke: module.Spoke, CoreEntry: module.CoreEntry,
 			Files: module.Files, Manifest: module.Manifest, Removed: true,
 			Metrics: analysis.baseMetrics[module.ID], Guidance: architecture.Guidance(placement(module)),
 		})

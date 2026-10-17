@@ -252,7 +252,9 @@ func TestValidate(t *testing.T) {
 		{"duplicate layer", Architecture{Style: StyleLayered, Layers: []Layer{{Name: "web"}, {Name: "web"}}}},
 		{"stars outside snowflake", Architecture{Style: StyleModular, Boundaries: []Boundary{{Name: "a", Globs: []string{"a/**"}}}, Stars: []Star{{Dir: "a"}}}},
 		{"snowflake without stars", Architecture{Style: StyleSnowflake}},
-		{"snowflake with boundaries", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: "a"}}, Boundaries: []Boundary{{Name: "a", Globs: []string{"a/**"}}}}},
+		{"snowflake with boundaries", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: "."}}, Boundaries: []Boundary{{Name: "a", Globs: []string{"a/**"}}}}},
+		{"snowflake with composition", Architecture{Style: StyleSnowflake, Composition: []string{"cmd/**"}, Stars: []Star{{Dir: "."}}}},
+		{"snowflake without its root", Architecture{Style: StyleSnowflake, Stars: []Star{{Dir: "internal"}}}},
 	} {
 		if err := c.architecture.Validate(); !errors.Is(err, ErrArchitecture) {
 			t.Errorf("%s: got %v", c.name, err)
