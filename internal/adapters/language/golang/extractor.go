@@ -75,6 +75,16 @@ func NewExtractor() *Extractor {
 //     repository: its imports resolve through its own module path, and
 //     imports between it and the rest of the repository are dependencies
 //     like any other.
+//   - A file is left out only under //go:build ignore. Every other build
+//     constraint might hold in some build, so its file is read.
+//   - Test files, internal and external test packages alike, add only
+//     their imports, as test imports of the package they test, and their
+//     linkname directives.
+//   - An import of a package in the repository that is not read, such as
+//     one in a directory starting with _ or ., vendor or testdata, which go
+//     builds when it is imported, is kept as unread.
+//   - Imports of packages outside the repository, package-level variables
+//     and //go:linkname directives are kept for the rules to judge.
 //
 // Parameters:
 //   - root: the directory to read.
@@ -103,6 +113,7 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 
 		dir := path.Dir(relative)
 		state := &fileState{sourceFile: parseFile(src), path: relative, module: graph.ModuleID("go", dir), imports: map[string]string{}, aliases: map[string]bool{}, lines: strings.Split(string(src), "\n")}
+		result.Linknames = append(result.Linknames, linknames(state.module, relative, state.lines, false)...)
 		states = append(states, state)
 		if packages[dir] == "" {
 			packages[dir] = state.pkg
@@ -122,6 +133,10 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 
 		state.resolveImports(result, roots, packages, moduleImports[state.module])
 		for _, declaration := range state.declarations {
+			if declaration.variable {
+				result.Globals = append(result.Globals, graph.Global{Module: state.module, Name: declaration.name, File: state.path, Line: declaration.line, Sentinel: declaration.sentinel})
+			}
+
 			candidate := &graph.Symbol{
 				ID:        graph.SymbolID(state.module, declaration.name),
 				Module:    state.module,
@@ -176,8 +191,78 @@ func (this *Extractor) Extract(root string) (result *graph.Graph, err error) {
 	}
 
 	implementsEdges(result, moduleImports)
+	if err := readTests(root, roots, result); err != nil {
+		return nil, err
+	}
+
+	for _, item := range result.Imports {
+		if result.Module(item.To) == nil {
+			result.Unread = append(result.Unread, item)
+		}
+	}
+
 	result.Normalize()
 	return result, nil
+}
+
+// readTests adds every test file's imports of packages in the repository,
+// as test imports of the package it tests, or as unread when the package
+// imported is not read, and its linkname directives.
+func readTests(root string, roots moduleRoots, g *graph.Graph) error {
+	files, _, err := goFiles(root, true)
+	if err != nil {
+		return err
+	}
+
+	for _, relative := range files {
+		src, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
+		if err != nil {
+			return err
+		}
+
+		if neverBuilt(src) {
+			continue
+		}
+
+		module := graph.ModuleID("go", path.Dir(relative))
+		lines := strings.Split(string(src), "\n")
+		g.Linknames = append(g.Linknames, linknames(module, relative, lines, true)...)
+		for _, spec := range parseImports(src) {
+			dir, inRepo := roots.locate(spec.path)
+			if !inRepo {
+				continue
+			}
+
+			item := graph.Import{From: module, To: graph.ModuleID("go", dir), File: relative, Line: spec.line, Test: true}
+			if g.Module(item.To) == nil {
+				g.Unread = append(g.Unread, item)
+				continue
+			}
+
+			g.TestImports = append(g.TestImports, item)
+		}
+	}
+
+	return nil
+}
+
+// linknames reads a file's //go:linkname directives.
+func linknames(module, file string, lines []string, test bool) (result []graph.Linkname) {
+	for index, line := range lines {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 || fields[0] != "//go:linkname" {
+			continue
+		}
+
+		target := fields[1]
+		if len(fields) > 2 {
+			target = fields[2]
+		}
+
+		result = append(result, graph.Linkname{Module: module, Local: fields[1], Target: target, File: file, Line: index + 1, Test: test})
+	}
+
+	return result
 }
 
 // Source reads one file under root.
@@ -293,6 +378,8 @@ func (this *fileState) resolveImports(g *graph.Graph, roots moduleRoots, package
 		target := graph.ModuleID("go", dir)
 		if inRepo {
 			g.AddImport(graph.Import{From: this.module, To: target, File: this.path, Line: spec.line})
+		} else {
+			g.Foreign = append(g.Foreign, graph.Foreign{From: this.module, Path: spec.path, File: this.path, Line: spec.line, Standard: standard(spec.path)})
 		}
 
 		switch {
@@ -391,6 +478,14 @@ func (this moduleRoots) manifest(dir string) string {
 	}
 
 	return ""
+}
+
+// standard reports whether an import path outside the repository names a
+// package of the standard library: its first element has no dot, as a
+// module path's domain does, and it is not cgo's pseudo-package C.
+func standard(importPath string) bool {
+	first, _, _ := strings.Cut(importPath, "/")
+	return importPath != "C" && !strings.Contains(first, ".")
 }
 
 // internal reports whether Go's internal rule limits a package to importers
@@ -516,11 +611,12 @@ func goFiles(root string, tests bool) (files []string, roots moduleRoots, err er
 	return files, roots, err
 }
 
-// neverBuilt reports whether a file's build constraints leave it out of
-// every build: a generator run with go run under //go:build ignore, or a
-// //go:build tools file that only pins tool dependencies. Every other tag,
-// such as an operating system, might be set, so a file built only on some
-// platforms stays in as a build variant.
+// neverBuilt reports whether a file is under //go:build ignore: its
+// constraint names the ignore tag and leaves it out of every build that
+// does not set it, as a generator run with go run is. No other constraint
+// leaves a file out, not even one no set of tags satisfies, so a file built
+// only on some platforms, or a //go:build tools file pinning tool
+// dependencies, stays in.
 func neverBuilt(src []byte) bool {
 	for _, line := range strings.Split(string(src), "\n") {
 		line = strings.TrimSpace(line)
@@ -533,7 +629,7 @@ func neverBuilt(src []byte) bool {
 		}
 
 		expr, err := constraint.Parse(line)
-		if err == nil && !satisfiable(expr) {
+		if err == nil && mentions(expr, "ignore") && !satisfiable(expr) {
 			return true
 		}
 	}
@@ -541,8 +637,24 @@ func neverBuilt(src []byte) bool {
 	return false
 }
 
-// satisfiable reports whether some set of tags, never ignore or tools,
-// makes a constraint true. A constraint with too many tags to try every
+// mentions reports whether a constraint names a tag.
+func mentions(expr constraint.Expr, tag string) bool {
+	switch each := expr.(type) {
+	case *constraint.AndExpr:
+		return mentions(each.X, tag) || mentions(each.Y, tag)
+	case *constraint.OrExpr:
+		return mentions(each.X, tag) || mentions(each.Y, tag)
+	case *constraint.NotExpr:
+		return mentions(each.X, tag)
+	case *constraint.TagExpr:
+		return each.Tag == tag
+	}
+
+	return false
+}
+
+// satisfiable reports whether some set of tags, never ignore, makes a
+// constraint true. A constraint with too many tags to try every
 // set is taken as satisfiable.
 func satisfiable(expr constraint.Expr) bool {
 	var tags []string
@@ -558,7 +670,7 @@ func satisfiable(expr constraint.Expr) bool {
 		case *constraint.NotExpr:
 			collect(each.X)
 		case *constraint.TagExpr:
-			if each.Tag != "ignore" && each.Tag != "tools" && !slices.Contains(tags, each.Tag) {
+			if each.Tag != "ignore" && !slices.Contains(tags, each.Tag) {
 				tags = append(tags, each.Tag)
 			}
 		}

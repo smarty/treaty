@@ -31,7 +31,7 @@ var (
 	// path of keys that leads to it.
 	configKeys = map[string][]string{
 		"":               {"version", "architecture", "composition", "layers", "shared", "boundaries", "public", "stars", "rules"},
-		"rules":          {"fail_on", "warn_on", "ignore"},
+		"rules":          {"fail_on", "warn_on", "ignore", "tests"},
 		"layers.adapter": {graph.SideDriving, graph.SideDriven},
 	}
 
@@ -102,6 +102,10 @@ func decodeConfig(data []byte) (result configFile, versioned bool, err error) {
 
 		if err := checkIgnores(value(rulesNode, "ignore")); err != nil {
 			return result, versioned, err
+		}
+
+		if tests := value(rulesNode, "tests"); tests != nil && (tests.Kind != yaml.ScalarNode || tests.Value != "check" && tests.Value != "skip") {
+			return result, versioned, fmt.Errorf("line %d: %w: rules.tests is check, which checks test files' imports as the package they test, the default for snowflake, or skip, the default for every other architecture", tests.Line, ErrUnknownRule)
 		}
 	}
 

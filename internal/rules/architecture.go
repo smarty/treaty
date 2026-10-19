@@ -60,6 +60,10 @@ var (
 //     composition: its assemblers do that work. Bind fits it to one tree's modules, so
 //     placement can look through directories that hold none; copies share
 //     the binding.
+//   - Tests is rules.tests: check checks test files' imports as the
+//     package they test, and skip leaves them unchecked. Unset, a snowflake
+//     checks them and every other style skips them, as before tests were
+//     read.
 type Architecture struct {
 	Style       string
 	Composition []string
@@ -68,6 +72,7 @@ type Architecture struct {
 	Boundaries  []Boundary
 	Public      []string
 	Stars       []Star
+	Tests       string
 
 	bound *starBinding
 }
@@ -121,11 +126,14 @@ func (this Placement) Same(other Placement) bool {
 
 // Violation is a module edge that breaks a rule of the architecture. It has
 // at least one reference or import. Existing marks one the base already
-// had, which is shown but does not fail the check.
+// had, which is shown but does not fail the check. Test marks one only test
+// files make, through their imports. A linkname directive is a violation
+// too, its To the symbol it links to.
 type Violation struct {
 	Kind       string         `json:"kind"`
 	Rule       string         `json:"rule"`
 	Existing   bool           `json:"existing,omitempty"`
+	Test       bool           `json:"test,omitempty"`
 	From       string         `json:"from"`
 	FromLayer  string         `json:"from_layer"`
 	To         string         `json:"to"`
@@ -143,13 +151,29 @@ type Violation struct {
 func MarkExisting(head, base []Violation) {
 	before := map[[2]string]bool{}
 	for _, violation := range base {
-		before[[2]string{violation.From, violation.To}] = true
+		before[[2]string{violation.From, violation.To + testMark(violation.Test)}] = true
 	}
 
 	for i := range head {
-		head[i].Existing = before[[2]string{head[i].From, head[i].To}]
+		head[i].Existing = before[[2]string{head[i].From, head[i].To + testMark(head[i].Test)}]
 	}
 }
+
+// testMark tells a test's violation of a module edge from the edge's own.
+func testMark(test bool) string {
+	if test {
+		return " (test)"
+	}
+
+	return ""
+}
+
+// Target names a violation as a finding's target: its module edge, and for
+// one only tests make, (test) after it.
+//
+// Returns:
+//   - result: such as go:a -> go:b or go:a -> go:b (test).
+func (this Violation) Target() string { return EdgeTarget(this.From, this.To) + testMark(this.Test) }
 
 // First locates the violation's first reference, or its first import when
 // nothing the import provides is referenced.
@@ -166,7 +190,16 @@ func (this Violation) First() (file string, line int, detail string) {
 
 	if len(this.Imports) > 0 {
 		item := this.Imports[0]
-		return item.File, item.Line, fmt.Sprintf("an import of %s with no references", item.To)
+		if this.ToLayer == "linkname" {
+			return item.File, item.Line, "the directive"
+		}
+
+		in := ""
+		if item.Test {
+			in = " in a test"
+		}
+
+		return item.File, item.Line, fmt.Sprintf("an import of %s%s with no references", item.To, in)
 	}
 
 	return "", 0, ""
@@ -760,6 +793,15 @@ func (this Architecture) Validate() error {
 // architecture. For the modular style, it also finds every edge between
 // boundaries that closes a cycle, unless the edge already breaks a rule.
 //
+// Notes:
+//   - Test files' imports are checked as the package they test when
+//     CheckTests says so; an edge that breaks a rule only in tests is a
+//     violation marked Test, and one the code itself breaks is reported
+//     once.
+//   - Every linkname directive is a violation, under every architecture
+//     but none: it reaches a symbol past every import, so no rule can see
+//     what it uses.
+//
 // Parameters:
 //   - g: a graph whose modules have been placed.
 //
@@ -767,9 +809,11 @@ func (this Architecture) Validate() error {
 //   - result: the violations, sorted by source and target.
 func (this Architecture) Violations(g *graph.Graph) []Violation {
 	var result []Violation
+	reported := map[[2]string]bool{}
 	for _, edge := range g.ModuleEdges() {
 		from, to := g.Module(edge.From), g.Module(edge.To)
 		if allowed, rule := this.Check(placementOf(from), placementOf(to)); !allowed {
+			reported[[2]string{edge.From, edge.To}] = true
 			result = append(result, Violation{
 				Kind: FindingLayerViolation, Rule: rule,
 				From: edge.From, FromLayer: from.Layer,
@@ -778,6 +822,9 @@ func (this Architecture) Violations(g *graph.Graph) []Violation {
 			})
 		}
 	}
+
+	result = append(result, this.testViolations(g, reported)...)
+	result = append(result, this.linknameViolations(g)...)
 
 	if this.Style == StyleModular {
 		reported := map[[2]string]bool{}
@@ -790,13 +837,104 @@ func (this Architecture) Violations(g *graph.Graph) []Violation {
 				result = append(result, cycle)
 			}
 		}
+	}
 
-		sort.SliceStable(result, func(i, j int) bool {
-			if result[i].From != result[j].From {
-				return result[i].From < result[j].From
-			}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].From != result[j].From {
+			return result[i].From < result[j].From
+		}
 
+		if result[i].To != result[j].To {
 			return result[i].To < result[j].To
+		}
+
+		return !result[i].Test && result[j].Test
+	})
+
+	return result
+}
+
+// testViolations checks the test files' imports as the package each tests:
+// its module's placement, or for a directory holding only tests, the
+// placement its path resolves to. Edges already reported are left out.
+func (this Architecture) testViolations(g *graph.Graph, reported map[[2]string]bool) (result []Violation) {
+	if !this.CheckTests() || len(g.TestImports) == 0 {
+		return nil
+	}
+
+	paths := make([]string, 0, len(g.Modules))
+	for _, module := range g.Modules {
+		paths = append(paths, module.Path)
+	}
+
+	bound, _ := this.Bind(paths)
+	at := map[[2]string]int{}
+	for _, item := range g.TestImports {
+		key := [2]string{item.From, item.To}
+		if reported[key] {
+			continue
+		}
+
+		if index, seen := at[key]; seen {
+			result[index].Imports = append(result[index].Imports, item)
+			continue
+		}
+
+		to := g.Module(item.To)
+		from := Placement{}
+		if module := g.Module(item.From); module != nil {
+			from = placementOf(module)
+		} else {
+			_, dir, _ := strings.Cut(item.From, ":")
+			from = bound.Resolve(dir)
+		}
+
+		if allowed, rule := this.Check(from, placementOf(to)); !allowed {
+			at[key] = len(result)
+			result = append(result, Violation{
+				Kind: FindingLayerViolation, Rule: "in a test: " + rule, Test: true,
+				From: item.From, FromLayer: from.Layer,
+				To: item.To, ToLayer: to.Layer,
+				References: []graph.Edge{}, Imports: []graph.Import{item},
+			})
+		}
+	}
+
+	return result
+}
+
+// CheckTests reports whether test files' imports are checked: when
+// rules.tests says check, or for a snowflake when it says nothing.
+//
+// Returns:
+//   - result: true when they are checked; never for the none style.
+func (this Architecture) CheckTests() bool {
+	return this.Style != StyleNone && (this.Tests == "check" || this.Tests == "" && this.Style == StyleSnowflake)
+}
+
+// linknameViolations reports every linkname directive.
+func (this Architecture) linknameViolations(g *graph.Graph) (result []Violation) {
+	if this.Style == StyleNone {
+		return nil
+	}
+
+	for _, link := range g.Linknames {
+		layer := ""
+		if module := g.Module(link.Module); module != nil {
+			layer = module.Layer
+		}
+
+		where := ""
+		if link.Test {
+			where = " in a test"
+		}
+
+		result = append(result, Violation{
+			Kind: FindingLayerViolation, Test: link.Test,
+			Rule: fmt.Sprintf("//go:linkname %s %s%s links to %s past every import, so no rule sees what it uses; import the package and use what it exports, or declare a port", link.Local, link.Target, where, link.Target),
+			From: link.Module, FromLayer: layer,
+			To: "linkname " + link.Target, ToLayer: "linkname",
+			References: []graph.Edge{}, Imports: []graph.Import{{From: link.Module, To: link.Target, File: link.File, Line: link.Line, Test: link.Test}},
 		})
 	}
 

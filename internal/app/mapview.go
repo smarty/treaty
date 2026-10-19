@@ -226,6 +226,10 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 
 	violations, existing := map[[2]string]string{}, map[[2]string]bool{}
 	for _, violation := range analysis.violations {
+		if violation.Test {
+			continue
+		}
+
 		violations[[2]string{violation.From, violation.To}] = violation.Rule
 		existing[[2]string{violation.From, violation.To}] = violation.Existing
 	}

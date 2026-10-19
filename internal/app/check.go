@@ -215,7 +215,7 @@ func (this Report) Summary() string {
 				existing = " (existing)"
 			}
 
-			if ignoredEdges[rules.EdgeTarget(violation.From, violation.To)] {
+			if ignoredEdges[violation.Target()] {
 				existing += " (ignored)"
 			}
 

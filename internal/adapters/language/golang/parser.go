@@ -27,6 +27,12 @@ type declaration struct {
 	endLine   int
 	hashText  string
 	refs      []token
+
+	// variable marks a package-level var, and sentinel one that is a
+	// sentinel error: named Err..., its value a call of errors.New or
+	// fmt.Errorf.
+	variable bool
+	sentinel bool
 }
 
 // funcSignature is the parsed shape of a function or method signature.
@@ -80,6 +86,24 @@ func parseFile(src []byte) *sourceFile {
 		case current.is("const") || current.is("var"):
 			keyword := current.text
 			result.declarations = append(result.declarations, this.group(func(spec []token) []*declaration { return this.valueSpec(keyword, spec) })...)
+		default:
+			this.pos++
+		}
+	}
+
+	return result
+}
+
+// parseImports reads only the imports of one Go file, which come before
+// its first declaration.
+func parseImports(src []byte) (result []importSpec) {
+	this := &parser{src: src, tokens: lex(src)}
+	for this.pos < len(this.tokens) {
+		switch current := this.tokens[this.pos]; {
+		case current.is("import"):
+			result = append(result, this.imports()...)
+		case current.is("func"), current.is("type"), current.is("var"), current.is("const"):
+			return result
 		default:
 			this.pos++
 		}
@@ -310,10 +334,22 @@ func (this *parser) valueSpec(keyword string, spec []token) []*declaration {
 			endLine:   spec[len(spec)-1].line,
 			hashText:  spanText(this.src, spec),
 			refs:      spec[index:],
+			variable:  keyword == "var",
+			sentinel:  keyword == "var" && strings.HasPrefix(name.text, "Err") && position < len(values) && len(values) == len(names) && newError(values[position]),
 		})
 	}
 
 	return result
+}
+
+// newError reports whether a value is exactly one call of errors.New or
+// fmt.Errorf.
+func newError(value []token) bool {
+	if len(value) < 5 || !value[1].is(".") || !value[3].is("(") || !value[len(value)-1].is(")") || matching(value, 3) != len(value)-1 {
+		return false
+	}
+
+	return value[0].is("errors") && value[2].is("New") || value[0].is("fmt") && value[2].is("Errorf")
 }
 
 // text renders a signature the way AutoPen writes it: no receiver, no body.

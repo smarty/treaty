@@ -1162,24 +1162,3 @@ func TestSnowflakeMisfitsAndOwnPackages(t *testing.T) {
 		t.Fatalf("a listed own package: failures %v, %v", report.Failures, err)
 	}
 }
-
-func TestSnowflakeReadsNoTests(t *testing.T) {
-	repo := newSnowflakeRepo(t, map[string]string{
-		"go.mod":                          "module example.com/m\n",
-		"treaty.yaml":                     "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"internal/contracts\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
-		"internal/contracts/contracts.go": "package contracts\n\n// Fetcher fetches a page.\ntype Fetcher interface{ Fetch() string }\n",
-		"internal/plan/plan.go":           "package plan\n\n// Name names a plan.\nfunc Name() string { return \"\" }\n",
-		"internal/web/web.go":             "package web\n\n// Title names a page.\nfunc Title() string { return \"\" }\n",
-		"internal/web/web_test.go":        "package web\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/internal/plan\"\n)\n\nfunc TestTitle(t *testing.T) { _ = plan.Name() }\n",
-	})
-
-	// A test importing a sibling spoke is not read as a dependency.
-	report, err := repo.service().Check("")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(report.Failures) != 0 || len(report.Violations) != 0 {
-		t.Fatalf("tests are not checked: failures %v, violations %+v", report.Failures, report.Violations)
-	}
-}

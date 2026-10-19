@@ -379,6 +379,7 @@ func TestLoadRejectsWhatItCannotRead(t *testing.T) {
 		{"an implementation finding", "rules:\n  ignore:\n    - finding: implementation\n      target: go:web\n      fingerprint: \"0a1b2c3d4e5f\"\n      reason: scratch\n", ErrIgnore, `"implementation" is not a kind of finding that can be ignored`},
 		{"a misspelled ignore key", "rules:\n  ignore:\n    - finding: unclassified\n      target: go:web\n      fingerprnt: \"0a1b2c3d4e5f\"\n      reason: scratch\n", ErrUnknownKey, `unknown key "fingerprnt" under rules.ignore; did you mean "fingerprint"?`},
 		{"an ignore given twice", "rules:\n  ignore:\n    - {finding: unclassified, target: go:web, fingerprint: \"1\", reason: a}\n    - {finding: unclassified, target: go:web, fingerprint: \"2\", reason: b}\n", ErrIgnore, "line 4: invalid ignore entry: line 3 already ignores unclassified go:web"},
+		{"a misspelled tests value", "rules:\n  tests: skipped\n", ErrUnknownRule, "line 2: unknown rule: rules.tests is check, which checks test files' imports as the package they test, the default for snowflake, or skip"},
 		{"ignore that is not a list", "rules:\n  ignore: go:web\n", ErrIgnore, "rules.ignore must be a list of entries"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -467,6 +468,33 @@ rules:
 
 	if notes := bound.Notes(); !slices.ContainsFunc(notes, func(note string) bool { return strings.HasPrefix(note, "star internal/gate lists orchestrators") }) {
 		t.Errorf("no note on the deprecated key: %q", notes)
+	}
+
+	// A snowflake fails on impure contracts unless fail_on is given, warns
+	// on them unless warn_on is, and checks its tests unless rules.tests
+	// says skip.
+	if slices.Contains(config.FailOn, rules.FindingImpure) || !slices.Contains(config.WarnOn, rules.FindingImpure) || !config.Architecture.CheckTests() {
+		t.Errorf("snowflake defaults: fail_on %v, warn_on %v, tests checked %t", config.FailOn, config.WarnOn, config.Architecture.CheckTests())
+	}
+
+	for text, want := range map[string]bool{
+		"version: 1\narchitecture: snowflake\nstars:\n  .:\nrules:\n  tests: skip\n":                false,
+		"version: 1\narchitecture: snowflake\nstars:\n  .:\nrules:\n  tests: check\n":               true,
+		"version: 1\narchitecture: layered\nlayers:\n  web: [\"web/**\"]\n":                         false,
+		"version: 1\narchitecture: layered\nlayers:\n  web: [\"web/**\"]\nrules:\n  tests: check\n": true,
+	} {
+		if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		loaded, _, err := NewConfig(root).Load()
+		if err != nil || loaded.Architecture.CheckTests() != want {
+			t.Errorf("%q: tests checked %t, want %t (%v)", text, loaded.Architecture.CheckTests(), want, err)
+		}
+
+		if (loaded.Architecture.Style == rules.StyleSnowflake) != slices.Contains(loaded.FailOn, rules.FindingImpure) {
+			t.Errorf("only a snowflake fails on impure contracts by default: %v", loaded.FailOn)
+		}
 	}
 }
 

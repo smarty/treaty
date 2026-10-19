@@ -2,6 +2,7 @@ package rules
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -782,5 +783,91 @@ func TestSnowflakeHandover(t *testing.T) {
 		if declare != c.declare || hands != c.hands {
 			t.Errorf("Handover(%s, %s) = %q, %q", c.from, c.to, declare, hands)
 		}
+	}
+}
+
+func TestSnowflakeTestImportsAndLinknames(t *testing.T) {
+	architecture := guardStars()
+	g := graph.New()
+	for _, path := range guardPaths {
+		g.AddModule(&graph.Module{ID: "go:" + path, Language: "go", Path: path})
+	}
+
+	g.TestImports = []graph.Import{
+		{From: "go:internal/plan", To: "go:internal/web", File: "internal/plan/plan_test.go", Line: 5, Test: true},
+		{From: "go:internal/plan", To: "go:internal/web", File: "internal/plan/x_test.go", Line: 7, Test: true},
+		{From: "go:internal/plan", To: "go:internal/contracts", File: "internal/plan/plan_test.go", Line: 6, Test: true},
+		// A directory of only tests is checked as its path places it.
+		{From: "go:internal/e2e", To: "go:internal/assembly", File: "internal/e2e/e2e_test.go", Line: 3, Test: true},
+	}
+	g.Linknames = []graph.Linkname{{Module: "go:internal/tracer", Local: "now", Target: "runtime.nanotime", File: "internal/tracer/now.go", Line: 9}}
+	g.Normalize()
+	architecture.Assign(g)
+
+	var got []string
+	for _, violation := range architecture.Violations(g) {
+		got = append(got, fmt.Sprintf("%s %s %t %d", violation.From, violation.To, violation.Test, len(violation.Imports)))
+	}
+
+	want := []string{"go:internal/e2e go:internal/assembly true 1", "go:internal/plan go:internal/web true 2", "go:internal/tracer linkname runtime.nanotime false 1"}
+	if !slices.Equal(got, want) {
+		t.Errorf("violations %q, want %q", got, want)
+	}
+
+	// rules.tests: skip leaves the tests unchecked, not the linkname.
+	architecture.Tests = "skip"
+	if violations := architecture.Violations(g); len(violations) != 1 || violations[0].ToLayer != "linkname" {
+		t.Errorf("skipped tests: %+v", violations)
+	}
+
+	// The base's test violation is existing, apart from the edge's own.
+	head := []Violation{{From: "a", To: "b", Test: true}, {From: "a", To: "b"}}
+	MarkExisting(head, []Violation{{From: "a", To: "b", Test: true}})
+	if !head[0].Existing || head[1].Existing || head[0].Target() != "a -> b (test)" {
+		t.Errorf("existing: %+v", head)
+	}
+}
+
+func TestSnowflakeUnreadAndImpureFindings(t *testing.T) {
+	architecture := guardStars()
+	build := func() *graph.Graph {
+		g := graph.New()
+		for _, path := range []string{"internal/contracts", "internal/plan"} {
+			g.AddModule(&graph.Module{ID: "go:" + path, Language: "go", Path: path, Files: []string{path + "/x.go"}})
+		}
+
+		g.Unread = []graph.Import{{From: "go:internal/plan", To: "go:internal/_x", File: "internal/plan/x.go", Line: 3}}
+		g.Foreign = []graph.Foreign{
+			{From: "go:internal/contracts", Path: "net/http", File: "internal/contracts/x.go", Line: 4, Standard: true},
+			{From: "go:internal/contracts", Path: "strings", File: "internal/contracts/x.go", Line: 5, Standard: true},
+			{From: "go:internal/plan", Path: "net/http", File: "internal/plan/x.go", Line: 4, Standard: true},
+		}
+		g.Globals = []graph.Global{
+			{Module: "go:internal/contracts", Name: "ErrGone", File: "internal/contracts/x.go", Line: 8, Sentinel: true},
+			{Module: "go:internal/contracts", Name: "_", File: "internal/contracts/x.go", Line: 9},
+			{Module: "go:internal/contracts", Name: "Cache", File: "internal/contracts/x.go", Line: 10},
+		}
+		g.Normalize()
+		architecture.Assign(g)
+		return g
+	}
+
+	head, base := build(), build()
+	base.Globals = base.Globals[:2]
+	got := map[string]bool{}
+	for _, finding := range Rank(head, base, nil, nil) {
+		if finding.Kind == FindingImpure || finding.Kind == FindingUnclassified {
+			got[finding.Kind+" "+finding.Target] = finding.Existing
+		}
+	}
+
+	want := map[string]bool{
+		"unclassified go:internal/_x imported by go:internal/plan": true,
+		"impure_contracts go:internal/contracts: import net/http":  true,
+		"impure_contracts go:internal/contracts: var Cache":        false,
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("findings %v, want %v", got, want)
 	}
 }

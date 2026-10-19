@@ -647,13 +647,13 @@ func TestShortNamesSourceAndSummaries(t *testing.T) {
 func TestNeverBuiltFiles(t *testing.T) {
 	for text, want := range map[string]bool{
 		"//go:build ignore\n\npackage main\n":                  true,
-		"//go:build tools\n\npackage tools\n":                  true,
+		"//go:build tools\n\npackage tools\n":                  false,
 		"// +build ignore\n\npackage main\n":                   true,
 		"//go:build ignore && linux\n\npackage main\n":         true,
 		"//go:build !ignore\n\npackage kernel\n":               false,
 		"//go:build linux || ignore\n\npackage kernel\n":       false,
 		"//go:build amd64\n\npackage kernel\n":                 false,
-		"//go:build linux && !linux\n\npackage kernel\n":       true,
+		"//go:build linux && !linux\n\npackage kernel\n":       false,
 		"package kernel\n\n//go:build ignore\n":                false,
 		"// Copyright.\n\n//go:build ignore\n\npackage main\n": true,
 	} {
@@ -686,12 +686,10 @@ func TestNeverBuiltFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if edges := g.ModuleEdges(); len(edges) != 0 {
-		t.Fatalf("files that are never built should add no dependencies: %+v", edges)
-	}
-
-	if g.Module("go:tools") != nil {
-		t.Fatal("a package of only tools files should not be a module")
+	// Only the file under //go:build ignore is left out; a tools file is
+	// read, since some build may set its tag.
+	if edges := g.ModuleEdges(); len(edges) != 1 || edges[0].From != "go:tools" || edges[0].To != "go:b" {
+		t.Fatalf("only the tools file adds a dependency: %+v", edges)
 	}
 }
 

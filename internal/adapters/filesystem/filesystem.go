@@ -70,6 +70,7 @@ type configFile struct {
 		FailOn []string  `yaml:"fail_on"`
 		WarnOn []string  `yaml:"warn_on"`
 		Ignore yaml.Node `yaml:"ignore"`
+		Tests  string    `yaml:"tests"`
 	} `yaml:"rules"`
 }
 
@@ -138,6 +139,15 @@ func (this *Config) Load() (config app.Config, found bool, err error) {
 	if config.Architecture, err = file.architecture(); err != nil {
 		return config, true, fmt.Errorf("%s: %w", ConfigFile, err)
 	}
+
+	// A snowflake's contracts are kept pure by default: impure_contracts
+	// fails when fail_on is not given, and warns when warn_on is not.
+	if config.Architecture.Style == rules.StyleSnowflake {
+		config.FailOn = append(config.FailOn, rules.FindingImpure)
+		config.WarnOn = append(config.WarnOn, rules.FindingImpure)
+	}
+
+	config.Architecture.Tests = file.Rules.Tests
 
 	if file.Rules.FailOn != nil {
 		config.FailOn = ruleKinds(file.Rules.FailOn)

@@ -4,6 +4,7 @@ package graph
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -62,11 +63,27 @@ type Field struct {
 }
 
 // Graph is every module, symbol, edge and import of one source tree.
+//
+// Notes:
+//   - What an extractor reads beyond the dependencies of the code that is
+//     built, for the rules to judge, is kept apart, so it changes no
+//     module edge: TestImports are imports from test files; Unread are
+//     imports of packages in the repository the extractor did not read,
+//     such as one in a directory it skips; Foreign are imports of packages
+//     outside the repository, from code that is built; Globals are
+//     package-level variables; and Linknames are directives that link to
+//     a symbol past every import.
 type Graph struct {
 	Modules []*Module `json:"modules"`
 	Symbols []*Symbol `json:"symbols"`
 	Edges   []Edge    `json:"edges"`
 	Imports []Import  `json:"imports,omitempty"`
+
+	TestImports []Import   `json:"test_imports,omitempty"`
+	Unread      []Import   `json:"unread,omitempty"`
+	Foreign     []Foreign  `json:"foreign,omitempty"`
+	Globals     []Global   `json:"globals,omitempty"`
+	Linknames   []Linkname `json:"linknames,omitempty"`
 
 	modules map[string]*Module
 	symbols map[string]*Symbol
@@ -74,12 +91,48 @@ type Graph struct {
 
 // Import is one file's import of another module. An import is a dependency
 // even when nothing it provides is referenced, as with a blank import that
-// runs the imported package's initialization.
+// runs the imported package's initialization. Test marks an import from a
+// test file, which is checked as the module it tests; From is that module's
+// id even when no other file builds it.
 type Import struct {
 	From string `json:"from"`
 	To   string `json:"to"`
 	File string `json:"file"`
 	Line int    `json:"line"`
+	Test bool   `json:"test,omitempty"`
+}
+
+// Foreign is one file's import of a package from outside the repository, by
+// its import path. Standard marks one from the language's standard library.
+type Foreign struct {
+	From     string `json:"from"`
+	Path     string `json:"path"`
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	Standard bool   `json:"standard,omitempty"`
+}
+
+// Global is one package-level variable. Sentinel marks a sentinel error: a
+// name starting with Err whose value is a new error, such as errors.New.
+type Global struct {
+	Module   string `json:"module"`
+	Name     string `json:"name"`
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	Sentinel bool   `json:"sentinel,omitempty"`
+}
+
+// Linkname is a directive that binds a local name to a symbol elsewhere,
+// past every import, such as Go's //go:linkname local runtime.nanotime.
+// Target is the symbol linked to, or the local name when the directive
+// gives none. Test marks one in a test file.
+type Linkname struct {
+	Module string `json:"module"`
+	Local  string `json:"local"`
+	Target string `json:"target"`
+	File   string `json:"file"`
+	Line   int    `json:"line"`
+	Test   bool   `json:"test,omitempty"`
 }
 
 // Module is a unit of code placed into one layer, such as a Go package.
@@ -238,6 +291,11 @@ func (this *Graph) Clone() *Graph {
 
 	result.Edges = append([]Edge(nil), this.Edges...)
 	result.Imports = append([]Import(nil), this.Imports...)
+	result.TestImports = append([]Import(nil), this.TestImports...)
+	result.Unread = append([]Import(nil), this.Unread...)
+	result.Foreign = append([]Foreign(nil), this.Foreign...)
+	result.Globals = append([]Global(nil), this.Globals...)
+	result.Linknames = append([]Linkname(nil), this.Linknames...)
 	return result
 }
 
@@ -258,6 +316,11 @@ func (this *Graph) Merge(other *Graph) {
 
 	this.Edges = append(this.Edges, other.Edges...)
 	this.Imports = append(this.Imports, other.Imports...)
+	this.TestImports = append(this.TestImports, other.TestImports...)
+	this.Unread = append(this.Unread, other.Unread...)
+	this.Foreign = append(this.Foreign, other.Foreign...)
+	this.Globals = append(this.Globals, other.Globals...)
+	this.Linknames = append(this.Linknames, other.Linknames...)
 }
 
 // Module looks up a module by id.
@@ -369,6 +432,39 @@ func (this *Graph) Normalize() {
 
 	this.Imports = imports
 	sort.Slice(this.Imports, func(i, j int) bool { return importLess(this.Imports[i], this.Imports[j]) })
+
+	// A test's import of its own package, or of one the extractor did not
+	// read, is no dependency between modules.
+	tests := this.TestImports[:0]
+	seenImports = map[Import]bool{}
+	for _, item := range this.TestImports {
+		if seenImports[item] || this.modules[item.To] == nil || item.From == item.To {
+			continue
+		}
+
+		seenImports[item] = true
+		tests = append(tests, item)
+	}
+
+	this.TestImports = tests
+	sort.Slice(this.TestImports, func(i, j int) bool { return importLess(this.TestImports[i], this.TestImports[j]) })
+	sort.Slice(this.Unread, func(i, j int) bool { return importLess(this.Unread[i], this.Unread[j]) })
+	this.Unread = slices.Compact(this.Unread)
+	sort.SliceStable(this.Foreign, func(i, j int) bool {
+		a, b := this.Foreign[i], this.Foreign[j]
+		return a.From+"\x00"+a.Path+"\x00"+a.File < b.From+"\x00"+b.Path+"\x00"+b.File || a.From == b.From && a.Path == b.Path && a.File == b.File && a.Line < b.Line
+	})
+	this.Foreign = slices.Compact(this.Foreign)
+	sort.SliceStable(this.Globals, func(i, j int) bool {
+		a, b := this.Globals[i], this.Globals[j]
+		return a.Module+"\x00"+a.File < b.Module+"\x00"+b.File || a.Module == b.Module && a.File == b.File && a.Line < b.Line
+	})
+	this.Globals = slices.Compact(this.Globals)
+	sort.SliceStable(this.Linknames, func(i, j int) bool {
+		a, b := this.Linknames[i], this.Linknames[j]
+		return a.File < b.File || a.File == b.File && a.Line < b.Line
+	})
+	this.Linknames = slices.Compact(this.Linknames)
 }
 
 // Symbol looks up a symbol by id.

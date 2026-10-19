@@ -144,9 +144,14 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 			blastTarget = violation.References[0].To
 		}
 
-		title := "%s → %s breaks a layer rule"
-		if violation.Kind == FindingCycle {
+		title, to := "%s → %s breaks a layer rule", violation.To
+		switch {
+		case violation.Kind == FindingCycle:
 			title = "%s → %s closes a cycle"
+		case violation.ToLayer == "linkname":
+			title, to = "%s links to %s", strings.TrimPrefix(violation.To, "linkname ")
+		case violation.Test:
+			title = "%s → %s breaks a layer rule in a test"
 		}
 
 		// A violation the base already had is debt, not this change's
@@ -159,14 +164,17 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 
 		result = append(result, Finding{
 			Severity: severity, Kind: violation.Kind,
-			Title:   fmt.Sprintf(title, violation.From, violation.To),
+			Title:   fmt.Sprintf(title, violation.From, to),
 			Detail:  existing + fmt.Sprintf("%s; %d reference(s), %d import(s), first %s at %s:%d", violation.Rule, len(violation.References), len(violation.Imports), first, file, line),
 			Targets: []string{violation.From, violation.To},
 			Blast:   blast[blastTarget],
 			File:    file, Line: line, Existing: violation.Existing,
-			Target: EdgeTarget(violation.From, violation.To), Fingerprint: fingerprint(violation.Kind, violation.From, violation.To),
+			Target: violation.Target(), Fingerprint: fingerprint(violation.Kind, violation.From, violation.To+testMark(violation.Test)),
 		})
 	}
+
+	result = append(result, unread(head, base)...)
+	result = append(result, impure(head, base)...)
 
 	for _, module := range head.Modules {
 		var before *graph.Module
@@ -334,6 +342,123 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 
 		return result[i].Title < result[j].Title
 	})
+	return result
+}
+
+// unread reports each package of the repository that code imports but the
+// extractor did not read, such as one in a directory starting with _ or .,
+// vendor or testdata, as unclassified, by the package that imports it. The
+// language builds it all the same, so its code and dependencies would go
+// unchecked.
+func unread(head, base *graph.Graph) (result []Finding) {
+	seen := map[[2]string]bool{}
+	before := map[[2]string]bool{}
+	if base != nil {
+		for _, item := range base.Unread {
+			before[[2]string{item.From, item.To}] = true
+		}
+	}
+
+	for _, item := range head.Unread {
+		key := [2]string{item.From, item.To}
+		if seen[key] {
+			continue
+		}
+
+		seen[key] = true
+		importer := item.From
+		if item.Test {
+			importer = "a test of " + item.From
+		}
+
+		result = append(result, Finding{
+			Severity: SeverityMedium, Kind: FindingUnclassified,
+			Title:   fmt.Sprintf("%s, imported by %s, is unclassified", item.To, importer),
+			Detail:  fmt.Sprintf("%s imports %s, which lies where treaty reads no code, such as a directory starting with _ or ., vendor or testdata; the package is built all the same, so neither it nor what it uses is checked. Move it to a directory treaty reads.", importer, item.To),
+			Targets: []string{item.From, item.To},
+			File:    item.File, Line: item.Line,
+			Target: item.To + " imported by " + item.From, Fingerprint: fingerprint(FindingUnclassified, item.To, item.From),
+			Existing: before[key],
+		})
+	}
+
+	return result
+}
+
+// impureImports are the standard packages contracts may not import, and
+// those under them: the network, processes and signals, the system's
+// calls, unsafe memory, plugins and cgo.
+var impureImports = []string{"net", "os/exec", "os/signal", "syscall", "unsafe", "plugin", "C"}
+
+// impure reports what makes a snowflake's contracts impure: an import of
+// anything but the standard library, or of a standard package that reaches
+// the world outside the process or past the type system, and a package-level
+// variable that is not a sentinel error. Each is its own finding, its target
+// the module and what it holds, so treaty.yaml can ignore it alone.
+func impure(head, base *graph.Graph) (result []Finding) {
+	contracts := func(g *graph.Graph, id string) bool {
+		module := g.Module(id)
+		return module != nil && module.Layer == graph.LayerContracts
+	}
+
+	before := map[string]bool{}
+	if base != nil {
+		for _, item := range base.Foreign {
+			if contracts(base, item.From) {
+				before[item.From+": import "+item.Path] = true
+			}
+		}
+
+		for _, global := range base.Globals {
+			if contracts(base, global.Module) {
+				before[global.Module+": var "+global.Name] = true
+			}
+		}
+	}
+
+	seen := map[string]bool{}
+	add := func(target, title, detail, file string, line int) {
+		if seen[target] {
+			return
+		}
+
+		seen[target] = true
+		module, _, _ := strings.Cut(target, ": ")
+		result = append(result, Finding{
+			Severity: SeverityHigh, Kind: FindingImpure,
+			Title: title, Detail: detail,
+			Targets: []string{module},
+			File:    file, Line: line,
+			Target: target, Fingerprint: fingerprint(FindingImpure, target),
+			Existing: before[target],
+		})
+	}
+
+	for _, item := range head.Foreign {
+		if !contracts(head, item.From) {
+			continue
+		}
+
+		target := item.From + ": import " + item.Path
+		switch {
+		case slices.ContainsFunc(impureImports, func(path string) bool { return item.Path == path || strings.HasPrefix(item.Path, path+"/") }):
+			add(target, fmt.Sprintf("Contracts %s import %s", item.From, item.Path),
+				fmt.Sprintf("contracts may import only the standard library, and never %s, which reaches the network, processes, signals, system calls, unsafe memory, plugins or cgo; move what uses it to a spoke behind a port", item.Path), item.File, item.Line)
+		case !item.Standard:
+			add(target, fmt.Sprintf("Contracts %s import %s", item.From, item.Path),
+				fmt.Sprintf("contracts may import only the standard library, never a third-party module such as %s; declare the types they need themselves, and let a spoke adapt the module", item.Path), item.File, item.Line)
+		}
+	}
+
+	for _, global := range head.Globals {
+		if global.Name == "_" || global.Sentinel || !contracts(head, global.Module) {
+			continue
+		}
+
+		add(global.Module+": var "+global.Name, fmt.Sprintf("Contracts %s declare package-level variable %s", global.Module, global.Name),
+			fmt.Sprintf("contracts declare no package-level variable but sentinel errors, named Err... and made by errors.New or fmt.Errorf; make %s a constant, a function or a field of a value an assembler builds", global.Name), global.File, global.Line)
+	}
+
 	return result
 }
 
