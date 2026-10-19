@@ -512,6 +512,7 @@ const hexagonal = ["version: 1", "architecture: hexagonal", "layers:", "  compos
 const vertical = ["architecture: vertical", "composition: ['cmd/**']", "boundaries:", "  orders:", "    - \"**/orders/**\"   # all of it", "  billing: ['web/billing/**', store/billing/**]", "layers:", "  api: [\"**/api\"]"];
 const snowflake = ["architecture: snowflake", "stars: # each star's directory", "  .:", "    contracts: [\"internal/contracts\"]", "    orchestrators:", "      - \".\"", "      - internal/assembly   # the wiring", "  internal/blocks:   # a branch", "    contracts: ['internal/blocks/contracts']", "    orchestrators: [\"internal/blocks/kit\"]", "  internal/gate: {contracts: [\"internal/gate/contracts\"], orchestrators: [\"internal/gate/pipeline\"]}"];
 const loose = ["architecture: snowflake", "stars:", "  internal/blocks/:", "    contracts: [\"internal/blocks/contracts\"]", "  ./internal/gate:", "  ./: {orchestrators: [\".\"]}"];
+const third = ["architecture: snowflake", "stars:", "  .:", "    contracts:  [\"internal/contracts\"]", "    assemblers: [\".\", \"cmd/guardprobe\"]", "    engines:    [\"internal/executor\"]"];
 const cases = [
   [hexagonal, ["composition"], "cmd/**", 4],
   [hexagonal, ["layers", "domain"], "internal/rules/**", 5],
@@ -536,6 +537,8 @@ const cases = [
   [loose, ["stars", "internal/gate"], "", 5],
   [loose, ["stars", ".", "orchestrators"], ".", 6],
   [loose, ["stars", "."], "", 6],
+  [third, ["stars", ".", "assemblers"], "cmd/guardprobe", 5],
+  [third, ["stars", ".", "engines"], "internal/executor", 6],
 ];
 for (const [lines, path, glob, want] of cases) {
   const got = locateReason(lines, { path, glob });
@@ -559,9 +562,9 @@ func snowflakeView(extra ...string) app.MapView {
 	architecture := rules.Architecture{
 		Style: rules.StyleSnowflake,
 		Stars: []rules.Star{
-			{Dir: ".", Contracts: []string{"internal/contracts"}, Orchestrators: []string{".", "internal/assembly", "internal/executor"}},
-			{Dir: "internal/blocks", Contracts: []string{"internal/blocks/contracts"}, Orchestrators: []string{"internal/blocks/kit"}},
-			{Dir: "internal/gate", Contracts: []string{"internal/gate/contracts"}, Orchestrators: []string{"internal/gate/pipeline"}},
+			{Dir: ".", Contracts: []string{"internal/contracts", "internal/contracts/grades", "internal/contracts/plans"}, Assemblers: []string{".", "cmd/guardprobe", "internal/assembly"}, Engines: []string{"internal/executor"}},
+			{Dir: "internal/blocks", Contracts: []string{"internal/blocks/contracts"}, Assemblers: []string{"internal/blocks/kit"}},
+			{Dir: "internal/gate", Contracts: []string{"internal/gate/contracts"}, Assemblers: []string{"internal/gate/pipeline"}},
 		},
 	}
 
@@ -578,7 +581,7 @@ func snowflakeView(extra ...string) app.MapView {
 		panic(err)
 	}
 
-	view := app.MapView{Architecture: rules.StyleSnowflake, Root: "agentportal-guard", Layers: []string{graph.LayerContracts, graph.LayerOrchestrator, graph.LayerLeaf}, Stars: architecture.Tree()}
+	view := app.MapView{Architecture: rules.StyleSnowflake, Root: "agentportal-guard", Layers: []string{graph.LayerContracts, graph.LayerEngine, graph.LayerAssembler, graph.LayerLeaf}, Stars: architecture.Tree()}
 	for i, modulePath := range paths {
 		place := architecture.Resolve(modulePath)
 		var files []string
@@ -648,7 +651,7 @@ func TestSnowflakeLayout(t *testing.T) {
 			if !within(p.X, p.Y, size, contracts[module.Star]) {
 				t.Errorf("%s lies outside the contracts of %s: %+v in %+v", module.ID, module.Star, p, contracts[module.Star])
 			}
-		case graph.LayerOrchestrator:
+		case graph.LayerAssembler, graph.LayerEngine:
 			ring := contracts[module.Star]
 			if !within(p.X, p.Y, size, cores[module.Star]) || math.Hypot(p.X-ring.X, p.Y-ring.Y)-size < ring.Radius {
 				t.Errorf("%s lies outside the band between the core and the contracts of %s: %+v in %+v and %+v", module.ID, module.Star, p, cores[module.Star], ring)
@@ -743,7 +746,7 @@ func TestSnowflakeLayout(t *testing.T) {
 func TestSnowflakeLayoutKeepsUnlistedStars(t *testing.T) {
 	layout := ComputeLayout(app.MapView{Architecture: rules.StyleSnowflake, Modules: []app.MapModule{
 		{ID: "go:internal/contracts", Path: "internal/contracts", Layer: graph.LayerContracts, Star: ".", CoreEntry: "internal/contracts"},
-		{ID: "go:.", Path: ".", Layer: graph.LayerOrchestrator, Star: ".", CoreEntry: "."},
+		{ID: "go:.", Path: ".", Layer: graph.LayerAssembler, Star: ".", CoreEntry: "."},
 		{ID: "go:internal/web", Path: "internal/web", Layer: graph.LayerLeaf, Star: ".", Spoke: "internal/web"},
 		{ID: "go:internal/blocks/www", Path: "internal/blocks/www", Layer: graph.LayerLeaf, Star: "internal/blocks", Spoke: "internal/blocks/www"},
 	}})
@@ -767,8 +770,8 @@ func TestSnowflakeLayoutKeepsUnlistedStars(t *testing.T) {
 		t.Fatalf("an empty core has no room for a module: %+v and %+v", inner, outer)
 	}
 
-	contracts, orchestrator := layout.Modules["go:internal/contracts"], layout.Modules["go:."]
-	if root := drawn[graph.LayerContracts+":."]; math.Hypot(contracts.X-root.X, contracts.Y-root.Y) > 0.5 || math.Hypot(orchestrator.X-root.X, orchestrator.Y-root.Y) < root.Radius || orchestrator.Y >= root.Y || math.Abs(orchestrator.X-root.X) > 0.5 {
-		t.Fatalf("a lone contracts module sits at the center and its orchestrator outside the contracts, at the top: %+v, %+v", contracts, orchestrator)
+	contracts, assembler := layout.Modules["go:internal/contracts"], layout.Modules["go:."]
+	if root := drawn[graph.LayerContracts+":."]; math.Hypot(contracts.X-root.X, contracts.Y-root.Y) > 0.5 || math.Hypot(assembler.X-root.X, assembler.Y-root.Y) < root.Radius || assembler.Y >= root.Y || math.Abs(assembler.X-root.X) > 0.5 {
+		t.Fatalf("a lone contracts module sits at the center and its assembler outside the contracts, at the top: %+v, %+v", contracts, assembler)
 	}
 }

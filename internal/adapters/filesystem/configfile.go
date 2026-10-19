@@ -37,7 +37,8 @@ var (
 
 	// starKeys are the keys of each star under stars, whose own keys are
 	// directories.
-	starKeys = []string{"contracts", "orchestrators"}
+	// orchestrators is v2's name for assemblers, still read.
+	starKeys = []string{"contracts", "assemblers", "engines", "orchestrators"}
 )
 
 // decodeConfig reads treaty.yaml strictly. A version newer than this
@@ -157,9 +158,10 @@ func checkKeys(mapping *yaml.Node, path string) error {
 	return nil
 }
 
-// checkStarKeys refuses a key under a star other than contracts and
-// orchestrators, and either listed twice, which decoding the stars as nodes
-// would let pass, reading the first. A star that is not a mapping is left
+// checkStarKeys refuses a key under a star other than contracts,
+// assemblers, engines and orchestrators, v2's name for assemblers, and any
+// listed twice, which decoding the stars as nodes would let pass, reading
+// the first. A star that is not a mapping is left
 // for the architecture to refuse.
 func checkStarKeys(stars *yaml.Node) error {
 	for i := 0; i+1 < len(stars.Content); i += 2 {
@@ -172,7 +174,7 @@ func checkStarKeys(stars *yaml.Node) error {
 		for j := 0; j+1 < len(star.Content); j += 2 {
 			key := star.Content[j]
 			if !slices.Contains(starKeys, key.Value) {
-				return fmt.Errorf("line %d: %w %q under %s; %s", key.Line, ErrUnknownKey, key.Value, starPath(dir), suggest(key.Value, starKeys, "a star maps contracts and orchestrators"))
+				return fmt.Errorf("line %d: %w %q under %s; %s", key.Line, ErrUnknownKey, key.Value, starPath(dir), suggest(key.Value, starKeys, "a star maps contracts, assemblers and engines"))
 			}
 
 			if line, seen := first[key.Value]; seen {

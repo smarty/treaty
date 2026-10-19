@@ -51,9 +51,9 @@ type SliceContract struct {
 }
 
 // SliceStar is where a snowflake puts the slice's module: its star, the
-// star around that, its role, contracts, orchestrator or leaf, its leaf's
-// directory for a leaf and the entry claiming it for a core package. Cores
-// are the core modules it may use. Leaves are the leaves an orchestrator
+// star around that, its role, contracts, assembler, engine or leaf, its
+// leaf's directory for a leaf and the entry claiming it for a core package.
+// Cores are the core modules it may use. Leaves are the leaves an assembler
 // wires. Never names, for people, what lies near it that it must never use.
 type SliceStar struct {
 	Dir    string   `json:"dir"`
@@ -270,7 +270,7 @@ func sliceStar(analysis *analysis, scope SliceScope) *SliceStar {
 	node := nodes[module.Star]
 	result := &SliceStar{Dir: module.Star, Parent: node.Parent, Role: module.Layer, Spoke: module.Spoke, Entry: module.CoreEntry, Cores: []string{}, Never: []string{}}
 	for _, other := range g.Modules {
-		core := other.Layer == graph.LayerContracts || other.Layer == graph.LayerOrchestrator
+		core := other.Layer == graph.LayerContracts || other.Layer == graph.LayerAssembler || other.Layer == graph.LayerEngine
 		if allowed, _ := architecture.Check(place, placement(other)); other.ID != module.ID && core && allowed {
 			result.Cores = append(result.Cores, other.ID)
 		}
@@ -289,30 +289,35 @@ func sliceStar(analysis *analysis, scope SliceScope) *SliceStar {
 			result.Never = append(result.Never, "branch "+branch)
 		}
 
+		result.Never = append(result.Never, "any assembler")
 		if node.Parent != "" {
-			result.Never = append(result.Never, fmt.Sprintf("the core of star %s (reach it through %s)", node.Parent, listOrNone(node.Contracts)))
+			result.Never = append(result.Never, "the engines of the stars around it")
 		}
-	case graph.LayerOrchestrator:
+	case graph.LayerAssembler:
 		result.Leaves = slices.Clone(node.Leaves)
 		for _, branch := range node.Branches {
 			result.Never = append(result.Never, "the spokes of branch "+branch)
 		}
 
 		if node.Parent != "" {
-			result.Never = append(result.Never, "the orchestrators of star "+node.Parent)
+			result.Never = append(result.Never, "the assemblers and engines of the stars around it")
 		}
 	default:
 		result.Never = append(result.Never, "the leaves of star "+module.Star)
-		if len(node.Orchestrators) > 0 {
-			result.Never = append(result.Never, "the orchestrators of star "+module.Star)
+		if len(node.Assemblers) > 0 {
+			result.Never = append(result.Never, "the assemblers of star "+module.Star)
+		}
+
+		if module.Layer == graph.LayerContracts && len(node.Engines) > 0 {
+			result.Never = append(result.Never, "the engines of star "+module.Star)
 		}
 
 		for _, branch := range node.Branches {
-			result.Never = append(result.Never, "the orchestrators of branch "+branch)
+			result.Never = append(result.Never, "the core of branch "+branch)
 		}
 
 		if node.Parent != "" {
-			result.Never = append(result.Never, "the orchestrators of star "+node.Parent)
+			result.Never = append(result.Never, "the assemblers and engines of the stars around it")
 		}
 	}
 
@@ -423,7 +428,7 @@ func (this Slice) Text() string {
 		}
 
 		fmt.Fprintf(&builder, "star: %s\n  cores it may use: %s\n", place, listOrNone(star.Cores))
-		if star.Role == graph.LayerOrchestrator {
+		if star.Role == graph.LayerAssembler {
 			fmt.Fprintf(&builder, "  leaves it wires: %s\n", listOrNone(star.Leaves))
 		}
 

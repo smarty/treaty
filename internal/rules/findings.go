@@ -18,6 +18,7 @@ const (
 	FindingCycle          = "cycle"
 	FindingImplementation = "implementation"
 	FindingImplementers   = "implementers"
+	FindingImpure         = "impure_contracts"
 	FindingLayerViolation = "layer_violation"
 	FindingMoved          = "moved"
 	FindingNewContract    = "new_contract"
@@ -35,10 +36,10 @@ const (
 
 var (
 	// FindingKinds lists every kind of finding.
-	FindingKinds = []string{FindingAmbiguous, FindingBreaking, FindingCompatible, FindingCycle, FindingImplementation, FindingImplementers, FindingLayerViolation, FindingMoved, FindingNewContract, FindingNewModule, FindingUnclassified, FindingVariants}
+	FindingKinds = []string{FindingAmbiguous, FindingBreaking, FindingCompatible, FindingCycle, FindingImplementation, FindingImplementers, FindingImpure, FindingLayerViolation, FindingMoved, FindingNewContract, FindingNewModule, FindingUnclassified, FindingVariants}
 
 	// Failable lists the kinds of finding that can fail a check, or warn.
-	Failable = []string{FindingBreaking, FindingLayerViolation, FindingCycle, FindingUnclassified, FindingAmbiguous}
+	Failable = []string{FindingBreaking, FindingLayerViolation, FindingCycle, FindingUnclassified, FindingAmbiguous, FindingImpure}
 )
 
 // Finding is one item in the review queue. File and Line say where it
@@ -200,7 +201,7 @@ func Rank(head, base *graph.Graph, changes []Change, violations []Violation) []F
 			switch {
 			case module.Layer == graph.LayerLeaf:
 				detail = fmt.Sprintf("Placed in leaf %s of star %s.", module.Spoke, module.Star)
-			case module.Layer == graph.LayerContracts, module.Layer == graph.LayerOrchestrator:
+			case module.Layer == graph.LayerContracts, module.Layer == graph.LayerAssembler, module.Layer == graph.LayerEngine:
 				detail = fmt.Sprintf("Placed in %s %s of star %s.", module.Layer, module.CoreEntry, module.Star)
 			case module.Boundary != "":
 				detail = fmt.Sprintf("Placed in the %s layer of boundary %s.", module.Layer, module.Boundary)

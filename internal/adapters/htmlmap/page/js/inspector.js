@@ -332,7 +332,7 @@ function inspect() {
       const moved = h("p", {}, "You placed this module here. "), back = h("button", { type: "button" }, "Put it back");
       back.addEventListener("click", () => savePosition(m.id, null));
       moved.appendChild(back); box.appendChild(moved);
-    } else if (LIVE && !m.design) box.appendChild(h("p", { class: "hint" }, LAYERED_STYLES.includes(D.architecture) ? "Long-press the module to pick it up: drop it elsewhere in its band to place it, or in another layer to move it there in treaty.yaml." : STAR_STYLES.includes(D.architecture) ? "Long-press the module to pick it up: drop it elsewhere in its region to place it, on its star's contracts or orchestrators to move it into the core in treaty.yaml, or on its own spoke to take it out. A spoke is its directory, so moving to another spoke means moving the package's files." : "Long-press the module to pick it up: drop it elsewhere in its area to place it, or in another boundary, shared or composition to move it there in treaty.yaml."));
+    } else if (LIVE && !m.design) box.appendChild(h("p", { class: "hint" }, LAYERED_STYLES.includes(D.architecture) ? "Long-press the module to pick it up: drop it elsewhere in its band to place it, or in another layer to move it there in treaty.yaml." : STAR_STYLES.includes(D.architecture) ? "Long-press the module to pick it up: drop it elsewhere in its region to place it, on its star's contracts or on the band around them to move it into the core in treaty.yaml (among the assemblers, or with Shift among the engines; Shift on the band switches an assembler and an engine), or on its own spoke to take it out. A spoke is its directory, so moving to another spoke means moving the package's files." : "Long-press the module to pick it up: drop it elsewhere in its area to place it, or in another boundary, shared or composition to move it there in treaty.yaml."));
     const t = h("table", { class: "metrics" }); t.innerHTML = "<tr><th>Metric</th><th>Before</th><th>After</th></tr>";
     let group = null;
     for (const [key, name, abbr, about, format, under] of METRICS) {
@@ -354,7 +354,7 @@ function inspect() {
     sliceBlock(box, m.slice);
   } else if (sel.type === "edge") {
     const e = sel.edge;
-    // A snowflake end is named by its contracts or orchestrator entry or its
+    // A snowflake end is named by its contracts, assembler or engine entry or its
     // leaf, since its layer alone does not say which. A collapsed group that
     // spans several is named by its layer and star.
     const where = (layer, m) => STAR_STYLES.includes(D.architecture) && m ? placeName(m) : layer;

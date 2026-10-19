@@ -280,6 +280,8 @@ func (this *analysis) problems(kinds []string) []string {
 			result = append(result, fmt.Sprintf("%d unclassified module(s)", count))
 		case rules.FindingAmbiguous:
 			result = append(result, fmt.Sprintf("%d module(s) claimed equally by two or more boundaries", count))
+		case rules.FindingImpure:
+			result = append(result, fmt.Sprintf("%d impurity(ies) in contracts", count))
 		case rules.FindingBreaking:
 			result = append(result, breakingText(count-moved, moved))
 		}
@@ -322,7 +324,7 @@ func (this *analysis) counted(finding rules.Finding) string {
 		}
 
 		return rules.FindingBreaking
-	case rules.FindingLayerViolation, rules.FindingCycle, rules.FindingUnclassified, rules.FindingAmbiguous:
+	case rules.FindingLayerViolation, rules.FindingCycle, rules.FindingUnclassified, rules.FindingAmbiguous, rules.FindingImpure:
 		return finding.Kind
 	}
 

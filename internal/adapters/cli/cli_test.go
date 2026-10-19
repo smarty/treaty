@@ -10,7 +10,7 @@ import (
 func TestCheckTextNamesSnowflakePlacements(t *testing.T) {
 	report := app.Report{Modules: []app.ModuleReport{
 		{ID: "go:internal/blocks/contracts", Layer: "contracts", Star: "internal/blocks", Entry: "internal/blocks/contracts"},
-		{ID: "go:.", Layer: "orchestrator", Star: ".", Entry: "."},
+		{ID: "go:.", Layer: "assembler", Star: ".", Entry: "."},
 		{ID: "go:internal/blocks/www/fetch", Layer: "leaf", Star: "internal/blocks", Spoke: "internal/blocks/www"},
 		{ID: "go:internal/blocks", Layer: "unclassified", Star: "internal/blocks"},
 		{ID: "go:internal/app", Layer: "application"},
@@ -20,7 +20,7 @@ func TestCheckTextNamesSnowflakePlacements(t *testing.T) {
 	lines := strings.Split(checkText(report), "\n")[1:7]
 	for i, label := range []string{
 		"contracts internal/blocks/contracts",
-		"orchestrator .",
+		"assembler .",
 		"leaf internal/blocks/www",
 		"unclassified",
 		"application",

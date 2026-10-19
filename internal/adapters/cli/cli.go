@@ -432,10 +432,13 @@ func run(args []string, service *app.Service, launcher Launcher, stdin io.Reader
 }
 
 // moduleLabel names a module's placement: a snowflake's contracts E,
-// orchestrator E or leaf L, else its layer with its side, its boundary and
-// whether it is public.
+// assembler E, engine E or leaf L, or the core package an unclassified one
+// lies beneath, else its layer with its side, its boundary and whether it
+// is public.
 func moduleLabel(module app.ModuleReport) string {
 	switch {
+	case module.Star != "" && module.Entry != "" && module.Layer == "unclassified":
+		return "unclassified, beneath " + module.Entry
 	case module.Star != "" && module.Entry != "":
 		return module.Layer + " " + module.Entry
 	case module.Star != "" && module.Layer == "leaf":

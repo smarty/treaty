@@ -22,13 +22,14 @@ const (
 
 	LayerAdapter      = "adapter"
 	LayerApplication  = "application"
+	LayerAssembler    = "assembler"
 	LayerBoundary     = "boundary"
 	LayerComposition  = "composition"
 	LayerContracts    = "contracts"
 	LayerDomain       = "domain"
+	LayerEngine       = "engine"
 	LayerLeaf         = "leaf"
 	LayerNone         = "none"
-	LayerOrchestrator = "orchestrator"
 	LayerShared       = "shared"
 	LayerUnclassified = "unclassified"
 
@@ -91,8 +92,9 @@ type Import struct {
 // packages that other boundaries may use. Ambiguous lists the boundaries
 // that tie for a module, which then sits in none of them. For the snowflake
 // architecture, Star is the directory of the star holding the module; Spoke
-// is its leaf's directory, for a leaf; and CoreEntry is the contracts or
-// orchestrators entry of treaty.yaml that claims it, for a core package.
+// is its leaf's directory, for a leaf; and CoreEntry is the contracts,
+// assemblers or engines entry of treaty.yaml that claims it, for a core
+// package, or the core package an unclassified one lies beneath.
 type Module struct {
 	ID        string   `json:"id"`
 	Language  string   `json:"language"`

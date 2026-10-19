@@ -168,7 +168,7 @@ function paintPlacing(placed) {
 
 // starReason says why a snowflake places a module by its directory, for a
 // reason with no glob: a leaf, the spoke its directory names. A core
-// package's reason names its entry under contracts or orchestrators.
+// package's reason names its entry under contracts, assemblers or engines.
 function starReason(module, reason) {
   return `star ${reason.path[reason.path.length - 1]} places it in leaf ${module.spoke} by its directory`;
 }

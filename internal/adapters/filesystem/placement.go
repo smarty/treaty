@@ -37,7 +37,7 @@ var ErrNoConfig = errors.New("no treaty.yaml")
 //   - modulePath: the module's path relative to the repository root.
 //   - placement: the layer, and for a hexagonal adapter the side, to place
 //     it in; for vertical and modular, the boundary, or the layer shared or
-//     composition; for snowflake, contracts or orchestrator and the star,
+//     composition; for snowflake, contracts, assembler or engine and the star,
 //     or leaf and the spoke.
 //
 // Returns:
@@ -94,48 +94,47 @@ func (this *Config) Place(modulePath string, placement rules.Placement) (path st
 }
 
 // placeInStar edits a snowflake's treaty.yaml by directory, never by
-// resolving: it takes the module's directory out of every star's contracts
-// and orchestrators, then, for a core target, adds it to that list of its
-// star, creating the star's mapping or the list as a flow list, contracts
-// before orchestrators. A leaf target only takes it out.
+// resolving: it takes the module's directory out of every star's contracts,
+// assemblers and engines, then, for a core target, adds it to that list of
+// its star, creating the star's mapping or the list as a flow list, in the
+// order contracts, assemblers, engines. A star that still names its
+// assemblers orchestrators keeps that key. A leaf target only takes it out.
 //
 // Notes:
 //   - Refused: composition, a star treaty.yaml does not list, a star other
-//     than the innermost one holding the module, a package nested in an
-//     entry, a star's own package out of its core, and another spoke than
-//     the module's own, since a spoke is its directory.
+//     than the innermost one holding the module, a package inside a spoke
+//     into the core, a package beneath a core package out to a spoke, a
+//     star's own package out of its core, and another spoke than the
+//     module's own, since a spoke is its directory.
 func placeInStar(path string, document *yaml.Node, architecture rules.Architecture, modulePath string, placement rules.Placement) (string, error) {
 	own, position := architecture.Innermost(modulePath), architecture.Position(modulePath)
 	nested := modulePath != own && position != modulePath
+	underCore := nested && architecture.Resolve(position).Entry == position
 	var key string
 	switch placement.Layer {
-	case graph.LayerContracts, graph.LayerOrchestrator:
-		key = "contracts"
-		if placement.Layer == graph.LayerOrchestrator {
-			key = "orchestrators"
-		}
-
+	case graph.LayerContracts, graph.LayerAssembler, graph.LayerEngine:
+		key = map[string]string{graph.LayerContracts: "contracts", graph.LayerAssembler: "assemblers", graph.LayerEngine: "engines"}[placement.Layer]
 		switch {
 		case !slices.ContainsFunc(architecture.Stars, func(star rules.Star) bool { return star.Dir == placement.Star }):
 			return "", fmt.Errorf("%w: no star %q in %s", rules.ErrArchitecture, placement.Star, ConfigFile)
 		case placement.Star != own:
 			return "", fmt.Errorf("%w: a core package is a child of its own star: drop it on the core of star %s", rules.ErrArchitecture, own)
-		case nested:
-			return "", fmt.Errorf("%w: %s holds it, and a core package is a whole child of its star: move %s into the core instead", rules.ErrArchitecture, position, position)
+		case nested && !underCore:
+			return "", fmt.Errorf("%w: spoke %s holds it, and a core package is never part of a spoke: move %s into the core instead", rules.ErrArchitecture, position, position)
 		}
 	case graph.LayerLeaf:
 		switch {
 		case modulePath == own:
-			return "", fmt.Errorf("%w: a star's own package is always in its core: drop it on its contracts or orchestrators", rules.ErrArchitecture)
+			return "", fmt.Errorf("%w: a star's own package is always in its core: drop it on its contracts, assemblers or engines", rules.ErrArchitecture)
+		case underCore:
+			return "", fmt.Errorf("%w: it lies beneath core package %s, so it is never a spoke: list it in the core, or move its files out of %s", rules.ErrArchitecture, position, position)
 		case placement.Spoke != "" && placement.Spoke != position:
 			return "", fmt.Errorf("%w: a spoke is its directory: move the package's files into %s to put it there", rules.ErrArchitecture, placement.Spoke)
-		case nested:
-			return "", fmt.Errorf("%w: %s holds it, and a core package is a whole child of its star: move %s out of the core instead", rules.ErrArchitecture, position, position)
 		}
 	case graph.LayerComposition:
-		return "", fmt.Errorf("%w: composition does not apply to the snowflake architecture: orchestrators do its work, so move the module among the orchestrators of its star", rules.ErrArchitecture)
+		return "", fmt.Errorf("%w: composition does not apply to the snowflake architecture: assemblers do its work, so move the module among the assemblers of its star", rules.ErrArchitecture)
 	default:
-		return "", fmt.Errorf("%w: in the snowflake architecture a module moves into its star's contracts or orchestrators, or out to its own spoke, not %s", rules.ErrArchitecture, describe(placement))
+		return "", fmt.Errorf("%w: in the snowflake architecture a module moves into its star's contracts, assemblers or engines, or out to its own spoke, not %s", rules.ErrArchitecture, describe(placement))
 	}
 
 	root := document.Content[0]
@@ -149,9 +148,15 @@ func placeInStar(path string, document *yaml.Node, architecture rules.Architectu
 
 	if key != "" {
 		star := starMapping(mappingValue(root, "stars"), own)
+		if key == "assemblers" && mappingValue(star, "orchestrators") != nil {
+			key = "orchestrators"
+		}
+
 		before := ""
-		if key == "contracts" {
-			before = "orchestrators"
+		for _, later := range map[string][]string{"contracts": {"assemblers", "orchestrators", "engines"}, "assemblers": {"engines"}, "orchestrators": {"engines"}}[key] {
+			if before == "" && mappingValue(star, later) != nil {
+				before = later
+			}
 		}
 
 		appendScalar(child(star, key, yaml.SequenceNode, before), modulePath)
@@ -412,7 +417,7 @@ func child(mapping *yaml.Node, key string, kind yaml.Kind, before string) *yaml.
 // describe names a placement for an error message.
 func describe(placement rules.Placement) string {
 	switch {
-	case placement.Layer == graph.LayerContracts, placement.Layer == graph.LayerOrchestrator:
+	case placement.Layer == graph.LayerContracts, placement.Layer == graph.LayerAssembler, placement.Layer == graph.LayerEngine:
 		return placement.Layer + " " + placement.Entry
 	case placement.Layer == graph.LayerLeaf:
 		return "leaf " + placement.Spoke
@@ -502,8 +507,8 @@ func parseArchitecture(data []byte) (rules.Architecture, error) {
 // composition, at the top or under layers, and each layer's, with a
 // hexagonal adapter's two sides. For vertical and modular they are
 // composition, shared and each boundary's; layers inside boundaries are
-// left alone. For snowflake they are each star's contracts and
-// orchestrators.
+// left alone. For snowflake they are each star's contracts, assemblers,
+// engines and orchestrators.
 func placementLists(root *yaml.Node, style string) (result []*yaml.Node) {
 	sequences := func(mapping *yaml.Node) {
 		for i := 0; i+1 < len(mapping.Content); i += 2 {

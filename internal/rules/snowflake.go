@@ -12,16 +12,25 @@ import (
 )
 
 const (
-	// BreakContracts is a snowflake dependency from contracts on a spoke or
-	// on an orchestrator of their own star.
+	// BreakAssembler is a snowflake dependency from a spoke on an assembler,
+	// of its own star or any other.
+	BreakAssembler = "assembler"
+
+	// BreakContracts is a snowflake dependency from contracts on anything
+	// but the contracts of their own star and the stars around it.
 	BreakContracts = "contracts"
 
-	// BreakIn is a snowflake dependency from a core into a branch beyond
-	// the branch's core.
+	// BreakEngine is a snowflake dependency from an engine on anything but
+	// the contracts of its own star and the stars around it and the engines
+	// of its own star.
+	BreakEngine = "engine"
+
+	// BreakIn is a snowflake dependency from an assembler into a branch
+	// beyond the branch's core.
 	BreakIn = "in"
 
-	// BreakOut is a snowflake dependency past the core a module may use,
-	// toward a star around its own.
+	// BreakOut is a snowflake dependency on a star around the depending
+	// module's own, past that star's contracts.
 	BreakOut = "out"
 
 	// BreakSideways is a snowflake dependency between sibling spokes.
@@ -35,25 +44,32 @@ var ErrMisfit = errors.New("the stars do not fit the code")
 
 // Star is one star of the snowflake architecture: a directory relative to
 // the repository root, such as . or internal/blocks, and the entries of its
-// core region, its contracts and its orchestrators. Each entry is a
-// directory relative to the repository root: the star's own directory,
-// naming its own package, or a child of the star, a directory reached from
-// it through directories that hold no package, naming that package and
-// every package nested under it. Every other child of the star that holds
-// a package is a spoke: a leaf, or a branch when it is a star of its own.
+// core region, its contracts, its assemblers and its engines. Each entry is
+// a directory relative to the repository root naming exactly one package:
+// the star's own, or one below the star's directory and outside its
+// branches. A package beneath an entry is unclassified unless an entry names
+// it too. Every other child of the star that holds a package is a spoke: a
+// leaf, or a branch when it is a star of its own; the packages under a
+// star's own directory are its spokes, whatever role its own package has.
 //
 // Notes:
-//   - A spoke may use only its own star's core region, never a sibling
-//     spoke and never the core of a star around its own.
-//   - Contracts may use the contracts of their own star, of the star
-//     around it and of its branches, never a spoke and never an
-//     orchestrator. An orchestrator may use its own star's whole core, its
-//     star's leaves, its branches' cores and the contracts of the star
-//     around it.
+//   - Contracts may use only the contracts of their own star and of the
+//     stars around it.
+//   - An engine runs policy over contracts: it may use the contracts of its
+//     own star and of the stars around it, and its own star's engines.
+//   - An assembler composes: it may use its own star's whole core and its
+//     spokes, to wire them, the core of each child branch and the contracts
+//     of the stars around it.
+//   - A spoke may use its own leaf, its star's contracts and engines and
+//     the contracts of every star around it, never an assembler.
+//   - Deprecated marks a star whose treaty.yaml lists its assemblers under
+//     orchestrators, the name v2 gave them.
 type Star struct {
-	Dir           string
-	Contracts     []string
-	Orchestrators []string
+	Dir        string
+	Contracts  []string
+	Assemblers []string
+	Engines    []string
+	Deprecated bool
 }
 
 // StarNode is one star in the star tree, for people and the map: its
@@ -62,13 +78,14 @@ type Star struct {
 // directories that hold at least one module, and Branches the stars whose
 // parent it is. The root star has no parent and depth 0.
 type StarNode struct {
-	Dir           string   `json:"dir"`
-	Parent        string   `json:"parent,omitempty"`
-	Depth         int      `json:"depth"`
-	Contracts     []string `json:"contracts"`
-	Orchestrators []string `json:"orchestrators"`
-	Leaves        []string `json:"leaves"`
-	Branches      []string `json:"branches"`
+	Dir        string   `json:"dir"`
+	Parent     string   `json:"parent,omitempty"`
+	Depth      int      `json:"depth"`
+	Contracts  []string `json:"contracts"`
+	Assemblers []string `json:"assemblers"`
+	Engines    []string `json:"engines"`
+	Leaves     []string `json:"leaves"`
+	Branches   []string `json:"branches"`
 }
 
 // starBinding is a snowflake bound to the modules of one tree: which
@@ -139,9 +156,9 @@ func (this Architecture) Bind(modulePaths []string) (result Architecture, err er
 					continue
 				}
 
-				if dir := binding.firstHolding(star.Dir, entry); dir != "" {
+				if dir := binding.firstSpoke(this, star.Dir, entry); dir != "" {
 					binding.misfit(dir, fmt.Sprintf("%s entry %s of star %s lies inside spoke %s", role.list, entry, star.Dir, dir),
-						fmt.Sprintf("%s entry %s of star %s lies inside spoke %s: a core package is a whole child of its star, never part of a spoke; move the package out of %s, or declare %s a star with %s in its %s", role.list, entry, star.Dir, dir, dir, dir, entry, role.list))
+						fmt.Sprintf("%s entry %s of star %s lies inside spoke %s: a core package is a child of its star or of another core package, never part of a spoke; move the package out of %s, or declare %s a star with %s in its %s", role.list, entry, star.Dir, dir, dir, dir, entry, role.list))
 					continue
 				}
 
@@ -204,7 +221,7 @@ func (this Architecture) Tree() []StarNode {
 	result := make([]StarNode, 0, len(stars))
 	for _, star := range stars {
 		node := StarNode{Dir: star.Dir, Parent: this.Parent(star.Dir), Depth: len(this.ancestors(star.Dir)),
-			Contracts: listOrEmpty(star.Contracts), Orchestrators: listOrEmpty(star.Orchestrators), Leaves: listOrEmpty(leaves[star.Dir]), Branches: this.branchesOf(star.Dir)}
+			Contracts: listOrEmpty(star.Contracts), Assemblers: listOrEmpty(star.Assemblers), Engines: listOrEmpty(star.Engines), Leaves: listOrEmpty(leaves[star.Dir]), Branches: this.branchesOf(star.Dir)}
 		sort.Strings(node.Leaves)
 		result = append(result, node)
 	}
@@ -213,9 +230,10 @@ func (this Architecture) Tree() []StarNode {
 }
 
 // Notes lists, for people, what a bound snowflake finds odd without
-// refusing it: a star that holds no module, an entry that matches none, a
-// star's own package that no list names, and a star whose core is empty
-// while it has leaves.
+// refusing it: a star that still lists orchestrators, v2's name for its
+// assemblers; a star that holds no module; an entry that names no module; a
+// star's own package that no list names; a star whose core is empty while
+// it has leaves; and a package beneath a core package that no entry names.
 //
 // Returns:
 //   - result: one note each, in star order; empty for any other style.
@@ -226,13 +244,21 @@ func (this Architecture) Notes() (result []string) {
 
 	binding := this.binding("")
 	hasLeaves := map[string]bool{}
+	var nested []string
 	for _, modulePath := range binding.modules {
-		if placement := this.Resolve(modulePath); placement.Layer == graph.LayerLeaf {
+		switch placement := this.Resolve(modulePath); {
+		case placement.Layer == graph.LayerLeaf:
 			hasLeaves[placement.Star] = true
+		case placement.Layer == graph.LayerUnclassified && placement.Entry != "":
+			nested = append(nested, modulePath)
 		}
 	}
 
 	for _, star := range this.ordered() {
+		if star.Deprecated {
+			result = append(result, fmt.Sprintf("star %s lists orchestrators, the name the second snowflake gave its assemblers; rename the key to assemblers, and move each package that only runs policy over contracts to engines", star.Dir))
+		}
+
 		if !slices.ContainsFunc(binding.modules, func(modulePath string) bool { return encloses(star.Dir, modulePath) }) {
 			result = append(result, fmt.Sprintf("treaty.yaml declares star %s under stars, but no module lies in it; check the directory's spelling", star.Dir))
 			continue
@@ -240,24 +266,24 @@ func (this Architecture) Notes() (result []string) {
 
 		for _, role := range starRoles {
 			for _, entry := range role.entries(star) {
-				matched := binding.holds[entry]
-				if entry != star.Dir {
-					matched = slices.ContainsFunc(binding.modules, func(modulePath string) bool { return encloses(entry, modulePath) })
-				}
-
-				if !matched {
+				if !binding.holds[entry] && (entry == star.Dir || len(binding.below(entry)) == 0) {
 					result = append(result, fmt.Sprintf("%s entry %s of star %s matches no module; check its spelling", role.list, entry, star.Dir))
 				}
 			}
 		}
 
-		if binding.holds[star.Dir] && !slices.Contains(star.Contracts, star.Dir) && !slices.Contains(star.Orchestrators, star.Dir) {
-			result = append(result, fmt.Sprintf("star %s holds a package of its own, %s, which treaty.yaml lists in neither its contracts nor its orchestrators, so it is unclassified; list it in one of them", star.Dir, star.Dir))
+		if binding.holds[star.Dir] && star.role(star.Dir) == nil {
+			result = append(result, fmt.Sprintf("star %s holds a package of its own, %s, which treaty.yaml lists in none of its contracts, assemblers or engines, so it is unclassified; list it in one of them", star.Dir, star.Dir))
 		}
 
-		if len(star.Contracts) == 0 && len(star.Orchestrators) == 0 && hasLeaves[star.Dir] {
-			result = append(result, fmt.Sprintf("star %s has no contracts and no orchestrators, so its spokes may use nothing outside themselves", star.Dir))
+		if len(star.Contracts)+len(star.Assemblers)+len(star.Engines) == 0 && hasLeaves[star.Dir] {
+			result = append(result, fmt.Sprintf("star %s has no contracts, assemblers or engines, so nothing wires its spokes and they may use only themselves and the contracts of the stars around it", star.Dir))
 		}
+	}
+
+	for _, modulePath := range nested {
+		placement := this.Resolve(modulePath)
+		result = append(result, fmt.Sprintf("%s lies beneath %s of star %s, and a core role covers only the package an entry names, so it is unclassified; list it under the contracts, assemblers or engines of star %s, or move it out of %s", modulePath, starName(this.claimed(placement)), placement.Star, placement.Star, placement.Entry))
 	}
 
 	return result
@@ -282,9 +308,10 @@ func (this Architecture) Crossing(from, to Placement) (star, child string) {
 }
 
 // Handover words how a port carries a refused dependency of a snowflake:
-// the contracts of the deepest star around both ends declare it, the
-// contracts of each star on the way down to the depending module re-export
-// it, and the orchestrators of those stars hand the implementation in.
+// the contracts of the deepest star around both ends declare it, and the
+// assemblers of the stars from there down to the depending module's hand
+// the implementation in. The depending module uses the declaring contracts
+// directly, wherever they lie around it: there are no re-exports.
 //
 // Parameters:
 //   - from: the depending module's placement.
@@ -293,26 +320,20 @@ func (this Architecture) Crossing(from, to Placement) (star, child string) {
 // Returns:
 //   - declare: the contracts that declare the port, such as the contracts
 //     of star . (internal/contracts).
-//   - reexport: the contracts that re-export it, outer first; none when
-//     the depending module may use the declaring contracts already.
-//   - hands: who hands the implementation in, such as an orchestrator of
-//     star . or the orchestrators of stars . and internal/blocks.
-func (this Architecture) Handover(from, to Placement) (declare string, reexport []string, hands string) {
+//   - hands: who hands the implementation in, such as an assembler of star
+//     . or the assemblers of stars . and internal/blocks.
+func (this Architecture) Handover(from, to Placement) (declare, hands string) {
 	common := this.common(from.Star, to.Star)
 	carriers := this.between(common, from.Star)
-	if from.Layer == graph.LayerLeaf && from.Star != common {
+	if from.Layer != graph.LayerAssembler && from.Star != common {
 		carriers = append(carriers, from.Star)
 	}
 
 	if len(carriers) == 0 {
-		return this.contractsOf(common), nil, "an orchestrator of star " + common
+		return this.contractsOf(common), "an assembler of star " + common
 	}
 
-	for _, carrier := range carriers {
-		reexport = append(reexport, this.contractsOf(carrier))
-	}
-
-	return this.contractsOf(common), reexport, "the orchestrators of stars " + joinAnd(append([]string{common}, carriers...))
+	return this.contractsOf(common), "the assemblers of stars " + joinAnd(append([]string{common}, carriers...))
 }
 
 // Encloses reports whether a star directory holds a path, or is that
@@ -387,35 +408,39 @@ func (this Architecture) Position(modulePath string) string {
 	return this.position(this.binding(modulePath), star, modulePath)
 }
 
-// starRole is one of a star's two lists of entries.
+// starRole is one of a star's three lists of entries.
 type starRole struct {
 	layer, list string
 	entries     func(Star) []string
 }
 
-// starRoles are a star's lists of entries, contracts first.
+// starRoles are a star's lists of entries, in the order treaty.yaml lists
+// them: contracts, assemblers, engines.
 var starRoles = []starRole{
 	{graph.LayerContracts, "contracts", func(star Star) []string { return star.Contracts }},
-	{graph.LayerOrchestrator, "orchestrators", func(star Star) []string { return star.Orchestrators }},
+	{graph.LayerAssembler, "assemblers", func(star Star) []string { return star.Assemblers }},
+	{graph.LayerEngine, "engines", func(star Star) []string { return star.Engines }},
 }
 
 // resolveSnowflake places one module path in the star tree:
 //
 //  1. its star is the innermost star whose directory holds it or is it;
-//  2. a star's own package is in the list that names its directory, and
-//     unclassified when neither does;
+//  2. a package an entry names exactly has that entry's role, and a star's
+//     own package that no entry names is unclassified;
 //  3. a misfit directory, in a binding that looks through it, is
 //     unclassified;
-//  4. otherwise its position in its star is a contracts entry, an
-//     orchestrators entry, or else a leaf, nested packages included.
+//  4. a package beneath a core package, other than the star's own, that no
+//     entry names is unclassified, with that core package as its Entry;
+//  5. otherwise it is a leaf: its position in its star, nested packages
+//     included.
 func (this Architecture) resolveSnowflake(modulePath string) Placement {
 	star := this.innermost(modulePath)
 	if star == nil {
 		return Placement{Layer: graph.LayerUnclassified}
 	}
 
-	if modulePath == star.Dir {
-		return star.claim(modulePath)
+	if placement := star.claim(modulePath); placement.Layer != graph.LayerUnclassified || modulePath == star.Dir {
+		return placement
 	}
 
 	binding := this.binding(modulePath)
@@ -424,23 +449,42 @@ func (this Architecture) resolveSnowflake(modulePath string) Placement {
 	}
 
 	position := this.position(binding, star.Dir, modulePath)
-	if placement := star.claim(position); placement.Layer != graph.LayerUnclassified {
-		return placement
+	if star.role(position) != nil {
+		return Placement{Layer: graph.LayerUnclassified, Star: star.Dir, Entry: position}
 	}
 
 	return Placement{Layer: graph.LayerLeaf, Star: star.Dir, Spoke: position}
 }
 
-// claim places a directory a star's entry names, or reports it
-// unclassified when neither list names it.
+// claim places a directory a star's entry names exactly, or reports it
+// unclassified when no list names it.
 func (this Star) claim(dir string) Placement {
-	for _, role := range starRoles {
-		if slices.Contains(role.entries(this), dir) {
-			return Placement{Layer: role.layer, Star: this.Dir, Entry: dir}
-		}
+	if role := this.role(dir); role != nil {
+		return Placement{Layer: role.layer, Star: this.Dir, Entry: dir}
 	}
 
 	return Placement{Layer: graph.LayerUnclassified, Star: this.Dir}
+}
+
+// role finds the list of a star that names a directory, or nil.
+func (this Star) role(dir string) *starRole {
+	for i, role := range starRoles {
+		if slices.Contains(role.entries(this), dir) {
+			return &starRoles[i]
+		}
+	}
+
+	return nil
+}
+
+// claimed is the placement of the core package an unclassified placement
+// lies beneath.
+func (this Architecture) claimed(placement Placement) Placement {
+	if star := this.star(placement.Star); star != nil {
+		return star.claim(placement.Entry)
+	}
+
+	return placement
 }
 
 // Break names the kind of rule a dependency breaks in a snowflake.
@@ -450,9 +494,9 @@ func (this Star) claim(dir string) Placement {
 //   - to: the placement of the module depended on.
 //
 // Returns:
-//   - result: BreakSideways, BreakOut, BreakIn or BreakContracts; empty
-//     when the dependency is allowed, either end is unclassified, or the
-//     style is not snowflake.
+//   - result: BreakSideways, BreakOut, BreakIn, BreakContracts, BreakEngine
+//     or BreakAssembler; empty when the dependency is allowed, either end is
+//     unclassified, or the style is not snowflake.
 func (this Architecture) Break(from, to Placement) string {
 	if this.Style != StyleSnowflake || from.Layer == graph.LayerUnclassified || to.Layer == graph.LayerUnclassified {
 		return ""
@@ -469,48 +513,79 @@ func (this Architecture) checkSnowflake(from, to Placement) (bool, string) {
 	return kind == "", rule
 }
 
+// Rule texts: each refusal names the rule it breaks.
+const (
+	ruleContracts = "contracts use only contracts of their own star and its ancestors"
+	ruleEngine    = "an engine runs policy over contracts only: it uses the contracts of its own star and its ancestors and the engines of its own star"
+	ruleAssembler = "a spoke never uses an assembler"
+	ruleSideways  = "no dependency runs sideways"
+)
+
 // snowflakeBreak finds the kind of rule a dependency between two placed
 // modules breaks, and the rule's text, or nothing when it is allowed.
 func (this Architecture) snowflakeBreak(from, to Placement) (kind, rule string) {
 	own, theirs := from.Star, to.Star
-	core := isCore(to)
+	around := encloses(theirs, own)
 	switch from.Layer {
+	case graph.LayerContracts:
+		if to.Layer == graph.LayerContracts && around {
+			return "", ""
+		}
+
+		return BreakContracts, this.contractsRule(from, to)
+	case graph.LayerEngine:
+		if to.Layer == graph.LayerContracts && around || to.Layer == graph.LayerEngine && theirs == own {
+			return "", ""
+		}
+
+		return BreakEngine, this.portRule(from, to, ruleEngine)
+	case graph.LayerAssembler:
+		switch {
+		case theirs == own, this.Parent(theirs) == own && isCore(to), to.Layer == graph.LayerContracts && around:
+			return "", ""
+		case above(own, theirs):
+			return BreakIn, this.inRule(from, to)
+		case isCore(to) && above(theirs, own):
+			return BreakOut, this.portRule(from, to, "an assembler uses only the contracts of the stars around its own")
+		}
 	case graph.LayerLeaf:
 		switch {
-		case theirs == own && (core || to.Spoke == from.Spoke):
+		case to.Layer == graph.LayerAssembler:
+			return BreakAssembler, this.portRule(from, to, ruleAssembler+": an assembler hands a spoke what it needs")
+		case theirs == own && (to.Layer == graph.LayerLeaf && to.Spoke == from.Spoke || to.Layer == graph.LayerContracts || to.Layer == graph.LayerEngine):
 			return "", ""
-		case core && above(theirs, own):
-			return BreakOut, this.outRule(from, to)
-		}
-	case graph.LayerContracts:
-		switch {
-		case theirs == own && to.Layer == graph.LayerContracts:
+		case to.Layer == graph.LayerContracts && around:
 			return "", ""
-		case theirs == own && to.Layer == graph.LayerOrchestrator:
-			return BreakContracts, fmt.Sprintf("%s may not depend on %s: contracts never use an orchestrator; declare what it needs in contracts, and let %s implement it", starName(from), starName(to), to.Entry)
-		case to.Layer == graph.LayerLeaf:
-			return BreakContracts, fmt.Sprintf("%s may not depend on %s: contracts never use a spoke; declare what it needs in contracts, and let an orchestrator hand %s in", starName(from), starName(to), to.Spoke)
-		case to.Layer == graph.LayerContracts && (theirs == this.Parent(own) || this.Parent(theirs) == own):
-			return "", ""
-		case above(theirs, own):
-			return BreakOut, this.outRule(from, to)
-		case above(own, theirs):
-			return BreakIn, this.inRule(from, to)
-		}
-	case graph.LayerOrchestrator:
-		switch {
-		case theirs == own, this.Parent(theirs) == own && core, theirs == this.Parent(own) && to.Layer == graph.LayerContracts:
-			return "", ""
-		case above(own, theirs):
-			return BreakIn, this.inRule(from, to)
-		case core && above(theirs, own):
-			return BreakOut, this.outRule(from, to)
+		case to.Layer == graph.LayerEngine && above(theirs, own):
+			return BreakOut, this.portRule(from, to, fmt.Sprintf("a spoke uses the engines of its own star, %s, and only the contracts of the stars around it", own))
 		}
 	default:
 		return "", ""
 	}
 
 	return BreakSideways, this.sidewaysRule(from, to)
+}
+
+// contractsRule words a dependency of contracts on anything but the
+// contracts of their own star and the stars around it.
+func (this Architecture) contractsRule(from, to Placement) string {
+	prefix := fmt.Sprintf("%s may not depend on %s: %s; ", starName(from), starName(to), ruleContracts)
+	switch to.Layer {
+	case graph.LayerContracts:
+		return prefix + fmt.Sprintf("move what it needs into %s, which both may use", this.contractsOf(this.common(from.Star, to.Star)))
+	case graph.LayerLeaf:
+		return prefix + fmt.Sprintf("declare what it needs in contracts, and let an assembler hand %s in", to.Spoke)
+	}
+
+	return prefix + fmt.Sprintf("declare what it needs in contracts, and let %s implement it", to.Entry)
+}
+
+// portRule words a refused dependency that a port in the contracts of the
+// deepest star around both ends would carry instead.
+func (this Architecture) portRule(from, to Placement, broken string) string {
+	declare, hands := this.Handover(from, to)
+	return fmt.Sprintf("%s may not depend on %s: %s; declare a port in %s, implement it in %s, and let %s hand it in",
+		starName(from), starName(to), broken, declare, this.childOf(this.common(from.Star, to.Star), to), hands)
 }
 
 // sidewaysRule words a dependency between modules under two different
@@ -528,65 +603,24 @@ func (this Architecture) sidewaysRule(from, to Placement) string {
 
 	fix := "declare what it needs in " + this.contractsOf(common)
 	if to.Layer != graph.LayerContracts {
-		declare, carriers, hands := this.Handover(from, to)
-		reexport := ""
-		if len(carriers) > 0 {
-			reexport = ", re-export it in " + joinAnd(carriers)
-		}
-
-		fix = fmt.Sprintf("declare a port in %s%s, implement it in %s, and let %s hand it in", declare, reexport, theirs, hands)
+		declare, hands := this.Handover(from, to)
+		fix = fmt.Sprintf("declare a port in %s, implement it in %s, and let %s hand it in", declare, theirs, hands)
 	}
 
-	return fmt.Sprintf("%s may not depend on %s: %s and %s are sibling spokes of star %s, and spokes never depend sideways%s; %s",
-		starName(from), starName(to), mine, theirs, common, suffix, fix)
+	return fmt.Sprintf("%s may not depend on %s: %s and %s are sibling spokes of star %s, and %s%s; %s",
+		starName(from), starName(to), mine, theirs, common, ruleSideways, suffix, fix)
 }
 
-// outRule words a dependency on the core of a star around the depending
-// module's star, past the core it may use.
-func (this Architecture) outRule(from, to Placement) string {
-	own, theirs, parent := from.Star, to.Star, this.Parent(from.Star)
-	prefix := fmt.Sprintf("%s may not depend on %s: ", starName(from), starName(to))
-	if from.Layer == graph.LayerLeaf {
-		reach := "in"
-		if theirs != parent {
-			reach = "down to"
-		}
-
-		prefix += fmt.Sprintf("a spoke may use only the core of its own star, %s, never the core of star %s around it; ", own, theirs)
-		if to.Layer == graph.LayerContracts {
-			return prefix + fmt.Sprintf("re-export what it needs %s %s", reach, this.contractsOf(own))
-		}
-
-		return prefix + fmt.Sprintf("declare what it needs as a port in %s, re-export it %s %s, and let the orchestrators hand %s in", this.contractsOf(theirs), reach, this.contractsOf(own), to.Entry)
-	}
-
-	if theirs == parent {
-		return prefix + fmt.Sprintf("the core of star %s may use the star around it only through its contracts; declare a port for it in %s, and let an orchestrator of star %s hand %s in", own, this.contractsOf(parent), parent, to.Entry)
-	}
-
-	prefix += fmt.Sprintf("the core of star %s reaches only one star out, to %s; ", own, this.contractsOf(parent))
-	if to.Layer == graph.LayerContracts {
-		return prefix + "re-export what it needs there"
-	}
-
-	return prefix + fmt.Sprintf("declare a port for it in %s, re-export it down to %s, and let the orchestrators hand %s in", this.contractsOf(theirs), this.contractsOf(parent), to.Entry)
-}
-
-// inRule words a dependency from a core into a branch of its star, beyond
-// that branch's core.
+// inRule words a dependency from an assembler into a branch of its star,
+// beyond that branch's core.
 func (this Architecture) inRule(from, to Placement) string {
 	branch := this.childOf(from.Star, to)
 	prefix := fmt.Sprintf("%s may not depend on %s: ", starName(from), starName(to))
-	switch {
-	case from.Layer == graph.LayerOrchestrator && to.Star == branch:
-		return prefix + fmt.Sprintf("an orchestrator may use a branch only through its core, and %s is a spoke of branch %s; let %s build it, and use that", to.Spoke, branch, this.builderOf(branch))
-	case from.Layer == graph.LayerOrchestrator:
-		return prefix + fmt.Sprintf("an orchestrator reaches only one star in, to the core of branch %s; let the core of star %s stand for it", branch, branch)
-	case to.Star == branch:
-		return prefix + fmt.Sprintf("contracts may use a branch only through its contracts; declare what it needs in %s", this.contractsOf(branch))
-	default:
-		return prefix + fmt.Sprintf("contracts reach only one star in, to %s; re-export what it needs there", this.contractsOf(branch))
+	if to.Star == branch {
+		return prefix + fmt.Sprintf("an assembler reaches a child branch only through its core, and %s is a spoke of branch %s; let %s build it, and use that", to.Spoke, branch, this.builderOf(branch))
 	}
+
+	return prefix + fmt.Sprintf("an assembler reaches only the cores of its child branches, one star in; let the core of branch %s stand for it", branch)
 }
 
 // starGuidance describes, for people, what a module placed in the star
@@ -598,29 +632,25 @@ func (this Architecture) starGuidance(placement Placement) string {
 		where += ", a branch of " + parent
 	}
 
+	around := ""
+	if ancestors := this.ancestors(dir); len(ancestors) > 0 {
+		around = fmt.Sprintf(" and of the %s around it, %s", plural(len(ancestors), "star", "stars"), joinAnd(ancestors))
+	}
+
 	branches := this.branchesOf(dir)
 	switch placement.Layer {
 	case graph.LayerContracts:
-		parts := []string{"the contracts of star " + dir}
-		if len(branches) > 0 {
-			parts = append(parts, fmt.Sprintf("the contracts of its %s %s", plural(len(branches), "branch", "branches"), joinAnd(branches)))
-		}
-
-		holds := "interfaces, value types and their pure methods, errors and constants"
-		if parent != "" {
-			parts = append(parts, fmt.Sprintf("the contracts of star %s around it", parent))
-			holds = fmt.Sprintf("interfaces, value types and their pure methods, errors and constants, and what its spokes need from star %s, re-exported", parent)
-		}
-
-		return fmt.Sprintf("Contracts %s of %s: %s. They may use %s, never a spoke or an orchestrator.", placement.Entry, where, holds, joinAnd(parts))
-	case graph.LayerOrchestrator:
-		parts := []string{"the core and the leaves of star " + dir}
+		return fmt.Sprintf("Contracts %s of %s: interfaces, value types and their pure methods, errors and constants, importing only the standard library and declaring no package-level variable but sentinel errors. They may use the contracts of star %s%s, never a spoke, an engine or an assembler.", placement.Entry, where, dir, around)
+	case graph.LayerEngine:
+		return fmt.Sprintf("Engine %s of %s: runs policy over contracts. It may use the contracts of star %s%s and the engines of star %s, never a spoke or an assembler.", placement.Entry, where, dir, around, dir)
+	case graph.LayerAssembler:
+		parts := []string{"the core and the spokes of star " + dir}
 		if len(branches) > 0 {
 			parts = append(parts, fmt.Sprintf("the %s of its %s %s", plural(len(branches), "core", "cores"), plural(len(branches), "branch", "branches"), joinAnd(branches)))
 		}
 
-		if parent != "" {
-			parts = append(parts, fmt.Sprintf("the contracts of star %s around it", parent))
+		if ancestors := this.ancestors(dir); len(ancestors) > 0 {
+			parts = append(parts, fmt.Sprintf("the contracts of the %s around it, %s", plural(len(ancestors), "star", "stars"), joinAnd(ancestors)))
 		}
 
 		ending := "nothing else"
@@ -628,35 +658,38 @@ func (this Architecture) starGuidance(placement Placement) string {
 			ending = "never a branch's spokes"
 		}
 
-		return fmt.Sprintf("Orchestrator %s of %s: wires its star. It may use %s, %s.", placement.Entry, where, joinAnd(parts), ending)
+		return fmt.Sprintf("Assembler %s of %s: wires its star. It may use %s, %s; no spoke may use it.", placement.Entry, where, joinAnd(parts), ending)
 	case graph.LayerLeaf:
-		if star := this.star(dir); star == nil || len(star.Contracts)+len(star.Orchestrators) == 0 {
-			return fmt.Sprintf("Leaf %s of %s: may use only itself, since star %s has no core yet; list its contracts and orchestrators under stars in treaty.yaml.", placement.Spoke, where, dir)
+		star := this.star(dir)
+		if (star == nil || len(star.Contracts)+len(star.Engines) == 0) && parent == "" {
+			return fmt.Sprintf("Leaf %s of %s: may use only itself, since star %s has no contracts or engines yet; list them under stars in treaty.yaml.", placement.Spoke, where, dir)
 		}
 
-		if parent == "" {
-			return fmt.Sprintf("Leaf %s of %s: may use itself and the core of star %s, never a sibling spoke. To use a sibling, depend on a port in the contracts of star %s and let an orchestrator of star %s hand the sibling in.",
-				placement.Spoke, where, dir, dir, dir)
+		uses := "the contracts and engines of star " + dir
+		if ancestors := this.ancestors(dir); len(ancestors) > 0 {
+			uses += fmt.Sprintf(" and the contracts of the %s around it, %s", plural(len(ancestors), "star", "stars"), joinAnd(ancestors))
 		}
 
-		return fmt.Sprintf("Leaf %s of %s: may use itself and the core of star %s, never a sibling spoke or the core of star %s around it. To use a sibling, depend on a port in the contracts of star %s and let an orchestrator of star %s hand the sibling in; what it needs from star %s comes re-exported through those contracts.",
-			placement.Spoke, where, dir, parent, dir, dir, parent)
+		return fmt.Sprintf("Leaf %s of %s: may use itself, %s, never an assembler or a sibling spoke. A leaf declares the interfaces it consumes; to use a sibling, depend on a port in the contracts of star %s and let an assembler of star %s hand the sibling in.",
+			placement.Spoke, where, uses, dir, dir)
 	}
 
 	switch {
+	case placement.Entry != "":
+		return fmt.Sprintf("Unclassified: it lies beneath %s of %s, and a core role covers only the package an entry names; list it under that star's contracts, assemblers or engines, or move it out of %s. Until then its dependencies are not checked.", starName(this.claimed(placement)), where, placement.Entry)
 	case placement.Spoke != "":
 		return fmt.Sprintf("Unclassified: %s holds a package where treaty.yaml's stars look through it, so its dependencies are not checked.", placement.Spoke)
 	case placement.Star != "":
-		return fmt.Sprintf("Unclassified: the own package of star %s holds code, so treaty.yaml must list it in that star's contracts or orchestrators; until then its dependencies are not checked.", placement.Star)
+		return fmt.Sprintf("Unclassified: the own package of star %s holds code, so treaty.yaml must list it in that star's contracts, assemblers or engines; until then its dependencies are not checked.", placement.Star)
 	}
 
 	return "Unclassified: treaty.yaml places this module nowhere, so its dependencies are not checked."
 }
 
-// starMayUse lists what a module placed in the star tree may depend on:
-// its own leaf, its star's contracts and, but for contracts, its star's
-// orchestrators, its star's leaves, its branches' cores and its parent's
-// contracts, in that order.
+// starMayUse lists what a module placed in the star tree may depend on, in
+// this order: its own leaf; its star's contracts, and for an assembler its
+// whole core and its leaves, or for a leaf or an engine its engines; for an
+// assembler its branches' cores; and the contracts of the stars around it.
 func (this Architecture) starMayUse(placement Placement) []string {
 	star := this.star(placement.Star)
 	if star == nil || placement.Layer == graph.LayerUnclassified {
@@ -664,42 +697,35 @@ func (this Architecture) starMayUse(placement Placement) []string {
 	}
 
 	var result []string
-	core := func(star *Star, roles ...starRole) {
-		for _, role := range roles {
-			for _, entry := range role.entries(*star) {
-				result = append(result, role.layer+" "+entry)
+	core := func(star *Star, layers ...string) {
+		for _, role := range starRoles {
+			if slices.Contains(layers, role.layer) {
+				for _, entry := range role.entries(*star) {
+					result = append(result, role.layer+" "+entry)
+				}
 			}
 		}
 	}
 
-	if placement.Layer == graph.LayerLeaf {
+	all := []string{graph.LayerContracts, graph.LayerAssembler, graph.LayerEngine}
+	switch placement.Layer {
+	case graph.LayerLeaf:
 		result = append(result, starName(placement))
-	}
-
-	if placement.Layer == graph.LayerContracts {
-		core(star, starRoles[0])
-	} else {
-		core(star, starRoles...)
-	}
-
-	if placement.Layer == graph.LayerLeaf {
-		return result
-	}
-
-	if placement.Layer == graph.LayerOrchestrator {
+		core(star, graph.LayerContracts, graph.LayerEngine)
+	case graph.LayerContracts:
+		core(star, graph.LayerContracts)
+	case graph.LayerEngine:
+		core(star, graph.LayerContracts, graph.LayerEngine)
+	case graph.LayerAssembler:
+		core(star, all...)
 		result = append(result, "the leaves of star "+star.Dir)
-	}
-
-	for _, branch := range this.branchesOf(star.Dir) {
-		if placement.Layer == graph.LayerOrchestrator {
-			core(this.star(branch), starRoles...)
-		} else {
-			core(this.star(branch), starRoles[0])
+		for _, branch := range this.branchesOf(star.Dir) {
+			core(this.star(branch), all...)
 		}
 	}
 
-	if parent := this.star(this.Parent(star.Dir)); parent != nil {
-		core(parent, starRoles[0])
+	for _, ancestor := range this.ancestors(star.Dir) {
+		core(this.star(ancestor), graph.LayerContracts)
 	}
 
 	return result
@@ -725,9 +751,9 @@ func (this Architecture) starSummary() string {
 		stars = append(stars, fmt.Sprintf("%s (%s)", star.Dir, strings.Join(parts, "; ")))
 	}
 
-	return "Rules (snowflake): the repository is a star of stars. Each star has a core, holding its contracts and its orchestrators, and spokes, its other children that hold a package, found by looking through directories that hold none: a spoke is a leaf, or a branch, a star of its own. " +
-		"A spoke may use only its own star's core. Contracts may use the contracts of their own star, of the star around it and of its branches, never a spoke and never an orchestrator; an orchestrator may use its own star's core, its star's leaves, its branches' cores and the contracts of the star around it, never a branch's spokes. " +
-		"Nothing else: no dependency runs sideways, not even between the cores of sibling branches. Stars: " + strings.Join(stars, ", ") + "."
+	return "Rules (snowflake): the repository is a star of stars. Each star has a core, holding its contracts, its assemblers and its engines, and spokes, its other children that hold a package, found by looking through directories that hold none: a spoke is a leaf, or a branch, a star of its own. A core role covers exactly the package an entry names; a package beneath one that no entry names is unclassified. " +
+		"Contracts use only contracts of their own star and its ancestors. An engine runs policy over contracts only: those contracts and its own star's engines. An assembler composes: its own star's core and spokes, each child branch's core and the contracts of its ancestors. A spoke may use its own leaf, its star's contracts and engines and the contracts of every ancestor; a spoke never uses an assembler. " +
+		"Nothing else: no dependency runs sideways, not even between the cores of sibling branches. A leaf declares the interfaces it consumes; spokes use ancestor contracts directly; there are no re-exports. Stars: " + strings.Join(stars, ", ") + "."
 }
 
 // validateStars checks a snowflake architecture: no setting of another
@@ -736,7 +762,7 @@ func (this Architecture) starSummary() string {
 // holding no star and no other entry, and listed once.
 func (this Architecture) validateStars() error {
 	if len(this.Composition) > 0 {
-		return fmt.Errorf("%w: composition does not apply to the snowflake architecture: orchestrators do its work, so list main packages, factories and the public API among the orchestrators of their star", ErrArchitecture)
+		return fmt.Errorf("%w: composition does not apply to the snowflake architecture: assemblers do its work, so list main packages, factories and the public API among the assemblers of their star", ErrArchitecture)
 	}
 
 	if len(this.Layers) > 0 || len(this.Shared) > 0 || len(this.Boundaries) > 0 || len(this.Public) > 0 {
@@ -744,7 +770,7 @@ func (this Architecture) validateStars() error {
 	}
 
 	if len(this.Stars) == 0 {
-		return fmt.Errorf("%w: the snowflake architecture needs its stars: declare the repository, \".\", with its contracts and orchestrators, such as .: {contracts: [\"internal/contracts\"], orchestrators: [\".\"]}", ErrArchitecture)
+		return fmt.Errorf("%w: the snowflake architecture needs its stars: declare the repository, \".\", with its contracts, assemblers and engines, such as .: {contracts: [\"internal/contracts\"], assemblers: [\".\"]}", ErrArchitecture)
 	}
 
 	seen := map[string]bool{}
@@ -783,8 +809,8 @@ func (this Architecture) validateStars() error {
 					return fmt.Errorf("%w: %s entry %q of star %s is listed twice", ErrArchitecture, role.list, entry, star.Dir)
 				}
 
-				if role.layer == graph.LayerOrchestrator && slices.Contains(star.Contracts, entry) {
-					return fmt.Errorf("%w: %q is listed under both the contracts and the orchestrators of star %s; a core package is one or the other", ErrArchitecture, entry, star.Dir)
+				if other := star.role(entry); other != nil && other.list != role.list {
+					return fmt.Errorf("%w: %q is listed under both the %s and the %s of star %s; a core package has one role", ErrArchitecture, entry, other.list, role.list, star.Dir)
 				}
 			}
 		}
@@ -799,8 +825,8 @@ func (this Architecture) validateStars() error {
 const wildcards = "*?"
 
 // validateEntry checks one entry of a star: a clean directory, not a glob,
-// inside the star and outside its branches, holding no star and no other
-// entry of the star.
+// inside the star and outside its branches, holding no star. An entry may
+// lie beneath another, since each names exactly one package.
 func (this Architecture) validateEntry(star Star, role starRole, entry string) error {
 	if entry == star.Dir {
 		return nil
@@ -824,14 +850,6 @@ func (this Architecture) validateEntry(star Star, role starRole, entry string) e
 	for _, other := range this.ordered() {
 		if other.Dir != star.Dir && encloses(entry, other.Dir) {
 			return fmt.Errorf("%w: %s entry %q of star %s holds star %s; a core package is one package and those nested in it, never a star", ErrArchitecture, role.list, entry, star.Dir, other.Dir)
-		}
-	}
-
-	for _, each := range starRoles {
-		for _, inner := range each.entries(star) {
-			if inner != entry && inner != star.Dir && encloses(entry, inner) {
-				return fmt.Errorf("%w: %s entry %q of star %s holds entry %s, which it covers already; drop the inner one", ErrArchitecture, role.list, entry, star.Dir, inner)
-			}
 		}
 	}
 
@@ -873,7 +891,7 @@ func (this Architecture) position(binding *starBinding, star, modulePath string)
 // a star's own directory.
 func (this Architecture) entry(dir string) bool {
 	for _, star := range this.Stars {
-		if star.Dir != dir && (slices.Contains(star.Contracts, dir) || slices.Contains(star.Orchestrators, dir)) {
+		if star.Dir != dir && star.role(dir) != nil {
 			return true
 		}
 	}
@@ -886,6 +904,19 @@ func (this Architecture) entry(dir string) bool {
 func (this *starBinding) firstHolding(outer, inner string) string {
 	for _, dir := range descend(outer, inner) {
 		if dir != inner && this.holds[dir] {
+			return dir
+		}
+	}
+
+	return ""
+}
+
+// firstSpoke finds the outermost directory strictly between a star and one
+// of its entries that holds a module and is no entry itself: the spoke the
+// entry would lie in. An entry beneath another entry lies in no spoke.
+func (this *starBinding) firstSpoke(architecture Architecture, star, entry string) string {
+	for _, dir := range descend(star, entry) {
+		if dir != entry && this.holds[dir] && !architecture.entry(dir) {
 			return dir
 		}
 	}
@@ -947,15 +978,15 @@ func (this Architecture) branchesOf(dir string) []string {
 	return result
 }
 
-// builderOf names an orchestrator of a star for rule text: the star's own,
-// or a new one when it lists none, which ends in a comma since it closes
-// an aside.
+// builderOf names an assembler of a star for rule text: the star's own, or
+// a new one when it lists none, which ends in a comma since it closes an
+// aside.
 func (this Architecture) builderOf(dir string) string {
-	if star := this.star(dir); star != nil && len(star.Orchestrators) > 0 {
-		return fmt.Sprintf("an orchestrator of star %s (%s)", dir, joinAnd(star.Orchestrators))
+	if star := this.star(dir); star != nil && len(star.Assemblers) > 0 {
+		return fmt.Sprintf("an assembler of star %s (%s)", dir, joinAnd(star.Assemblers))
 	}
 
-	return fmt.Sprintf("a new orchestrator of star %s, such as %s,", dir, path.Join(dir, "assembly"))
+	return fmt.Sprintf("a new assembler of star %s, such as %s,", dir, path.Join(dir, "assembly"))
 }
 
 // childOf names the child of a star that holds a placement in the star
@@ -1085,7 +1116,7 @@ func encloses(dir, inner string) bool {
 
 // isCore reports whether a placement is in a star's core region.
 func isCore(placement Placement) bool {
-	return placement.Layer == graph.LayerContracts || placement.Layer == graph.LayerOrchestrator
+	return placement.Layer == graph.LayerContracts || placement.Layer == graph.LayerAssembler || placement.Layer == graph.LayerEngine
 }
 
 // joinAnd lists words as prose: a, b and c.
@@ -1121,10 +1152,10 @@ func relative(dir, inner string) string {
 }
 
 // starName describes a snowflake placement for rule text: contracts E,
-// orchestrator E or leaf L.
+// assembler E, engine E or leaf L.
 func starName(placement Placement) string {
 	switch placement.Layer {
-	case graph.LayerContracts, graph.LayerOrchestrator:
+	case graph.LayerContracts, graph.LayerAssembler, graph.LayerEngine:
 		return placement.Layer + " " + placement.Entry
 	case graph.LayerLeaf:
 		return "leaf " + placement.Spoke

@@ -55,9 +55,9 @@ var (
 //   - Shared code may be used by every boundary, and may itself use only
 //     shared code.
 //   - Stars are the snowflake style's, in the order treaty.yaml lists
-//     them, each a directory and the entries of its contracts and its
-//     orchestrators: see Star. A snowflake has no composition: its
-//     orchestrators do that work. Bind fits it to one tree's modules, so
+//     them, each a directory and the entries of its contracts, its
+//     assemblers and its engines: see Star. A snowflake has no
+//     composition: its assemblers do that work. Bind fits it to one tree's modules, so
 //     placement can look through directories that hold none; copies share
 //     the binding.
 type Architecture struct {
@@ -89,10 +89,11 @@ type Layer struct {
 }
 
 // Placement is where the architecture puts one module. For the snowflake
-// style, Layer is contracts, orchestrator or leaf, Star is the directory of
+// style, Layer is contracts, assembler, engine or leaf, Star is the directory of
 // the star holding the module, Spoke is its leaf's directory, for a leaf,
-// and Entry is the contracts or orchestrators entry that claims it, for a
-// core package. An unclassified module has its star, and a misfit, one a
+// and Entry is the contracts, assemblers or engines entry that claims it,
+// for a core package, or for an unclassified package the core package it
+// lies beneath. An unclassified module has its star, and a misfit, one a
 // lenient binding looks through, also its directory as Spoke.
 type Placement struct {
 	Layer     string
@@ -472,7 +473,7 @@ type Reason struct {
 //   - Composition may also be listed under layers for hexagonal; its path
 //     is composition either way.
 //   - For the snowflake style, a core package has the entry that claims
-//     it, at stars, the star's directory and contracts or orchestrators. A
+//     it, at stars, the star's directory and contracts, assemblers or engines. A
 //     leaf is placed by its directory, so its reason has the star's key and
 //     an empty glob.
 //
@@ -520,7 +521,12 @@ func (this Architecture) Reasons(modulePath string) (result []Reason) {
 
 		for _, role := range starRoles {
 			if placement.Layer == role.layer {
-				return []Reason{{Path: []string{"stars", placement.Star, role.list}, Glob: placement.Entry}}
+				list := role.list
+				if star := this.star(placement.Star); star != nil && star.Deprecated && role.layer == graph.LayerAssembler {
+					list = "orchestrators"
+				}
+
+				return []Reason{{Path: []string{"stars", placement.Star, list}, Glob: placement.Entry}}
 			}
 		}
 

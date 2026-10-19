@@ -184,45 +184,48 @@ func placeable(architecture rules.Architecture, modulePath string, placement rul
 }
 
 // starPlaceable reports whether a snowflake has room for a placement of a
-// module. A module may move into the contracts or the orchestrators of its
-// own, innermost star, when it is the top of its position or the star's own
-// package, between the two lists, or out of the core to its own spoke. A
-// spoke is its directory, so a module cannot move to another spoke without
-// moving its files, and a star's own package is always in its core.
+// module. A module may move into the contracts, the assemblers or the
+// engines of its own, innermost star, when it is the top of its position, a
+// package beneath a core package or the star's own package, between those
+// lists, or out of the core to its own spoke. A spoke is its directory, so
+// a module cannot move to another spoke without moving its files, a
+// package beneath a core package is never a spoke, and a star's own package
+// is always in its core.
 func starPlaceable(architecture rules.Architecture, modulePath string, placement rules.Placement) error {
 	own := architecture.Innermost(modulePath)
 	position := architecture.Position(modulePath)
 	nested := modulePath != own && position != modulePath
+	underCore := nested && architecture.Resolve(position).Entry == position
 	switch {
 	case placement.Side != "" || placement.Boundary != "" || placement.Public:
-		return fmt.Errorf("%w: a snowflake move sets a star's contracts, its orchestrators or a spoke, not a side, boundary or public API", ErrPlacement)
+		return fmt.Errorf("%w: a snowflake move sets a star's contracts, assemblers or engines or a spoke, not a side, boundary or public API", ErrPlacement)
 	case placement.Layer == graph.LayerComposition:
-		return fmt.Errorf("%w: composition does not apply to the snowflake architecture: orchestrators do its work, so drop the module on its star's orchestrators", ErrPlacement)
-	case placement.Layer == graph.LayerContracts, placement.Layer == graph.LayerOrchestrator:
+		return fmt.Errorf("%w: composition does not apply to the snowflake architecture: assemblers do its work, so drop the module on its star's assemblers", ErrPlacement)
+	case placement.Layer == graph.LayerContracts, placement.Layer == graph.LayerAssembler, placement.Layer == graph.LayerEngine:
 		switch {
 		case !slices.ContainsFunc(architecture.Stars, func(star rules.Star) bool { return star.Dir == placement.Star }):
 			return fmt.Errorf("%w: there is no star %q", ErrPlacement, placement.Star)
 		case placement.Star != own:
 			return fmt.Errorf("%w: a core package is a child of its own star: drop it on the core of star %s", ErrPlacement, own)
-		case nested:
-			return fmt.Errorf("%w: %s holds it, and a core package is a whole child of its star: move %s into the core instead", ErrPlacement, position, position)
+		case nested && !underCore:
+			return fmt.Errorf("%w: spoke %s holds it, and a core package is never part of a spoke: move %s into the core instead", ErrPlacement, position, position)
 		}
 
 		return nil
 	case placement.Layer == graph.LayerLeaf:
 		switch {
 		case modulePath == own:
-			return fmt.Errorf("%w: a star's own package is always in its core: drop it on its contracts or orchestrators", ErrPlacement)
+			return fmt.Errorf("%w: a star's own package is always in its core: drop it on its contracts, assemblers or engines", ErrPlacement)
+		case underCore:
+			return fmt.Errorf("%w: it lies beneath core package %s, so it is never a spoke: list it in the core, or move its files out of %s", ErrPlacement, position, position)
 		case placement.Spoke != position:
 			return fmt.Errorf("%w: a spoke is its directory: move the package's files into %s to put it there", ErrPlacement, placement.Spoke)
-		case nested && architecture.Resolve(modulePath).Layer != graph.LayerLeaf:
-			return fmt.Errorf("%w: %s holds it, and a core package is a whole child of its star: move %s out of the core instead", ErrPlacement, position, position)
 		}
 
 		return nil
 	}
 
-	return fmt.Errorf("%w: in the snowflake architecture a module moves into its star's contracts or orchestrators, or out to its own spoke, not %q", ErrPlacement, placement.Layer)
+	return fmt.Errorf("%w: in the snowflake architecture a module moves into its star's contracts, assemblers or engines, or out to its own spoke, not %q", ErrPlacement, placement.Layer)
 }
 
 // RenameBoundary renames a boundary in treaty.yaml and rebuilds, so the map,

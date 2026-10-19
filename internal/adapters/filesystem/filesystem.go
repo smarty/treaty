@@ -483,7 +483,7 @@ func (this configFile) architecture() (result rules.Architecture, err error) {
 	}
 
 	if this.Stars.Kind != 0 && result.Style == rules.StyleSnowflake && this.Stars.Kind != yaml.MappingNode {
-		return result, fmt.Errorf("%w: stars must map each star's directory to its contracts and orchestrators", rules.ErrArchitecture)
+		return result, fmt.Errorf("%w: stars must map each star's directory to its contracts, assemblers and engines", rules.ErrArchitecture)
 	}
 
 	for i := 0; result.Style == rules.StyleSnowflake && i+1 < len(this.Stars.Content); i += 2 {
@@ -561,13 +561,16 @@ func (this configFile) architecture() (result rules.Architecture, err error) {
 	return result, result.Validate()
 }
 
-// decodeStar reads one star's value: a mapping of contracts and
-// orchestrators to lists of directories, or nothing yet, written as null or
-// {}. Its entries are kept as written, for Validate to judge.
+// decodeStar reads one star's value: a mapping of contracts, assemblers and
+// engines to lists of directories, or nothing yet, written as null or {}.
+// Its entries are kept as written, for Validate to judge.
 //
 // Notes:
+//   - orchestrators, the second snowflake's name for assemblers, is read
+//     as assemblers and marks the star Deprecated, so a note says to
+//     rename it. A star may not list both.
 //   - A star written as a list is the earlier shape, from before a core
-//     held contracts and orchestrators, so its error says how to split it.
+//     held named lists, so its error says how to split it.
 func decodeStar(dir string, star *yaml.Node) (result rules.Star, err error) {
 	result.Dir = dir
 	if null(star) {
@@ -580,17 +583,25 @@ func decodeStar(dir string, star *yaml.Node) (result rules.Star, err error) {
 	}
 
 	if star.Kind == yaml.SequenceNode {
-		return result, fmt.Errorf("line %d: %w: %s is a list, the earlier shape of a star; split its entries into contracts and orchestrators, such as %s: {contracts: [%q], orchestrators: [%q]}", star.Line, rules.ErrArchitecture, starPath(dir), dir, contracts, dir)
+		return result, fmt.Errorf("line %d: %w: %s is a list, the earlier shape of a star; split its entries into contracts, assemblers and engines, such as %s: {contracts: [%q], assemblers: [%q]}", star.Line, rules.ErrArchitecture, starPath(dir), dir, contracts, dir)
 	}
 
 	if star.Kind != yaml.MappingNode {
-		return result, fmt.Errorf("line %d: %w: %s must map contracts and orchestrators to lists of directories, such as %s: {contracts: [%q]}", star.Line, rules.ErrArchitecture, starPath(dir), dir, contracts)
+		return result, fmt.Errorf("line %d: %w: %s must map contracts, assemblers and engines to lists of directories, such as %s: {contracts: [%q]}", star.Line, rules.ErrArchitecture, starPath(dir), dir, contracts)
+	}
+
+	if legacy := value(star, "orchestrators"); legacy != nil {
+		if value(star, "assemblers") != nil {
+			return result, fmt.Errorf("line %d: %w: %s lists both assemblers and orchestrators, the earlier name for assemblers; merge orchestrators into assemblers", legacy.Line, rules.ErrArchitecture, starPath(dir))
+		}
+
+		result.Deprecated = true
 	}
 
 	for _, list := range []struct {
 		key, example string
 		entries      *[]string
-	}{{"contracts", contracts, &result.Contracts}, {"orchestrators", dir, &result.Orchestrators}} {
+	}{{"contracts", contracts, &result.Contracts}, {"assemblers", dir, &result.Assemblers}, {"orchestrators", dir, &result.Assemblers}, {"engines", path.Join(dir, "engine"), &result.Engines}} {
 		node := value(star, list.key)
 		if node == nil || null(node) {
 			continue

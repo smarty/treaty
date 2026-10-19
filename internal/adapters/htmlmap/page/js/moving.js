@@ -11,9 +11,14 @@
 // another layer, or for vertical and modular in another boundary, shared or
 // composition, treaty.yaml is edited to move it there, and the rules and
 // checks follow. In a snowflake a spoke is its directory, so a module moves
-// only into its star's contracts or orchestrators, between them, or out of
-// its star's core. Escape puts it back.
+// only into its star's contracts, assemblers or engines, between them, or
+// out of its star's core. Escape puts it back.
 let carry = null;
+// shiftHeld is whether Shift is down, which turns a drop on a snowflake
+// star's band of assemblers and engines into the other role.
+let shiftHeld = false;
+addEventListener("keydown", ev => { if (ev.key === "Shift") shiftHeld = true; });
+addEventListener("keyup", ev => { if (ev.key === "Shift") shiftHeld = false; });
 function pickUp(id, clientX, clientY, pointerId) {
   const node = mapEl.querySelector(`[data-module="${CSS.escape(id)}"]`), p = D.layout.modules[id];
   if (!node || !p || !drag || drag.moved) return;
@@ -23,7 +28,7 @@ function pickUp(id, clientX, clientY, pointerId) {
   const at = toMap(clientX, clientY);
   carry = { id, node, from: bandOf(id), start: { x: p.x, y: p.y }, grab: { x: at.x - p.x, y: at.y - p.y }, at: { x: p.x, y: p.y }, target: null };
   liftCarried();
-  const starry = STAR_STYLES.includes(D.architecture), elsewhere = LAYERED_STYLES.includes(D.architecture) ? "in another layer" : starry ? "on its star's contracts, its orchestrators or its own spoke" : "in another boundary, shared or composition";
+  const starry = STAR_STYLES.includes(D.architecture), elsewhere = LAYERED_STYLES.includes(D.architecture) ? "in another layer" : starry ? "on its star's contracts, the band of its assemblers and engines or its own spoke" : "in another boundary, shared or composition";
   setStatus(`Moving ${(modules.get(id) || {}).label || id}: drop it in its own ${starry ? "region" : "area"} to place it, or ${elsewhere} to move it there in treaty.yaml · Esc puts it back`);
   moveCarry(clientX, clientY);
 }
@@ -51,7 +56,7 @@ function moveCarry(clientX, clientY) {
 // dropVerdict says what dropping a module from one band onto another does.
 function dropVerdict(from, to) {
   if (!to) return { ok: false, text: "Drop it inside a band to place it" };
-  if (to.key === from.key) return { ok: true, move: false, text: "Place it here" };
+  if (to.key === from.key && !(to.layer === "band" && shiftHeld)) return { ok: true, move: false, text: to.layer === "band" ? "Place it here · hold Shift to switch it between assembler and engine" : "Place it here" };
   const previewing = live.state && live.state.view && live.state.view.architecture !== live.state.view.configured;
   if (previewing) return { ok: false, text: "This is a preview; keep or adopt it before moving modules between layers" };
   if (STAR_STYLES.includes(D.architecture)) return starVerdict(from, to);
@@ -70,28 +75,37 @@ function boundedVerdict(from, to) {
 }
 // starVerdict says what a drop does in a snowflake, where a spoke is its
 // directory, decided from the module's own star, spoke and entry: the top
-// of a position, or its star's own package, moves into the contracts or the
-// orchestrators of its star, or between them; a core package other than its
-// star's own moves out of the core to its own spoke. A core package has no
-// leaf ring of its own, so its star's backdrop stands for that spoke.
+// of a position, a package beneath a core package, or its star's own
+// package moves into the contracts, the assemblers or the engines of its
+// star, or between them; a core package other than its star's own moves out
+// of the core to its own spoke. The band around the contracts holds the
+// assemblers and the engines: a drop there makes an assembler, or with Shift
+// an engine, of a module from outside the band, and with Shift switches one
+// already in it to the other role. A core package has no leaf ring of its
+// own, so its star's backdrop stands for that spoke.
 function starVerdict(from, to) {
   const m = modules.get(carry.id) || {}, star = m.star || "", own = !!star && m.path === star;
-  const position = m.layer === "leaf" ? m.spoke : m.core_entry || "", top = own || m.path === position;
-  const core = layer => layer === "contracts" || layer === "orchestrator", list = layer => layer === "contracts" ? "contracts" : "orchestrators";
+  const beneath = m.layer === "unclassified" && !!m.core_entry;
+  const position = m.layer === "leaf" ? m.spoke : m.core_entry || "", top = own || beneath || m.path === position;
+  const core = layer => STAR_CORE.includes(layer) || layer === "band", list = layer => STAR_LISTS[layer];
   if (core(to.layer)) {
+    const banded = from.layer === "assembler" || from.layer === "engine";
+    const layer = to.layer !== "band" ? to.layer : banded ? (shiftHeld ? (from.layer === "assembler" ? "engine" : "assembler") : from.layer) : shiftHeld ? "engine" : "assembler";
+    const target = { ...to, layer, key: layer + ":" + to.star, label: `the ${list(layer)} of star ${to.star}` };
     if (to.star !== star) return { ok: false, text: `A core package is a child of its own star: drop it on the core of star ${star}` };
-    if (!top) return { ok: false, text: `${position} holds it, and a core package is a whole child of its star: move ${position} into the core instead` };
-    if (core(from.layer)) return { ok: true, move: true, text: `Move from the ${list(from.layer)} to the ${list(to.layer)} of star ${star} in treaty.yaml` };
-    return { ok: true, move: true, text: to.layer === "contracts" ? `Move into the contracts of star ${star} in treaty.yaml` : `Move among the orchestrators of star ${star} in treaty.yaml` };
+    if (!top) return { ok: false, text: `Spoke ${position} holds it, and a core package is never part of a spoke: move ${position} into the core instead` };
+    if (core(from.layer)) return { ok: true, move: true, text: `Move from the ${list(from.layer)} to the ${list(layer)} of star ${star} in treaty.yaml`, target };
+    return { ok: true, move: true, text: layer === "contracts" ? `Move into the contracts of star ${star} in treaty.yaml` : `Move among the ${list(layer)} of star ${star} in treaty.yaml`, target };
   }
   const spoke = to.layer === "leaf" ? to.spoke : to.layer === "star" && to.star === star && core(from.layer) ? position : "";
   if (spoke) {
-    if (own) return { ok: false, text: "A star's own package is always in its core: drop it on its contracts or orchestrators" };
+    if (own) return { ok: false, text: "A star's own package is always in its core: drop it on its contracts, assemblers or engines" };
+    if (beneath) return { ok: false, text: `It lies beneath core package ${position}, so it is never a spoke: list it in the core, or move its files out of ${position}` };
     if (from.layer === "leaf" || spoke !== position) return { ok: false, text: `A spoke is its directory: move the package's files into ${spoke} to put it there` };
-    if (!top) return { ok: false, text: `${position} holds it, and a core package is a whole child of its star: move ${position} out of the core instead` };
+    if (!top) return { ok: false, text: `Spoke ${position} holds it, and a core package is never part of a spoke: move ${position} out of the core instead` };
     return { ok: true, move: true, text: `Take it out of the core of star ${star} in treaty.yaml`, target: { ...to, layer: "leaf", star, spoke, label: `leaf ${spoke}` } };
   }
-  return { ok: false, text: "Drop it on its star's contracts, its orchestrators or its own spoke" };
+  return { ok: false, text: "Drop it on its star's contracts, the band of its assemblers and engines, or its own spoke" };
 }
 function dropCarry(clientX, clientY) {
   moveCarry(clientX, clientY);
@@ -168,13 +182,14 @@ function placeMoved() {
 function inHex(x, y, r) { const h = r * Math.sqrt(3) / 2; return Math.abs(y) <= h && Math.abs(x) * Math.sqrt(3) / 2 + Math.abs(y) / 2 <= h; }
 // bandOf is the band a module belongs to: its layer, and its side on a
 // hexagonal adapter ring; in a snowflake, its star's contracts, its star's
-// orchestrators or its leaf;
+// assemblers or engines, or its leaf;
 // for the architectures that place modules by directory, the area its
 // computed position lies in.
 function bandOf(id) {
   const m = modules.get(id) || {}, p = (D.layout.computed || D.layout.modules)[id];
   if (STAR_STYLES.includes(D.architecture)) {
-    if (m.layer === "contracts" || m.layer === "orchestrator") return { key: m.layer + ":" + m.star, layer: m.layer, star: m.star, spoke: "" };
+    if (m.layer === "contracts") return { key: "contracts:" + m.star, layer: m.layer, star: m.star, spoke: "" };
+    if (STAR_CORE.includes(m.layer)) return { key: "band:" + m.star, layer: m.layer, star: m.star, spoke: "" };
     if (m.layer === "leaf") return { key: "leaf:" + m.spoke, layer: "leaf", star: m.star, spoke: m.spoke };
     return { key: "unclassified", layer: "unclassified", star: m.star || "", spoke: "" };
   }
@@ -212,7 +227,8 @@ function bandAt(x, y) {
 }
 // starBandAt names the snowflake region under a map point: the smallest
 // ring whose hexagon holds it, a star's contracts, the band of its
-// orchestrators between its contracts and its core's outline, a leaf or a
+// assemblers and engines between its contracts and its core's outline, a
+// leaf or a
 // star's backdrop, or unclassified outside them all.
 function starBandAt(rings, x, y) {
   let best = -1;
@@ -224,7 +240,7 @@ function starBandAt(rings, x, y) {
   if (best < 0) return { key: "unclassified", layer: "unclassified", star: "", spoke: "", label: "unclassified", backdrop: "" };
   const ring = rings[best], backdrop = "ring:" + best;
   if (ring.layer === "contracts") return { key: "contracts:" + ring.star, layer: "contracts", star: ring.star, spoke: "", label: `the contracts of star ${ring.star}`, backdrop };
-  if (ring.layer === "core") return { key: "orchestrator:" + ring.star, layer: "orchestrator", star: ring.star, spoke: "", label: `the orchestrators of star ${ring.star}`, backdrop };
+  if (ring.layer === "core") return { key: "band:" + ring.star, layer: "band", star: ring.star, spoke: "", label: `the assemblers and engines of star ${ring.star}`, backdrop };
   if (ring.layer === "leaf") return { key: "leaf:" + ring.spoke, layer: "leaf", star: ring.star, spoke: ring.spoke, label: `leaf ${ring.spoke}`, backdrop };
   return { key: "star:" + ring.star, layer: "star", star: ring.star, spoke: "", label: `star ${ring.star}`, backdrop };
 }

@@ -63,6 +63,7 @@ var RuleNames = []struct{ Name, Kind string }{
 	{"dependency_cycles", rules.FindingCycle},
 	{"unclassified", rules.FindingUnclassified},
 	{"ambiguous_boundaries", rules.FindingAmbiguous},
+	{"impure_contracts", rules.FindingImpure},
 }
 
 // Config is the parsed treaty.yaml.

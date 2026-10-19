@@ -180,8 +180,10 @@ function drawReferences(svg, rel) {
     }
     // Composition wires adapters into the core: a double outline marks the
     // only modules allowed to depend on adapters. In a snowflake composition
-    // is orchestration, so the outline marks the orchestrators.
-    if (m.layer === "composition" || starry && m.layer === "orchestrator") el("polygon", { points: hexPoints(p.x, p.y, S * 0.84).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--hex-stroke"), "stroke-width": 1, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
+    // is assembly, so the outline marks the assemblers, and a dashed one
+    // the engines, which run policy over contracts.
+    if (m.layer === "composition" || starry && m.layer === "assembler") el("polygon", { points: hexPoints(p.x, p.y, S * 0.84).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--hex-stroke"), "stroke-width": 1, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
+    if (starry && m.layer === "engine") el("polygon", { points: hexPoints(p.x, p.y, S * 0.84).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--hex-stroke"), "stroke-width": 1, "stroke-dasharray": "3 2", "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
     // A boundary's public API is the only part other boundaries may use: a
     // bold outline marks it.
     if (m.public) el("polygon", { points: hexPoints(p.x, p.y, S * 1.12).map(q => q.join(",")).join(" "), fill: "none", stroke: color("--module-stroke"), "stroke-width": 2.4, "vector-effect": "non-scaling-stroke", "pointer-events": "none" }, g);
@@ -260,14 +262,14 @@ function drawReferences(svg, rel) {
 // region, its contracts or a leaf.
 function ringWords(ring) {
   if (ring.layer === "star") return `star ${ring.star}${starParent(ring.star) ? ` · branch of ${starParent(ring.star)}` : ""} · right-click to zoom to it`;
-  if (ring.layer === "core") return `core of star ${ring.star}: its orchestrators, around its contracts`;
+  if (ring.layer === "core") return `core of star ${ring.star}: its assemblers and engines, around its contracts`;
   if (ring.layer === "contracts") return `contracts of star ${ring.star}`;
   if (ring.layer === "leaf") return `leaf ${ring.spoke} of star ${ring.star}`;
   return ring.label || ring.layer;
 }
 // regionKey names the snowflake region a module is in: a star's contracts,
-// its orchestrators, a leaf, or unclassified.
-function regionKey(id) { const m = modules.get(id) || {}; return m.layer === "contracts" || m.layer === "orchestrator" ? m.layer + ":" + m.star : m.layer === "leaf" ? "leaf:" + m.spoke : m.layer || ""; }
+// its assemblers, its engines, a leaf, or unclassified.
+function regionKey(id) { const m = modules.get(id) || {}; return STAR_CORE.includes(m.layer) ? m.layer + ":" + m.star : m.layer === "leaf" ? "leaf:" + m.spoke : m.layer || ""; }
 // laneEdges gives each allowed dependency in a snowflake its lane: the
 // dependencies between the same two regions run side by side, 5 units
 // apart, so they read as one bundle down an arm. Lanes are measured the

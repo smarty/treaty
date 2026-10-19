@@ -630,7 +630,8 @@ func TestSnowflake(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// shop's own package wires its leaves; billing reaches orders sideways,
+	// shop's own package wires its leaves, listed under orchestrators, the
+	// second snowflake's name for assemblers; billing reaches orders sideways,
 	// and tools, a leaf of the root, reaches into the branch shop.
 	var violations []string
 	for _, violation := range report.Violations {
@@ -641,7 +642,7 @@ func TestSnowflake(t *testing.T) {
 		t.Fatalf("violations: got %q, want %q", violations, want)
 	}
 
-	if rule := report.Violations[1].Rule; !strings.Contains(rule, "leaf tools may not depend on contracts shop/contracts: tools and shop are sibling spokes of star ., and spokes never depend sideways, not even on a branch's core") {
+	if rule := report.Violations[1].Rule; !strings.Contains(rule, "leaf tools may not depend on contracts shop/contracts: tools and shop are sibling spokes of star ., and no dependency runs sideways, not even on a branch's core") {
 		t.Errorf("rule: %s", rule)
 	}
 

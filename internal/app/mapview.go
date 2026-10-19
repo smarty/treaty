@@ -37,7 +37,7 @@ type MapEdge struct {
 // holding it, Public marks a boundary's public API, and Ambiguous lists the
 // boundaries that tie for it. Star, Spoke and CoreEntry place it in a
 // snowflake: the star holding it, its leaf for a leaf, and the contracts or
-// orchestrators entry claiming it for a core package.
+// assemblers or engines entry claiming it for a core package.
 // Removed marks a module only the base has; RemovedFiles are files the base
 // had in a module that is still there. Name is what its language calls it,
 // such as a Go package name. Entry and Private mark a module code outside
@@ -104,7 +104,7 @@ type MapSymbol struct {
 
 // MapView is everything the renderer draws, built in the same run.
 // Architecture is the style that picks the layout, and Layers its layer
-// names, innermost or lowest first: contracts, orchestrator and leaf for a
+// names, innermost or lowest first: contracts, engine, assembler and leaf for a
 // snowflake, whose Stars are its star tree, so an empty core or star is
 // still drawn.
 type MapView struct {
@@ -206,7 +206,7 @@ func (this *Service) buildView(analysis *analysis, designs []string, tolerant bo
 	}
 
 	if architecture.Style == rules.StyleSnowflake {
-		view.Layers, view.Stars = []string{graph.LayerContracts, graph.LayerOrchestrator, graph.LayerLeaf}, architecture.Tree()
+		view.Layers, view.Stars = []string{graph.LayerContracts, graph.LayerEngine, graph.LayerAssembler, graph.LayerLeaf}, architecture.Tree()
 	}
 
 	themes, err := this.themes.Themes()

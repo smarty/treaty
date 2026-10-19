@@ -560,9 +560,14 @@ func TestMoveModulesInASnowflake(t *testing.T) {
 		t.Fatalf("web should be in the contracts of .: %+v", got)
 	}
 
-	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web","layer":"orchestrator","star":"."}`, http.StatusOK)
-	if got := module("go:internal/web"); got.Layer != "orchestrator" || got.CoreEntry != "internal/web" {
-		t.Fatalf("web should be among the orchestrators of .: %+v", got)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web","layer":"assembler","star":"."}`, http.StatusOK)
+	if got := module("go:internal/web"); got.Layer != "assembler" || got.CoreEntry != "internal/web" {
+		t.Fatalf("web should be among the assemblers of .: %+v", got)
+	}
+
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web","layer":"engine","star":"."}`, http.StatusOK)
+	if got := module("go:internal/web"); got.Layer != "engine" || got.CoreEntry != "internal/web" {
+		t.Fatalf("web should be among the engines of .: %+v", got)
 	}
 
 	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/web","layer":"leaf","star":".","spoke":"internal/web"}`, http.StatusOK)
@@ -570,10 +575,12 @@ func TestMoveModulesInASnowflake(t *testing.T) {
 		t.Fatalf("web should be back in its spoke: %+v", got)
 	}
 
-	// A nested package, another star's core, another spoke, an own package
-	// out of its core and composition are refused.
+	// A package beneath a core package out to a spoke, another star's
+	// core, another spoke, an own package out of its core, the second
+	// snowflake's orchestrator role and composition are refused.
 	for _, body := range []string{
-		`{"module":"go:internal/contracts/grades","layer":"orchestrator","star":"."}`,
+		`{"module":"go:internal/contracts/grades","layer":"leaf","star":".","spoke":"internal/contracts/grades"}`,
+		`{"module":"go:internal/web","layer":"orchestrator","star":"."}`,
 		`{"module":"go:internal/web","layer":"contracts","star":"internal/orders"}`,
 		`{"module":"go:internal/orders/tax","layer":"contracts","star":"."}`,
 		`{"module":"go:internal/web","layer":"leaf","star":".","spoke":"internal/plan"}`,
@@ -583,12 +590,12 @@ func TestMoveModulesInASnowflake(t *testing.T) {
 		post(t, base+"/api/reclassify", "application/json", body, http.StatusBadRequest)
 	}
 
-	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/orders","layer":"orchestrator","star":"internal/orders"}`, http.StatusOK)
-	if got := module("go:internal/orders"); got.Layer != "orchestrator" || got.Star != "internal/orders" || got.CoreEntry != "internal/orders" {
-		t.Fatalf("orders should be the orchestrator of its own star: %+v", got)
+	post(t, base+"/api/reclassify", "application/json", `{"module":"go:internal/orders","layer":"assembler","star":"internal/orders"}`, http.StatusOK)
+	if got := module("go:internal/orders"); got.Layer != "assembler" || got.Star != "internal/orders" || got.CoreEntry != "internal/orders" {
+		t.Fatalf("orders should be the assembler of its own star: %+v", got)
 	}
 
-	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), `contracts: ["internal/contracts"] # what the spokes share`) || !strings.Contains(string(data), `orchestrators: ["internal/orders"]`) {
+	if data, _ := os.ReadFile(filepath.Join(root, "treaty.yaml")); !strings.Contains(string(data), `contracts: ["internal/contracts"] # what the spokes share`) || !strings.Contains(string(data), `assemblers: ["internal/orders"]`) {
 		t.Fatalf("treaty.yaml:\n%s", data)
 	}
 }

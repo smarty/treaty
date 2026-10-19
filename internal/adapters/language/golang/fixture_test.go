@@ -852,7 +852,7 @@ func (this *snowflakeRepo) service() *app.Service {
 func TestIgnoredSidewaysDependency(t *testing.T) {
 	repo := newSnowflakeRepo(t, map[string]string{
 		"go.mod":                          "module example.com/m\n",
-		"treaty.yaml":                     "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"internal/contracts\"]\n    orchestrators: [\"cmd/app\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
+		"treaty.yaml":                     "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"internal/contracts\"]\n    assemblers: [\"cmd/app\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
 		"cmd/app/main.go":                 "package main\n\nimport (\n\t\"example.com/m/internal/plan\"\n\t\"example.com/m/internal/web\"\n)\n\nfunc main() { plan.Run(web.Fetcher{}) }\n",
 		"internal/contracts/contracts.go": "package contracts\n\n// Fetcher fetches a page.\ntype Fetcher interface{ Fetch() string }\n",
 		"internal/plan/plan.go":           "package plan\n\nimport \"example.com/m/internal/contracts\"\n\n// Run runs a plan.\nfunc Run(fetcher contracts.Fetcher) { fetcher.Fetch() }\n",
@@ -897,7 +897,7 @@ func TestIgnoredSidewaysDependency(t *testing.T) {
 	report := check()
 	finding := violation(report)
 	if !slices.Equal(report.Failures, []string{"1 layer violation(s)"}) || finding.Target != "go:internal/plan -> go:internal/web" ||
-		!strings.Contains(finding.Detail, "leaf internal/plan may not depend on leaf internal/web: internal/plan and internal/web are sibling spokes of star ., and spokes never depend sideways; declare a port in the contracts of star . (internal/contracts), implement it in internal/web, and let an orchestrator of star . hand it in") {
+		!strings.Contains(finding.Detail, "leaf internal/plan may not depend on leaf internal/web: internal/plan and internal/web are sibling spokes of star ., and no dependency runs sideways; declare a port in the contracts of star . (internal/contracts), implement it in internal/web, and let an assembler of star . hand it in") {
 		t.Fatalf("sideways: failures %v, %+v", report.Failures, finding)
 	}
 
@@ -974,8 +974,8 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 	}
 
 	want := []rules.Star{
-		{Dir: ".", Contracts: []string{"internal/contracts"}, Orchestrators: []string{".", "internal/assembly"}},
-		{Dir: "internal/blocks", Contracts: []string{"internal/blocks/contracts"}, Orchestrators: []string{"internal/blocks/kit"}},
+		{Dir: ".", Contracts: []string{"internal/contracts"}, Assemblers: []string{".", "cmd/app", "internal/assembly"}},
+		{Dir: "internal/blocks", Contracts: []string{"internal/blocks/contracts"}, Assemblers: []string{"internal/blocks/kit"}},
 	}
 
 	if !reflect.DeepEqual(loaded.Architecture.Stars, want) {
@@ -1013,7 +1013,7 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if view := recorder.view; !slices.Equal(view.Layers, []string{"contracts", "orchestrator", "leaf"}) || !reflect.DeepEqual(view.Stars, bound.Tree()) || view.Stars[1].Parent != "." {
+	if view := recorder.view; !slices.Equal(view.Layers, []string{"contracts", "engine", "assembler", "leaf"}) || !reflect.DeepEqual(view.Stars, bound.Tree()) || view.Stars[1].Parent != "." {
 		t.Fatalf("the map's layers %v and stars %+v", view.Layers, view.Stars)
 	}
 
@@ -1025,25 +1025,25 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 	}
 
 	// allowed gives the rule, and the ports that already stand for what
-	// the spoke reached for, or says to declare one.
+	// the spoke reached for, or says to declare one; a leaf of a branch
+	// uses the root's contracts directly.
 	for _, c := range []struct{ from, to, want string }{
 		{"internal/plan", "internal/web", "not allowed: go:internal/plan (leaf internal/plan) → go:internal/web (leaf internal/web)\n" +
-			"rule: leaf internal/plan may not depend on leaf internal/web: internal/plan and internal/web are sibling spokes of star ., and spokes never depend sideways; declare a port in the contracts of star . (internal/contracts), implement it in internal/web, and let an orchestrator of star . hand it in\n" +
-			"ports: go:internal/web:Client implements go:internal/contracts:Fetcher, which leaf internal/plan may use; depend on the port, and let an orchestrator of star . hand internal/web in\n" +
-			"leaf internal/plan may depend on: leaf internal/plan, contracts internal/contracts, orchestrator ., orchestrator internal/assembly\n"},
-		// The cache imports no contracts, yet satisfies the branch's alias
-		// of the root's port: the structural match the implements edges
-		// leave out.
+			"rule: leaf internal/plan may not depend on leaf internal/web: internal/plan and internal/web are sibling spokes of star ., and no dependency runs sideways; declare a port in the contracts of star . (internal/contracts), implement it in internal/web, and let an assembler of star . hand it in\n" +
+			"ports: go:internal/web:Client implements go:internal/contracts:Fetcher, which leaf internal/plan may use; depend on the port, and let an assembler of star . hand internal/web in\n" +
+			"leaf internal/plan may depend on: leaf internal/plan, contracts internal/contracts\n"},
+		// The cache imports no contracts, yet satisfies the root's port and
+		// the branch's alias of it: the structural match the implements
+		// edges leave out.
 		{"internal/blocks/www", "internal/cache", "not allowed: go:internal/blocks/www (leaf internal/blocks/www) → go:internal/cache (leaf internal/cache)\n" +
-			"rule: leaf internal/blocks/www may not depend on leaf internal/cache: internal/blocks and internal/cache are sibling spokes of star ., and spokes never depend sideways; declare a port in the contracts of star . (internal/contracts), re-export it in the contracts of star internal/blocks (internal/blocks/contracts), implement it in internal/cache, and let the orchestrators of stars . and internal/blocks hand it in\n" +
-			"ports: go:internal/cache:Cache satisfies go:internal/blocks/contracts:Source, which leaf internal/blocks/www may use; depend on the port, and let the orchestrators of stars . and internal/blocks hand internal/cache in\n" +
-			"leaf internal/blocks/www may depend on: leaf internal/blocks/www, contracts internal/blocks/contracts, orchestrator internal/blocks/kit\n"},
-		{"internal/blocks/www", "internal/web", "ports: go:internal/web:Client satisfies go:internal/blocks/contracts:Source, which leaf internal/blocks/www may use; depend on the port, and let the orchestrators of stars . and internal/blocks hand internal/web in\n"},
-		{"internal/blocks/www", "internal/plan", "ports: nothing in internal/plan implements an interface leaf internal/blocks/www may use; declare one in the contracts of star . (internal/contracts), and re-export it in the contracts of star internal/blocks (internal/blocks/contracts)\n"},
-		{"internal/blocks/www", "internal/contracts", "not allowed: go:internal/blocks/www (leaf internal/blocks/www) → go:internal/contracts (contracts internal/contracts)\n" +
-			"rule: leaf internal/blocks/www may not depend on contracts internal/contracts: a spoke may use only the core of its own star, internal/blocks, never the core of star . around it; re-export what it needs in the contracts of star internal/blocks (internal/blocks/contracts)\n" +
-			"re-exports: go:internal/blocks/contracts:Source stands for go:internal/contracts:Fetcher; use those instead\n"},
-		{"internal/assembly", "internal/blocks/www", "rule: orchestrator internal/assembly may not depend on leaf internal/blocks/www: an orchestrator may use a branch only through its core, and internal/blocks/www is a spoke of branch internal/blocks; let an orchestrator of star internal/blocks (internal/blocks/kit) build it, and use that\n"},
+			"rule: leaf internal/blocks/www may not depend on leaf internal/cache: internal/blocks and internal/cache are sibling spokes of star ., and no dependency runs sideways; declare a port in the contracts of star . (internal/contracts), implement it in internal/cache, and let the assemblers of stars . and internal/blocks hand it in\n" +
+			"ports: go:internal/cache:Cache satisfies go:internal/blocks/contracts:Source; go:internal/cache:Cache satisfies go:internal/contracts:Fetcher, which leaf internal/blocks/www may use; depend on the port, and let the assemblers of stars . and internal/blocks hand internal/cache in\n" +
+			"leaf internal/blocks/www may depend on: leaf internal/blocks/www, contracts internal/blocks/contracts, contracts internal/contracts\n"},
+		{"internal/blocks/www", "internal/web", "ports: go:internal/web:Client implements go:internal/contracts:Fetcher; go:internal/web:Client satisfies go:internal/blocks/contracts:Source, which leaf internal/blocks/www may use; depend on the port, and let the assemblers of stars . and internal/blocks hand internal/web in\n"},
+		{"internal/blocks/www", "internal/plan", "ports: nothing in internal/plan implements an interface leaf internal/blocks/www may use; declare one in the contracts of star . (internal/contracts), which leaf internal/blocks/www uses directly\n"},
+		{"internal/blocks/www", "internal/contracts", "allowed: go:internal/blocks/www (leaf internal/blocks/www) → go:internal/contracts (contracts internal/contracts)\n"},
+		{"internal/blocks/www", "internal/blocks/kit", "rule: leaf internal/blocks/www may not depend on assembler internal/blocks/kit: a spoke never uses an assembler"},
+		{"internal/assembly", "internal/blocks/www", "rule: assembler internal/assembly may not depend on leaf internal/blocks/www: an assembler reaches a child branch only through its core, and internal/blocks/www is a spoke of branch internal/blocks; let an assembler of star internal/blocks (internal/blocks/kit) build it, and use that\n"},
 		{"internal/blocks/www", "internal/blocks/contracts", "allowed: go:internal/blocks/www (leaf internal/blocks/www) → go:internal/blocks/contracts (contracts internal/blocks/contracts)\n"},
 		{"internal/plan", "internal/blocks/new", "go:internal/plan (leaf internal/plan) → internal/blocks/new (not built) (leaf internal/blocks/new)\n"},
 	} {
@@ -1060,9 +1060,9 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 
 	for _, want := range []string{
 		"Rules (snowflake): the repository is a star of stars.",
-		"\nstars\n  .  contracts internal/contracts  orchestrators ., internal/assembly  leaves cmd/app, internal/cache, internal/plan, internal/web  branches internal/blocks\n  internal/blocks (branch of .)  contracts internal/blocks/contracts  orchestrators internal/blocks/kit  leaves internal/blocks/cleanse, internal/blocks/www\n",
+		"\nstars\n  .  contracts internal/contracts  assemblers ., cmd/app, internal/assembly  engines none  leaves internal/cache, internal/plan, internal/web  branches internal/blocks\n  internal/blocks (branch of .)  contracts internal/blocks/contracts  assemblers internal/blocks/kit  engines none  leaves internal/blocks/cleanse, internal/blocks/www\n",
 		"\ncontracts internal/contracts\n  go:internal/contracts",
-		"\norchestrator .\n  go:.",
+		"\nassembler .\n  go:.",
 		"\nleaf internal/blocks/www\n  go:internal/blocks/www",
 	} {
 		if !strings.Contains(overview, want) {
@@ -1070,10 +1070,10 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 		}
 	}
 
-	order := []string{"\ncontracts internal/contracts\n", "\norchestrator .\n", "\norchestrator internal/assembly\n", "\nleaf cmd/app\n", "\nleaf internal/web\n", "\ncontracts internal/blocks/contracts\n", "\norchestrator internal/blocks/kit\n", "\nleaf internal/blocks/www\n"}
+	order := []string{"\ncontracts internal/contracts\n", "\nassembler .\n", "\nassembler cmd/app\n", "\nassembler internal/assembly\n", "\nleaf internal/web\n", "\ncontracts internal/blocks/contracts\n", "\nassembler internal/blocks/kit\n", "\nleaf internal/blocks/www\n"}
 	for i := 1; i < len(order); i++ {
 		if strings.Index(overview, order[i-1]) > strings.Index(overview, order[i]) {
-			t.Errorf("each star lists its contracts, its orchestrators, then its leaves, before the stars inside it: %q comes after %q\n%s", order[i-1], order[i], overview)
+			t.Errorf("each star lists its contracts, its assemblers, its engines, then its leaves, before the stars inside it: %q comes after %q\n%s", order[i-1], order[i], overview)
 		}
 	}
 
@@ -1082,9 +1082,9 @@ func TestSnowflakeFromInitToTheTools(t *testing.T) {
 	}
 
 	for _, c := range []struct{ module, want string }{
-		{"go:internal/blocks/www", "star: leaf internal/blocks/www of star internal/blocks, a branch of .\n  cores it may use: go:internal/blocks/contracts, go:internal/blocks/kit\n  never use: leaf internal/blocks/cleanse, the core of star . (reach it through internal/blocks/contracts)\n"},
-		{"go:internal/assembly", "star: orchestrator internal/assembly of star .\n  cores it may use: go:., go:internal/blocks/contracts, go:internal/blocks/kit, go:internal/contracts\n  leaves it wires: cmd/app, internal/cache, internal/plan, internal/web\n  never use: the spokes of branch internal/blocks\n"},
-		{"go:internal/blocks/contracts", "star: contracts internal/blocks/contracts of star internal/blocks, a branch of .\n  cores it may use: go:internal/contracts\n  never use: the leaves of star internal/blocks, the orchestrators of star internal/blocks, the orchestrators of star .\n"},
+		{"go:internal/blocks/www", "star: leaf internal/blocks/www of star internal/blocks, a branch of .\n  cores it may use: go:internal/blocks/contracts, go:internal/contracts\n  never use: leaf internal/blocks/cleanse, any assembler, the engines of the stars around it\n"},
+		{"go:internal/assembly", "star: assembler internal/assembly of star .\n  cores it may use: go:., go:cmd/app, go:internal/blocks/contracts, go:internal/blocks/kit, go:internal/contracts\n  leaves it wires: internal/cache, internal/plan, internal/web\n  never use: the spokes of branch internal/blocks\n"},
+		{"go:internal/blocks/contracts", "star: contracts internal/blocks/contracts of star internal/blocks, a branch of .\n  cores it may use: go:internal/contracts\n  never use: the leaves of star internal/blocks, the assemblers of star internal/blocks, the assemblers and engines of the stars around it\n"},
 	} {
 		slice, err := service.Slice(c.module)
 		if err != nil {
@@ -1138,7 +1138,7 @@ func TestSnowflakeMisfitsAndOwnPackages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !slices.Equal(report.Failures, []string{"1 unclassified module(s)"}) || !slices.Contains(report.Notes, "star internal/blocks holds a package of its own, internal/blocks, which treaty.yaml lists in neither its contracts nor its orchestrators, so it is unclassified; list it in one of them") {
+	if !slices.Equal(report.Failures, []string{"1 unclassified module(s)"}) || !slices.Contains(report.Notes, "star internal/blocks holds a package of its own, internal/blocks, which treaty.yaml lists in none of its contracts, assemblers or engines, so it is unclassified; list it in one of them") {
 		t.Fatalf("an unlisted own package: failures %v, notes %v", report.Failures, report.Notes)
 	}
 
@@ -1152,12 +1152,12 @@ func TestSnowflakeMisfitsAndOwnPackages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	unlisted := "go:internal/blocks: Unclassified: the own package of star internal/blocks holds code, so treaty.yaml must list it in that star's contracts or orchestrators; until then its dependencies are not checked."
+	unlisted := "go:internal/blocks: Unclassified: the own package of star internal/blocks holds code, so treaty.yaml must list it in that star's contracts, assemblers or engines; until then its dependencies are not checked."
 	if !slices.ContainsFunc(design.Items, func(item app.DesignItem) bool { return item.Kind == app.ItemUnclassified && item.Detail == unlisted }) {
 		t.Fatalf("the design of an unlisted own package: %+v", design.Items)
 	}
 
-	repo.write(map[string]string{"treaty.yaml": "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"internal/contracts\"]\n  internal/blocks:\n    contracts: [\"internal/blocks/contracts\"]\n    orchestrators: [\"internal/blocks\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n"})
+	repo.write(map[string]string{"treaty.yaml": "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"internal/contracts\"]\n  internal/blocks:\n    contracts: [\"internal/blocks/contracts\"]\n    assemblers: [\"internal/blocks\"]\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n"})
 	if report, err = service.Check(""); err != nil || len(report.Failures) != 0 {
 		t.Fatalf("a listed own package: failures %v, %v", report.Failures, err)
 	}

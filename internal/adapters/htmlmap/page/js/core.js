@@ -31,10 +31,10 @@ function ingest(data) {
   addedLinks = new Set((D.added_links || []).map(linkKey));
   const note = document.getElementById("legend-public");
   if (note) note.hidden = D.architecture !== "modular";
-  // A snowflake has no composition: its orchestrators wear the double
-  // outline, and its contracts a dot.
+  // A snowflake has no composition: its assemblers wear the double
+  // outline, its engines a dashed one, and its contracts a dot.
   const double = document.getElementById("legend-double");
-  if (double) double.textContent = STAR_STYLES.includes(D.architecture) ? "orchestrator · dot = contracts" : "composition";
+  if (double) double.textContent = STAR_STYLES.includes(D.architecture) ? "assembler · dashed = engine · dot = contracts" : "composition";
   groups = new Map((D.layout.groups || []).map(g => [g.id, g]));
   groupOf = new Map();
   for (const g of D.layout.groups || []) for (const id of g.modules) if (!groupOf.has(id) || groups.get(groupOf.get(id)).depth < g.depth) groupOf.set(id, g.id);
@@ -64,8 +64,13 @@ const LONG_PRESS_MS = 450;
 // can move between them on the map.
 const LAYERED_STYLES = ["hexagonal", "clean", "layered"];
 // The architectures drawn as stars of stars, whose spokes are directories:
-// a module moves only into or out of a star's contracts or orchestrators.
+// a module moves only into or out of a star's contracts, assemblers or
+// engines.
 const STAR_STYLES = ["snowflake"];
+// The roles of a snowflake star's core region, and the list of treaty.yaml
+// that names each.
+const STAR_CORE = ["contracts", "assembler", "engine"];
+const STAR_LISTS = { contracts: "contracts", assembler: "assemblers", engine: "engines" };
 // Room kept between a moved module and the edge of the group around it.
 const GROUP_ROOM = 6;
 const AUTO_COLLAPSE_PX = 45;
@@ -216,11 +221,11 @@ function collapsedSignature() {
 }
 // placeName says where the architecture puts a module: its boundary, its
 // layer and side, and whether it is public, or the boundaries that tie
-// for it; in a snowflake, the contracts or orchestrator entry that claims
-// it, or its leaf.
+// for it; in a snowflake, the contracts, assembler or engine entry that
+// claims it, or its leaf.
 function placeName(m) {
   if (m.ambiguous) return "claimed by " + m.ambiguous.join(" and ");
-  if (STAR_STYLES.includes(D.architecture) && (m.layer === "contracts" || m.layer === "orchestrator") && m.core_entry) return `${m.layer} ${m.core_entry}`;
+  if (STAR_STYLES.includes(D.architecture) && STAR_CORE.includes(m.layer) && m.core_entry) return `${m.layer} ${m.core_entry}`;
   if (STAR_STYLES.includes(D.architecture) && m.layer === "leaf" && m.spoke) return `leaf ${m.spoke}`;
   const within = m.boundary ? m.boundary + " · " : "";
   return within + m.layer + (m.side ? ` (${m.side})` : "") + (m.public ? " (public)" : "");

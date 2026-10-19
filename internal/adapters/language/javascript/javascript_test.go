@@ -657,7 +657,7 @@ func TestAliasedGlobsExclusionsAndKebabTags(t *testing.T) {
 func TestSnowflake(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{
-		"treaty.yaml":                    "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"src/contracts\"]\n    orchestrators: [\"src/app\"]\n  src/billing: {contracts: [\"src/billing/contracts\"], orchestrators: [\"src/billing/assembly\"]}\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
+		"treaty.yaml":                    "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"src/contracts\"]\n    assemblers: [\"src/app\"]\n  src/billing: {contracts: [\"src/billing/contracts\"], assemblers: [\"src/billing/assembly\"]}\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
 		"src/contracts/index.ts":         "export interface Clock { now(): number }\nexport type Money = number;\n",
 		"src/clock/index.ts":             "import { Clock } from '../contracts';\nexport class SystemClock implements Clock { now(): number { return 0; } }\n",
 		"src/app/index.ts":               "import { SystemClock } from '../clock';\nimport { build } from '../billing/assembly';\nexport const ledger = build(new SystemClock());\n",
@@ -674,27 +674,27 @@ func TestSnowflake(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// src is looked through, invoices uses only its own star's contracts,
-	// and the branch's contracts re-export what they need from the root.
+	// src is looked through, invoices uses its own star's contracts, report
+	// the root's directly, and tax reaches its sibling sideways.
 	var violations []string
 	for _, violation := range report.Violations {
 		violations = append(violations, violation.From+" -> "+violation.To+": "+violation.Rule)
 	}
 
 	want := []string{
-		"ts:src/billing/report -> ts:src/contracts: leaf src/billing/report may not depend on contracts src/contracts: a spoke may use only the core of its own star, src/billing, never the core of star . around it; re-export what it needs in the contracts of star src/billing (src/billing/contracts)",
-		"ts:src/billing/tax -> ts:src/billing/invoices: leaf src/billing/tax may not depend on leaf src/billing/invoices: src/billing/tax and src/billing/invoices are sibling spokes of star src/billing, and spokes never depend sideways; declare a port in the contracts of star src/billing (src/billing/contracts), implement it in src/billing/invoices, and let an orchestrator of star src/billing hand it in",
+		"ts:src/billing/tax -> ts:src/billing/invoices: leaf src/billing/tax may not depend on leaf src/billing/invoices: src/billing/tax and src/billing/invoices are sibling spokes of star src/billing, and no dependency runs sideways; declare a port in the contracts of star src/billing (src/billing/contracts), implement it in src/billing/invoices, and let an assembler of star src/billing hand it in",
 	}
 
 	if !slices.Equal(violations, want) {
 		t.Errorf("violations:\n%s\nwant\n%s", strings.Join(violations, "\n"), strings.Join(want, "\n"))
 	}
 
-	// allowed names the port the sibling implements, and the re-export
-	// that stands for what the leaf reached for above its star.
+	// allowed names the port the sibling implements, and lets a leaf use
+	// the contracts of the star around its own.
 	for _, c := range []struct{ from, to, want string }{
-		{"src/billing/tax", "src/billing/invoices", "ports: ts:src/billing/invoices:Invoices implements ts:src/billing/contracts:Ledger, which leaf src/billing/tax may use; depend on the port, and let an orchestrator of star src/billing hand src/billing/invoices in\n"},
-		{"src/billing/report", "src/contracts", "re-exports: ts:src/billing/contracts:Clock stands for ts:src/contracts:Clock; use those instead\n"},
+		{"src/billing/tax", "src/billing/invoices", "ports: ts:src/billing/invoices:Invoices implements ts:src/billing/contracts:Ledger, which leaf src/billing/tax may use; depend on the port, and let an assembler of star src/billing hand src/billing/invoices in\n"},
+		{"src/billing/report", "src/contracts", "allowed: ts:src/billing/report (leaf src/billing/report) → ts:src/contracts (contracts src/contracts)\n"},
+		{"src/billing/tax", "src/billing/assembly", "rule: leaf src/billing/tax may not depend on assembler src/billing/assembly: a spoke never uses an assembler"},
 	} {
 		allowed, err := service.Allowed(c.from, c.to)
 		if err != nil || !strings.Contains(allowed, c.want) {

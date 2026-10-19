@@ -344,7 +344,7 @@ func (this *analysis) allowed(from, to string) (result string, err error) {
 	verdict, rule := "allowed", ""
 	if fromID != toID {
 		if allowed, broken := architecture.Check(fromPlace, toPlace); !allowed {
-			verdict, rule = "not allowed", "rule: "+broken+"\n"+this.ports(fromID, fromPlace, toPlace)+this.reexports(fromID, toID, fromPlace, toPlace)
+			verdict, rule = "not allowed", "rule: "+broken+"\n"+this.ports(fromID, fromPlace, toPlace)
 		}
 	}
 
@@ -353,12 +353,12 @@ func (this *analysis) allowed(from, to string) (result string, err error) {
 		placeName(fromPlace), strings.Join(architecture.MayUse(fromPlace), ", ")), nil
 }
 
-// portLimit caps the ports, and the re-exports, the allowed tool names for
-// one dependency.
+// portLimit caps the ports the allowed tool names for one dependency.
 const portLimit = 5
 
-// ports suggests, for a dependency the snowflake refuses sideways or out to
-// an orchestrator, the interfaces the depending module may use that a type
+// ports suggests, for a dependency the snowflake refuses sideways, on an
+// assembler, from an engine or out to a core past the contracts of a star
+// around its own, the interfaces the depending module may use that a type
 // in the child it reached for already implements, by an implements edge,
 // or satisfies, by the language's structural match through any alias, so
 // the dependency can go through a port instead. The depending module's own
@@ -367,8 +367,8 @@ const portLimit = 5
 func (this *analysis) ports(fromID string, from, to rules.Placement) string {
 	architecture := this.config.Architecture
 	switch kind := architecture.Break(from, to); {
-	case kind == rules.BreakSideways:
-	case kind == rules.BreakOut && to.Layer == graph.LayerOrchestrator:
+	case kind == rules.BreakSideways, kind == rules.BreakAssembler:
+	case (kind == rules.BreakOut || kind == rules.BreakEngine) && to.Layer != graph.LayerContracts:
 	default:
 		return ""
 	}
@@ -423,14 +423,9 @@ func (this *analysis) ports(fromID string, from, to rules.Placement) string {
 		}
 	}
 
-	declare, carriers, hands := architecture.Handover(from, to)
+	declare, hands := architecture.Handover(from, to)
 	if len(found) == 0 {
-		reexport := ""
-		if len(carriers) > 0 {
-			reexport = ", and re-export it in " + joinAnd(carriers)
-		}
-
-		return fmt.Sprintf("ports: nothing in %s implements an interface %s may use; declare one in %s%s\n", child, placeName(from), declare, reexport)
+		return fmt.Sprintf("ports: nothing in %s implements an interface %s may use; declare one in %s, which %s uses directly\n", child, placeName(from), declare, placeName(from))
 	}
 
 	sort.Strings(found)
@@ -440,62 +435,6 @@ func (this *analysis) ports(fromID string, from, to rules.Placement) string {
 	}
 
 	return fmt.Sprintf("ports: %s, which %s may use; depend on the port, and let %s hand %s in\n", strings.Join(found, "; "), placeName(from), hands, child)
-}
-
-// reexports names, for a leaf the snowflake refuses the contracts of a star
-// around its own, the symbols its own star's contracts already re-export
-// from those contracts, so it can use them instead: those standing for the
-// symbols it references there when the dependency exists, else every one.
-// Other refusals get no line.
-func (this *analysis) reexports(fromID, toID string, from, to rules.Placement) string {
-	architecture := this.config.Architecture
-	if architecture.Break(from, to) != rules.BreakOut || from.Layer != graph.LayerLeaf || to.Layer != graph.LayerContracts {
-		return ""
-	}
-
-	// reached tells whether a symbol lies in the contracts depended on.
-	reached := func(id string) bool {
-		symbol := this.head.Symbol(id)
-		if symbol == nil {
-			return false
-		}
-
-		module := this.head.Module(symbol.Module)
-		return module != nil && module.Layer == to.Layer && module.Star == to.Star && module.CoreEntry == to.Entry
-	}
-
-	referenced := map[string]bool{}
-	for _, edge := range this.head.Edges {
-		if symbol := this.head.Symbol(edge.From); symbol != nil && symbol.Module == fromID && reached(edge.To) {
-			referenced[edge.To] = true
-		}
-	}
-
-	var found []string
-	for _, symbol := range this.head.Symbols {
-		module := this.head.Module(symbol.Module)
-		if module == nil || module.Layer != graph.LayerContracts || module.Star != from.Star {
-			continue
-		}
-
-		for hop, seen := this.alias(symbol.ID), 0; hop != "" && seen < aliasHops; hop, seen = this.alias(hop), seen+1 {
-			if reached(hop) && (len(referenced) == 0 || referenced[hop]) {
-				found = append(found, symbol.ID+" stands for "+hop)
-				break
-			}
-		}
-	}
-
-	if len(found) == 0 {
-		return fmt.Sprintf("re-exports: the contracts of star %s re-export nothing from %s yet; alias what it needs there\n", from.Star, to.Entry)
-	}
-
-	sort.Strings(found)
-	if len(found) > portLimit {
-		found = found[:portLimit]
-	}
-
-	return fmt.Sprintf("re-exports: %s; use those instead\n", strings.Join(found, "; "))
 }
 
 // aliasHops caps how many aliases in a row the tools follow, so a cycle of
@@ -843,8 +782,8 @@ func changeDetail(change rules.Change) string {
 // overviewOrder lists the overview's groups: hexagonal and clean from the
 // center outward, layered from the top down, and boundaries by name, with
 // composition, shared and unclassified around them. A snowflake lists each
-// star from the root down, its contracts, its orchestrators and its
-// leaves, then unclassified.
+// star from the root down, its contracts, its assemblers, its engines and
+// its leaves, then unclassified.
 func overviewOrder(architecture rules.Architecture, groups map[string][]*graph.Module) []string {
 	if architecture.Style == rules.StyleHexagonal {
 		return []string{"domain", "application", "adapter (driving)", "adapter (driven)", "composition", "unclassified"}
@@ -857,8 +796,12 @@ func overviewOrder(architecture rules.Architecture, groups map[string][]*graph.M
 				result = append(result, placeName(rules.Placement{Layer: graph.LayerContracts, Star: star.Dir, Entry: entry}))
 			}
 
-			for _, entry := range star.Orchestrators {
-				result = append(result, placeName(rules.Placement{Layer: graph.LayerOrchestrator, Star: star.Dir, Entry: entry}))
+			for _, entry := range star.Assemblers {
+				result = append(result, placeName(rules.Placement{Layer: graph.LayerAssembler, Star: star.Dir, Entry: entry}))
+			}
+
+			for _, entry := range star.Engines {
+				result = append(result, placeName(rules.Placement{Layer: graph.LayerEngine, Star: star.Dir, Entry: entry}))
 			}
 
 			for _, leaf := range star.Leaves {
@@ -895,11 +838,11 @@ func overviewOrder(architecture rules.Architecture, groups map[string][]*graph.M
 
 // placeName names a placement for people: its layer and side, its
 // boundary and the layer inside it, and whether it is public; in a
-// snowflake, contracts or orchestrator and its entry, or leaf and its
+// snowflake, contracts, assembler or engine and its entry, or leaf and its
 // directory.
 func placeName(place rules.Placement) string {
 	switch {
-	case place.Layer == graph.LayerContracts, place.Layer == graph.LayerOrchestrator:
+	case place.Layer == graph.LayerContracts, place.Layer == graph.LayerAssembler, place.Layer == graph.LayerEngine:
 		return place.Layer + " " + place.Entry
 	case place.Layer == graph.LayerLeaf:
 		return "leaf " + place.Spoke
@@ -919,7 +862,7 @@ func placeName(place rules.Placement) string {
 }
 
 // starTree writes a snowflake's stars for the overview, one line each: the
-// star, its contracts and orchestrators, its leaves and its branches.
+// star, its contracts, assemblers and engines, its leaves and its branches.
 func starTree(builder *strings.Builder, architecture rules.Architecture) {
 	stars := architecture.Tree()
 	if len(stars) == 0 {
@@ -933,7 +876,7 @@ func starTree(builder *strings.Builder, architecture rules.Architecture) {
 			name += " (branch of " + star.Parent + ")"
 		}
 
-		fmt.Fprintf(builder, "  %s  contracts %s  orchestrators %s", name, listOrNone(star.Contracts), listOrNone(star.Orchestrators))
+		fmt.Fprintf(builder, "  %s  contracts %s  assemblers %s  engines %s", name, listOrNone(star.Contracts), listOrNone(star.Assemblers), listOrNone(star.Engines))
 		if len(star.Leaves) > 0 {
 			fmt.Fprintf(builder, "  leaves %s", strings.Join(star.Leaves, ", "))
 		}
