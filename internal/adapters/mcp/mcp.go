@@ -282,11 +282,17 @@ func instructions(mapURL string, shared bool) string {
 		"Call selection to see what the person has selected on the map. Use show sparingly, only when you need the person to look at one specific thing."
 }
 
+// snowflakeGuidance is how the tools describe the third snowflake's rules
+// to an agent, so it plans dependencies the check will accept.
+const snowflakeGuidance = "contracts use only contracts of their own star and its ancestors, and import only the standard library; an engine uses contracts and its own star's engines; an assembler wires its star's core and spokes and each child branch's core; a spoke uses its own leaf, its star's contracts and engines and every ancestor's contracts, and never an assembler; nothing runs sideways. " +
+	"A leaf declares the interfaces it consumes; spokes use ancestor contracts directly; there are no re-exports."
+
 func tools() []tool {
 	return []tool{
 		{
 			Name:        "overview",
-			Description: "The whole architecture in a few kilobytes: every module by layer with its contract count and stability, every module dependency, and violations. Call this first instead of exploring files.",
+			Description: "The whole architecture in a few kilobytes: its rules, every module by layer with its contract count and stability, every module dependency, and violations. Call this first instead of exploring files. " +
+				"For a snowflake it lists each star's contracts, assemblers, engines, leaves and branches: " + snowflakeGuidance,
 			InputSchema: schema(nil),
 		},
 		{
@@ -311,7 +317,8 @@ func tools() []tool {
 		},
 		{
 			Name:        "allowed",
-			Description: "Whether one module may depend on another under the architecture's rules, the rule it would break, and what the first may use; for a snowflake, also the ports it may use that something in the module it reached for already implements, and the re-exports in its own star's contracts that stand for what it reached for in a star around it. Call before adding an import. Modules that do not exist yet are placed by the config.",
+			Description: "Whether one module may depend on another under the architecture's rules, the rule it would break, and what the first may use; for a snowflake, also the ports it may use that something in the module it reached for already implements. Call before adding an import. Modules that do not exist yet are placed by the config. " +
+				"In a snowflake, " + snowflakeGuidance,
 			InputSchema: schema(map[string]string{"from": "The depending module, as an id such as go:internal/app, a path, or a short name such as app; a symbol or file stands for its module.", "to": "The module depended on, given the same ways."}, "from", "to"),
 		},
 		{
@@ -346,7 +353,8 @@ func tools() []tool {
 		},
 		{
 			Name:        "design_check",
-			Description: "Compare a design or plan in .treaty/designs with the code: missing and differing contracts, layer problems and failing expectations.",
+			Description: "Compare a design or plan in .treaty/designs with the code: missing and differing contracts, layer problems and failing expectations. " +
+				"In a snowflake a planned module is placed by its star's lists, and a package beneath a core package that no entry names is unclassified; " + snowflakeGuidance,
 			InputSchema: schema(map[string]string{"name": "The design name, without .pen."}, "name"),
 		},
 	}

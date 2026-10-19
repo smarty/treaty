@@ -197,7 +197,8 @@ func (this *designWalk) block(block *autopen.Block) error {
 	case layer != graph.LayerUnclassified:
 	case architecture.Style == rules.StyleSnowflake:
 		// A snowflake places every module but a star's unlisted own
-		// package, so its guidance says what to list.
+		// package and a package beneath a core package that no entry
+		// names, so its guidance says what to list.
 		this.add(ItemUnclassified, moduleID, block.Line, "%s: %s", moduleID, architecture.Guidance(place))
 	default:
 		this.add(ItemUnclassified, moduleID, block.Line, "treaty.yaml places %s in no layer", moduleID)

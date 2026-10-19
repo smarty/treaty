@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -142,9 +143,18 @@ func TestInstructionsNameEveryArchitecture(t *testing.T) {
 		t.Fatalf("the instructions must name snowflake:\n%s", text)
 	}
 
+	// The tools that guide a dependency give the third snowflake's rules,
+	// and none still offers re-exports.
 	for _, each := range tools() {
-		if each.Name == "allowed" && (!strings.Contains(each.Description, "ports") || !strings.Contains(each.Description, "re-exports")) {
-			t.Fatalf("allowed must say it names ports and re-exports: %s", each.Description)
+		if each.Name == "allowed" && !strings.Contains(each.Description, "ports") {
+			t.Fatalf("allowed must say it names ports: %s", each.Description)
+		}
+
+		guides := slices.Contains([]string{"allowed", "overview", "design_check"}, each.Name)
+		if guides && !strings.Contains(each.Description, "a spoke uses its own leaf, its star's contracts and engines and every ancestor's contracts, and never an assembler") ||
+			guides && !strings.Contains(each.Description, "A leaf declares the interfaces it consumes; spokes use ancestor contracts directly; there are no re-exports.") ||
+			strings.Contains(strings.ReplaceAll(each.Description, "there are no re-exports", ""), "re-export") || strings.Contains(each.Description, "orchestrator") {
+			t.Errorf("%s must give the third snowflake's rules: %s", each.Name, each.Description)
 		}
 	}
 }
