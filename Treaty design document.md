@@ -520,6 +520,7 @@ The server re-resolves the baseline every two seconds, so a commit moves a HEAD 
 | `allowed` | Whether one module may depend on another, before an import is added. Modules may be named by id, path or short name, or by a symbol or file in them; only a path that matches nothing is treated as a module not built yet |
 | `changes` | What changed in the architecture since the baseline: contract changes, new and removed edges, new violations. The agent checks its own edits with this |
 | `plan` | Writes unimplemented AutoPen: the contracts and dependencies the agent intends to build, in design syntax. It is validated like a design, so it reports layer problems and conflicts with existing code, and it is overlaid on the live map as unimplemented. As the code is written, each item turns into a built one, so the person can watch the plan being filled in. A plan is saved as a design file in `.treaty/designs/`, so it survives a restart, `design check` works on it, and the person can open and edit it |
+| `plan_delete` | Deletes a plan from `.treaty/designs/`, under the same name rules as saving, and the live map stops drawing it. A missing plan or a name outside the designs is a tool error |
 | `selection` | What the person has selected on the map |
 | `show` | Asks the person to look at one symbol or module: it pulses and a notice offers to jump there. At most once every 15 seconds |
 | `check`, `design_check` | As today (exist); `check` summarizes by default, with `format: json` for the full report |

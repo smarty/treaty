@@ -158,3 +158,30 @@ func TestInstructionsNameEveryArchitecture(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanDelete(t *testing.T) {
+	root := fixture(t)
+	server, _ := serve(t, root)
+	callText(t, server, "plan", map[string]string{"name": "sorting", "autopen": "go:internal/sorting/later.go\n  func Later() int\n"})
+	if _, err := os.Stat(filepath.Join(root, ".treaty", "designs", "sorting.pen")); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := callText(t, server, "plan_delete", map[string]string{"name": "sorting"}); !strings.HasPrefix(got, "deleted the plan sorting") {
+		t.Fatalf("delete: %s", got)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, ".treaty", "designs", "sorting.pen")); !os.IsNotExist(err) {
+		t.Fatalf("the plan's file must be gone: %v", err)
+	}
+
+	// A plan that is not there, or a name outside the designs, is a tool
+	// error.
+	for _, name := range []string{"sorting", "../treaty"} {
+		params, _ := json.Marshal(map[string]any{"name": "plan_delete", "arguments": map[string]string{"name": name}})
+		result, failure := server.call(params)
+		if failure != nil || result.(map[string]any)["isError"] != true {
+			t.Fatalf("delete %q must be a tool error: %+v %+v", name, result, failure)
+		}
+	}
+}

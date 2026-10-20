@@ -389,6 +389,7 @@ You and the agent always look at the same graph:
 | `allowed` | Whether one module may depend on another, before an import is added; in `snowflake`, a refusal names the ports the source may use that something in the target's spoke or branch already implements or satisfies |
 | `changes` | What changed in the architecture since the baseline, including new violations |
 | `plan` | The agent's intended contracts in AutoPen, drawn on the map as unbuilt and filled in as the code is written |
+| `plan_delete` | Deletes a plan the agent no longer intends, so the map stops drawing it |
 | `selection` | What the person has selected on the map, so they can point and say "work here" |
 | `show` | Asks the person to look at one thing. It is an offer on the map, never a forced move, and limited to once every 15 seconds |
 | `check`, `design_check` | The same checks as the CLI; `check` gives the summary by default |

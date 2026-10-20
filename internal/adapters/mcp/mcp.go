@@ -162,6 +162,8 @@ func (this *Server) call(params json.RawMessage) (any, *rpcError) {
 		}
 
 		value, err = this.live.Plan(arguments["name"], text)
+	case "plan_delete":
+		value, err = fmt.Sprintf("deleted the plan %s; the map no longer draws it", arguments["name"]), this.live.DeletePlan(arguments["name"])
 	case "check":
 		var report app.Report
 		report, err = this.live.Check()
@@ -276,7 +278,7 @@ func instructions(mapURL string, shared bool) string {
 		"Treaty keeps a live graph of this repository's contracts, placed by the architecture treaty.yaml declares (hexagonal, clean, layered, vertical, modular monolith or snowflake), and rebuilds it as files change. " +
 		"Use it to decide where to work without reading the whole codebase: call overview first, find to locate symbols, " +
 		"slice before editing a symbol, file or module, source to read just the lines you need, impact before changing a contract, and allowed before adding an import. " +
-		"Write what you intend to build as AutoPen with plan; it shows on the person's map and fills in as the code is written. " +
+		"Write what you intend to build as AutoPen with plan; it shows on the person's map and fills in as the code is written. Delete a plan you no longer intend with plan_delete. " +
 		"After edits, call changes to see what moved in the architecture since the baseline, and fix any new rule violation. " +
 		"Every tool result ends with a warning when the code has a layer violation you have not been told about yet, such as one your last edit introduced; fix it or explain it. " +
 		"Call selection to see what the person has selected on the map. Use show sparingly, only when you need the person to look at one specific thing."
@@ -345,6 +347,11 @@ func tools() []tool {
 				"Syntax: file or module headers such as go:internal/app/ports.go or go:internal/adapters/postgres; native declarations indented two spaces, methods and fields under their type, no receivers; " +
 				"@depends <module or symbol id> to declare a planned dependency; @forbid <glob>; @expect instability|abstractness|distance >=|<= <number>.",
 			InputSchema: schema(map[string]string{"name": "The plan name: letters, digits, dots, dashes and underscores.", "autopen": "The plan in AutoPen design syntax. The autopen 1 and design lines are added when missing."}, "name", "autopen"),
+		},
+		{
+			Name:        "plan_delete",
+			Description: "Delete a plan or design from .treaty/designs, so the person's map no longer draws it. Use it for a plan you no longer intend to build. Refused for a name that is not a plan.",
+			InputSchema: schema(map[string]string{"name": "The plan name, without .pen."}, "name"),
 		},
 		{
 			Name:        "check",
