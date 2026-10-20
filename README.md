@@ -154,8 +154,8 @@ rules:
 
 Every architecture but `snowflake` shares two rules: composition (usually
 `main`) may depend on everything, and nothing may depend on composition. In
-`snowflake`, composition is orchestration, done by orchestrators in the core
-of their star.
+`snowflake`, composition is assembly, done by assemblers in the core of their
+star.
 
 | Architecture | Rules | Map |
 | --- | --- | --- |
@@ -165,7 +165,7 @@ of their star.
 | `layered` | A layer may use itself and every layer below it. Skipping a layer is allowed; forbidding it is a team decision | Horizontal bands |
 | `vertical` | A boundary may use itself and shared code, never another boundary. Optional layers inside every boundary | A column per boundary, or a grid of boundaries by layer |
 | `modular` | A boundary may use its own packages, other boundaries' public packages and shared code. No cycles between boundaries | An island per boundary |
-| `snowflake` | A star of stars: each star's core holds its contracts and its orchestrators, and its other children that hold a package are spokes, leaves or branches. A spoke may use only its own star's core. Contracts use only contracts, their star's and those one star out or in; an orchestrator uses its star's core, wires its own leaves and uses its branches' cores. Nothing runs sideways, not even between sibling cores | Each star's contracts inside the band of its orchestrators, ringed by its spokes, and each branch a smaller star in its parent's ring |
+| `snowflake` | A star of stars: each star's core holds its contracts, its assemblers and its engines, and its other children that hold a package are spokes, leaves or branches. Contracts use only contracts of their own star and its ancestors, and stay pure. An engine uses those contracts and its star's engines. An assembler wires its star's core and spokes and its branches' cores. A spoke uses its own leaf, its star's contracts and engines and every ancestor's contracts, never an assembler. Nothing runs sideways, not even between sibling cores | Each star's contracts inside the band of its assemblers and engines, ringed by its spokes, and each branch a smaller star in its parent's ring |
 
 The layer architectures place modules in layers: their names are fixed for
 `hexagonal` and `clean`, and yours for `layered`; see
@@ -182,12 +182,15 @@ boundaries:
 ```
 
 `snowflake` names only [stars](configuration.md#stars): each star's
-directory, with the directories of its contracts and its orchestrators. Core
+directory, with the directories of its contracts, its assemblers and its
+engines, each naming exactly one package. Core
 is a region of the map, not a package name. Every other child of a star that
 holds a package is a spoke, found without being listed, and directories that
 hold no package, such as `internal/` and `cmd/`, are looked through. A spoke
-depends on interfaces in its star's contracts, and an orchestrator builds
-the implementations and hands them in: dependency inversion, applied at
+depends on interfaces in its star's contracts or an ancestor's, and an
+assembler builds the implementations and hands them in; a leaf declares the
+interfaces it consumes, spokes use ancestor contracts directly, and there
+are no re-exports: dependency inversion, applied at
 every level, in the lineage of Koala's compound components and the
 Presentation-Abstraction-Control and Mediator patterns:
 
@@ -195,22 +198,31 @@ Presentation-Abstraction-Control and Mediator patterns:
 architecture: snowflake
 stars:
   .:
-    contracts:     ["internal/contracts"]
-    orchestrators: [".", "internal/assembly", "internal/executor"]
+    contracts:  ["internal/contracts"]
+    assemblers: [".", "cmd/guardprobe", "internal/assembly"]
+    engines:    ["internal/executor"]
   internal/blocks:
-    contracts:     ["internal/blocks/contracts"]
-    orchestrators: ["internal/blocks/kit"]
+    contracts:  ["internal/blocks/contracts"]
+    assemblers: ["internal/blocks/kit"]
   internal/gate:
-    contracts:     ["internal/gate/contracts"]
-    orchestrators: ["internal/gate/pipeline"]
+    contracts:  ["internal/gate/contracts"]
+    assemblers: ["internal/gate/pipeline"]
 ```
+
+`orchestrators`, the earlier name for assemblers, is still read, with a note
+to rename it.
 
 A snowflake dependency that breaks the rules and is accepted for now is an
 entry under [`rules.ignore`](configuration.md#ignoring-a-finding), with its
 reason, like any other violation.
 
-Treaty reads no test files, in any language, so their imports are not
-checked against the rules.
+In a `snowflake`, Treaty also reads Go test files and checks their imports by
+the rules of the package they test, unless `rules.tests: skip`; it reports an
+import of a package it does not read, such as one under `_`, `.`, `vendor` or
+`testdata`, as unclassified, every `//go:linkname` as a violation, and impure
+contracts as `impure_contracts`; only files under `//go:build ignore` are left
+out. See [Stars](configuration.md#stars). Other architectures read no test
+files unless `rules.tests: check`.
 
 Treaty reads the whole repository, including sub-trees with their own
 `go.mod`. Their imports resolve through their own module paths, and imports
@@ -272,7 +284,8 @@ from the left end of the file's bracket on the border, and the internals
 across the file's cell. A package that holds a `go.mod` shows it in the first
 cell of its ring, at 12:00; click it to read the file.
 In `snowflake`, each star's core sits at its center: its contracts in an
-inner hexagon, its orchestrators in the band around them, and its spokes on
+inner hexagon, its assemblers (double outline) and engines (dashed) in the
+band around them, and its spokes on
 a ring around that; a branch is a smaller star in its parent's ring. There
 is no composition ring. Allowed dependencies run straight in lanes, between
 a star's core and its own spokes or the next star's core, and only a
@@ -305,10 +318,10 @@ up, and the tip says what a drop will do. Escape puts the module back.
   Treaty adds the module's exact path to that boundary's globs, or to
   `shared` or `composition`, the same way. Its layer inside a boundary still
   comes from `layers`, and a move never creates a boundary.
-- **Into the contracts or the orchestrators, or out to its spoke**
-  (`snowflake`): Treaty adds the module's directory to the contracts or the
-  orchestrators of its own star, the innermost star holding it, taking it
-  out of the other list, or takes it out of both so it returns to its own
+- **Into the contracts, assemblers or engines, or out to its spoke**
+  (`snowflake`): Treaty adds the module's directory to the contracts, the
+  assemblers or, with Shift on the core's band, the engines of its own star,
+  the innermost star holding it, taking it out of the other lists, or takes it out of both so it returns to its own
   spoke. A spoke is its directory, so moving a module to another spoke means
   moving its files.
 
@@ -373,7 +386,7 @@ You and the agent always look at the same graph:
 | `slice` | The context for working on one symbol, file or module, one line per entry with file:line |
 | `source` | Just the code needed: a symbol from its documentation to its last line, or a file's lines, numbered. A long file gives its outline unless asked for all of it |
 | `impact` | Everything that depends on a symbol, file or module, transitively, before an edit |
-| `allowed` | Whether one module may depend on another, before an import is added; in `snowflake`, a refusal names the ports the source may use that something in the target's spoke or branch already implements or satisfies, or the re-exports in its own star's contracts that stand for what it reached for |
+| `allowed` | Whether one module may depend on another, before an import is added; in `snowflake`, a refusal names the ports the source may use that something in the target's spoke or branch already implements or satisfies |
 | `changes` | What changed in the architecture since the baseline, including new violations |
 | `plan` | The agent's intended contracts in AutoPen, drawn on the map as unbuilt and filled in as the code is written |
 | `selection` | What the person has selected on the map, so they can point and say "work here" |
