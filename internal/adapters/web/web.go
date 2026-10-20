@@ -166,6 +166,7 @@ func Listen(projects *app.Projects, sessions Sessions, version string, port int)
 		"POST /api/map-settings": result.saveMapSettings,
 		"GET /api/plans":         result.plans,
 		"POST /api/plan":         result.savePlan,
+		"POST /api/plan/delete":  result.deletePlan,
 		"GET /api/positions":     result.positions,
 		"POST /api/positions":    result.setPosition,
 		"GET /api/preferences":   result.preferences,
@@ -593,12 +594,37 @@ func (this *Server) savePlan(live *app.Live, writer http.ResponseWriter, request
 	case errors.As(err, &syntax), errors.Is(err, app.ErrDumpSyntax), errors.Is(err, app.ErrEmptyPlan):
 		http.Error(writer, err.Error(), http.StatusUnprocessableEntity)
 		return
+	case errors.Is(err, app.ErrDesignName):
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
 	case err != nil:
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	respond(writer, report)
+}
+
+// deletePlan removes a design, and the map stops drawing it.
+func (this *Server) deletePlan(live *app.Live, writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+
+	if !decode(writer, request, &body) {
+		return
+	}
+
+	switch err := live.DeletePlan(body.Name); {
+	case errors.Is(err, app.ErrDesignName):
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, app.ErrNoDesign):
+		http.Error(writer, err.Error(), http.StatusNotFound)
+	case err != nil:
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	default:
+		writer.WriteHeader(http.StatusNoContent)
+	}
 }
 
 // positions serves where the person put modules on the map.

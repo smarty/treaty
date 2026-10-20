@@ -164,6 +164,33 @@ func TestLiveServer(t *testing.T) {
 		t.Fatalf("plans after a save: %+v %v", plans, err)
 	}
 
+	if !bytes.Contains(get(t, base+"/api/view", http.StatusOK), []byte(`"id":"go:core:Refund"`)) {
+		t.Fatal("the saved plan must be overlaid on the map")
+	}
+
+	// Deleting a plan removes its file and the map stops drawing it; a plan
+	// that is not there is not found, and a name can't reach outside the
+	// designs.
+	post(t, base+"/api/plan/delete", "application/json", `{"name":"refunds"}`, http.StatusNoContent)
+	if _, err := os.Stat(filepath.Join(root, ".treaty", "designs", "refunds.pen")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a deleted plan's file must be gone: %v", err)
+	}
+
+	if bytes.Contains(get(t, base+"/api/view", http.StatusOK), []byte(`"id":"go:core:Refund"`)) {
+		t.Fatal("the map must stop drawing a deleted plan")
+	}
+
+	post(t, base+"/api/plan/delete", "application/json", `{"name":"refunds"}`, http.StatusNotFound)
+	write(t, root, ".treaty/x.pen", "kept\n")
+	post(t, base+"/api/plan/delete", "application/json", `{"name":"../x"}`, http.StatusBadRequest)
+	if _, err := os.Stat(filepath.Join(root, ".treaty", "x.pen")); err != nil {
+		t.Fatalf("a name must not reach outside the designs: %v", err)
+	}
+
+	if err := json.Unmarshal(get(t, base+"/api/plans", http.StatusOK), &plans); err != nil || len(plans) != 1 || plans[0].Name != "pricing" {
+		t.Fatalf("plans after a delete: %+v %v", plans, err)
+	}
+
 	// Show offers a symbol, even a planned one, and refuses a second request
 	// soon after.
 	if err := live.Show("go:nowhere:X", "no such thing"); !errors.Is(err, app.ErrUnknownTarget) {

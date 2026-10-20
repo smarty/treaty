@@ -310,6 +310,26 @@ func (this *Live) Plans() (result []PlanText, err error) {
 	return result, nil
 }
 
+// DeletePlan removes a design, so the map no longer draws it.
+//
+// Parameters:
+//   - name: the design name.
+//
+// Returns:
+//   - err: the name is invalid, there is no such design, or it could not be
+//     removed.
+//
+// Errors:
+//   - ErrDesignName: the name has characters outside the allowed set.
+//   - ErrNoDesign: no design with that name exists.
+func (this *Live) DeletePlan(name string) error {
+	if err := this.service.workspace.DeleteDesign(name); err != nil {
+		return err
+	}
+
+	return this.Refresh()
+}
+
 // Selected returns what the person has selected on the map, with its slice.
 //
 // Returns:

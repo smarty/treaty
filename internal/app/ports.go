@@ -367,6 +367,13 @@ type Workspace interface {
 	// Designs lists the design names.
 	Designs() ([]string, error)
 
+	// DeleteDesign removes a design by name.
+	//
+	// Errors:
+	//   - ErrDesignName: the name has characters outside the allowed set.
+	//   - ErrNoDesign: no design with that name exists.
+	DeleteDesign(name string) error
+
 	// MapSettings reads the person's choices on the map, empty when none
 	// have been saved.
 	MapSettings() (MapSettings, error)

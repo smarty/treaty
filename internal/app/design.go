@@ -22,7 +22,14 @@ const (
 	ItemUnverified   = "unverified"
 )
 
-var ErrDumpSyntax = errors.New("design files may not use dump-only syntax")
+var (
+	ErrDumpSyntax = errors.New("design files may not use dump-only syntax")
+
+	// ErrDesignName and ErrNoDesign are what a Workspace returns for a name
+	// outside the allowed set and for a design that is not there.
+	ErrDesignName = errors.New("design names use letters, digits, dots, dashes and underscores")
+	ErrNoDesign   = errors.New("no such design")
+)
 
 // DesignItem is one thing design check reports.
 type DesignItem struct {

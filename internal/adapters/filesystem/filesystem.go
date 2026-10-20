@@ -33,8 +33,8 @@ const (
 
 var (
 	ErrDesignExists = errors.New("design already exists")
-	ErrDesignName   = errors.New("design names use letters, digits, dots, dashes and underscores")
-	ErrNoDesign     = errors.New("no such design")
+	ErrDesignName   = app.ErrDesignName
+	ErrNoDesign     = app.ErrNoDesign
 
 	designName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
@@ -283,6 +283,42 @@ func (this *Workspace) Designs() (result []string, err error) {
 
 	sort.Strings(result)
 	return result, err
+}
+
+// DeleteDesign removes .treaty/designs/<name>.pen, and <name>.cml when the
+// design was saved before the language was renamed.
+//
+// Parameters:
+//   - name: the design name.
+//
+// Returns:
+//   - err: the name is invalid, the design does not exist or it could not
+//     be removed.
+//
+// Errors:
+//   - ErrDesignName: the name has characters outside the allowed set.
+//   - ErrNoDesign: no design with that name exists.
+func (this *Workspace) DeleteDesign(name string) error {
+	path, err := this.designPath(name)
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for _, candidate := range []string{path, legacy(path)} {
+		switch err := os.Remove(candidate); {
+		case err == nil:
+			found = true
+		case !errors.Is(err, fs.ErrNotExist):
+			return err
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("%w: %s", ErrNoDesign, name)
+	}
+
+	return nil
 }
 
 // SaveDesign writes .treaty/designs/<name>.pen, replacing an existing one,

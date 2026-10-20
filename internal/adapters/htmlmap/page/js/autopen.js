@@ -31,6 +31,7 @@ function setupAutopen() {
   document.getElementById("autopen-name").addEventListener("input", () => { autopenState.problem = ""; paintAutopen(); });
   document.getElementById("autopen-save").addEventListener("click", saveAutopen);
   document.getElementById("autopen-revert").addEventListener("click", () => loadPlan(autopenState.name));
+  document.getElementById("autopen-delete").addEventListener("click", deleteAutopen);
   refreshAutopen();
 }
 
@@ -96,6 +97,25 @@ async function saveAutopen() {
   }
 }
 
+// deleteAutopen deletes the plan shown, once the person confirms it, and
+// shows the first plan left, or a new one.
+async function deleteAutopen() {
+  const name = autopenState.name;
+  if (!name || autopenState.busy || !confirm(`Delete the plan ${name}? Its file in .treaty/designs is removed, and the map no longer draws it.`)) return;
+  autopenState.busy = true; paintAutopen();
+  try {
+    const response = await fetch("api/plan/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    if (!response.ok && response.status !== 404) { showAutopenProblem((await response.text()).trim()); return; }
+    autopenState.name = null;
+    await refreshAutopen();
+    autopenState.saved = `Deleted ${name}.`;
+  } catch (err) {
+    showAutopenProblem("The plan was not deleted: " + err.message);
+  } finally {
+    autopenState.busy = false; paintAutopen();
+  }
+}
+
 // showAutopenProblem shows a refusal, and marks the line it names. The
 // server puts a header before text without one, so its line numbers then
 // run three ahead of the editor's.
@@ -123,6 +143,7 @@ function paintAutopen() {
   gutter.scrollTop = editor.scrollTop;
   document.getElementById("autopen-save").disabled = (!dirty && !!autopenState.name) || autopenState.busy;
   document.getElementById("autopen-revert").disabled = !dirty;
+  document.getElementById("autopen-delete").disabled = !autopenState.name || autopenState.busy;
   if (autopenState.problem) return setAutopenStatus(autopenState.problem, true);
   if (autopenState.saved && !dirty) return setAutopenStatus(autopenState.saved);
   if (dirty) return setAutopenStatus(`Unsaved changes. ${navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+"}S saves.`);

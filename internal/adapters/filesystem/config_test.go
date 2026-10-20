@@ -292,6 +292,28 @@ func TestDesignsBeforeTheRename(t *testing.T) {
 	if _, err := os.Stat(old); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("saving replaces the old .cml file: %v", err)
 	}
+
+	// Deleting removes a design saved either way, refuses a name outside
+	// the designs, and a design that is not there is not found.
+	if err := os.WriteFile(old, []byte("cml 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := workspace.DeleteDesign("old"); err != nil {
+		t.Fatal(err)
+	}
+
+	if names, _ := workspace.Designs(); !slices.Equal(names, []string{"fresh"}) {
+		t.Fatalf("designs after a delete: %v", names)
+	}
+
+	if err := workspace.DeleteDesign("old"); !errors.Is(err, ErrNoDesign) {
+		t.Fatalf("deleting a missing design: %v", err)
+	}
+
+	if err := workspace.DeleteDesign("../fresh"); !errors.Is(err, ErrDesignName) {
+		t.Fatalf("deleting outside the designs: %v", err)
+	}
 }
 
 func TestLoadReadsVersions(t *testing.T) {
