@@ -143,7 +143,9 @@ function drawReferences(svg, rel) {
       const path = el("path", { d: `M${a.x},${a.y} Q${cx},${cy} ${b.x},${b.y}`, fill: "none", stroke, "stroke-width": width, "marker-end": part.inherit ? "url(#inherit)" : "url(#arrow)", "vector-effect": "non-scaling-stroke", "data-label": label, class: dimmed && !e.violation ? "dim" : "", tabindex: 0, role: "button", "aria-label": `${part.inherit ? "Inherits" : "Dependency"} ${from.label} to ${to.label}${e.violation ? (old ? ", existing layer violation" : ", layer violation") : ""}` }, edgeLayer);
       if (part.inherit || e.removed) path.setAttribute("stroke-dasharray", e.removed ? "3 3" : "6 4");
       path.dataset.edge = e.from + "|" + e.to + (e.removed ? "|removed" : "");
-      const pick = () => select({ type: "edge", from: e.from, to: e.to, removed: e.removed, edge: e });
+      // An edge's details are its references, so picking it brings the
+      // inspector to the front.
+      const pick = () => { select({ type: "edge", from: e.from, to: e.to, removed: e.removed, edge: e }); showPanel("inspector"); };
       const hit = el("path", { d: path.getAttribute("d"), fill: "none", stroke: "transparent", "stroke-width": 14, "vector-effect": "non-scaling-stroke", "pointer-events": "stroke", "data-label": label }, edgeLayer);
       hit.glowTarget = path;
       for (const target of [path, hit]) { target.style.cursor = "pointer"; target.addEventListener("click", pick); }

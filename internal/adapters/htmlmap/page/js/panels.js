@@ -17,14 +17,14 @@
 // A panel that fills its stack, such as the map, scrolls inside itself
 // rather than in the stack. A panel's about, when it has one, joins its
 // title in the tab's tooltip.
-const PANELS = { map: { title: "Map", fill: true, float: { w: 640, h: 480 } }, queue: { title: "Review queue" }, inspector: { title: "Inspector" }, code: { title: "Code" }, tests: { title: "Tests" }, config: { title: "Terms", about: "treaty.yaml", fill: true } };
+const PANELS = { map: { title: "Map", fill: true, float: { w: 640, h: 480 } }, queue: { title: "Review queue" }, inspector: { title: "Inspector" }, code: { title: "Code" }, tests: { title: "Tests" }, config: { title: "Terms", about: "treaty.yaml", fill: true }, autopen: { title: "AutoPen", about: "plans in .treaty/designs", fill: true } };
 const MAP_TABS = { references: "References", files: "Files", symbols: "Symbols" };
 const LAYOUT_KEY = "treaty.layout.v1";
 const DRAWER_MIN = 160, CENTER_MIN = 240, EDGE_ZONE = 28, DRAG_START = 5, SPLIT_ZONE = 0.3, STACK_MIN = 60;
 const SIDES = ["left", "right", "bottom"];
 function defaultLayout() {
   return {
-    left: { size: 300, stacks: [{ tabs: ["queue"], active: "queue", weight: 1 }] },
+    left: { size: 300, stacks: [{ tabs: ["queue", "autopen"], active: "queue", weight: 1 }] },
     right: { size: 360, stacks: [{ tabs: ["inspector", "code", "tests", "config"], active: "inspector", weight: 1 }] },
     bottom: { size: 240, stacks: [] },
     center: { tabs: ["map"], active: "map" },

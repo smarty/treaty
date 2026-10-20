@@ -135,6 +135,35 @@ func TestLiveServer(t *testing.T) {
 		t.Fatal("the plan must be overlaid on the map")
 	}
 
+	// The AutoPen tab reads every plan and saves one as the plan tool does;
+	// text that is not a plan is refused, and nothing is saved.
+	var plans []app.PlanText
+	if err := json.Unmarshal(get(t, base+"/api/plans", http.StatusOK), &plans); err != nil || len(plans) != 1 || plans[0].Name != "pricing" || !strings.Contains(plans[0].Text, "func Price(order Order) int") {
+		t.Fatalf("plans: %+v %v", plans, err)
+	}
+
+	post(t, base+"/api/plan", "application/json", `{"name":"refunds","text":"autopen 1\ndesign \"refunds\"\n\ngo:core/refund.go\n\tfunc Refund(order Order) int\n"}`, http.StatusUnprocessableEntity)
+	post(t, base+"/api/plan", "application/json", `{"name":"refunds","text":"autopen 1\ndesign \"refunds\"\n"}`, http.StatusUnprocessableEntity)
+	if _, err := os.Stat(filepath.Join(root, ".treaty", "designs", "refunds.pen")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused plan must not be saved: %v", err)
+	}
+
+	answer, err := http.Post(base+"/api/plan", "application/json", strings.NewReader(`{"name":"refunds","text":"go:core/refund.go\n  func Refund(order Order) int\n"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var saved app.DesignReport
+	err = json.NewDecoder(answer.Body).Decode(&saved)
+	_ = answer.Body.Close()
+	if err != nil || answer.StatusCode != http.StatusOK || saved.Name != "refunds" || len(saved.Items) != 1 || saved.Items[0].Kind != app.ItemMissing {
+		t.Fatalf("saved plan: %d %+v %v", answer.StatusCode, saved, err)
+	}
+
+	if err := json.Unmarshal(get(t, base+"/api/plans", http.StatusOK), &plans); err != nil || len(plans) != 2 || plans[1].Name != "refunds" {
+		t.Fatalf("plans after a save: %+v %v", plans, err)
+	}
+
 	// Show offers a symbol, even a planned one, and refuses a second request
 	// soon after.
 	if err := live.Show("go:nowhere:X", "no such thing"); !errors.Is(err, app.ErrUnknownTarget) {

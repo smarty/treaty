@@ -122,6 +122,7 @@ function showState(st) {
   }
   showView(st.view);
   noteConfigState(st);
+  noteAutopenState(st);
   if ((st.tests || 0) !== testState.shown) refreshTests();
 }
 // showView reflects which architecture the map draws: treaty.yaml's, or a
@@ -233,6 +234,7 @@ function startLive() {
   loadPreferences().then(loadMapSettings);
   loadPositions();
   setupConfig();
+  setupAutopen();
   document.getElementById("offer-go").addEventListener("click", () => {
     const target = offered; dismissOffer(); if (!target) return;
     goTo(target); select(symbols.has(target) ? { type: "symbol", id: target } : { type: "module", id: target });

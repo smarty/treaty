@@ -338,6 +338,8 @@ tr.ut-detail code { font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
 .config-live[hidden], .config-panel .empty[hidden] { display: none; }
 .config-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
 .config-bar button:disabled { opacity: .55; cursor: default; }
+.config-bar input[hidden] { display: none; }
+.config-bar input { width: 9em; font: inherit; }
 .config-status { color: var(--muted); flex: 1 1 12em; min-width: 0; }
 .config-status.error { color: var(--high); }
 .config-editor { flex: 1; min-height: 0; display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--code-bg); font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }

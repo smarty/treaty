@@ -86,6 +86,13 @@
       <div class="config-editor"><div id="config-gutter" class="config-gutter" aria-hidden="true"></div><textarea id="config-text" spellcheck="false" wrap="off" autocomplete="off" autocapitalize="off" aria-label="treaty.yaml"></textarea></div>
     </div>
   </section>
+  <section class="panel config-panel" data-panel="autopen" aria-label="AutoPen plans">
+    <p id="autopen-static" class="empty">AutoPen plans can be read and edited on the live map, which treaty serve opens.</p>
+    <div id="autopen-live" class="config-live" hidden>
+      <div class="config-bar"><select id="autopen-plan" aria-label="Plan"></select><input id="autopen-name" type="text" placeholder="plan name" spellcheck="false" autocomplete="off" aria-label="The new plan's name"><button id="autopen-save" type="button" disabled>Save</button><button id="autopen-revert" type="button" disabled title="Load the plan as it is on disk, discarding your edits">Revert</button><span id="autopen-status" class="config-status" role="status" aria-live="polite"></span></div>
+      <div class="config-editor"><div id="autopen-gutter" class="config-gutter" aria-hidden="true"></div><textarea id="autopen-text" spellcheck="false" wrap="off" autocomplete="off" autocapitalize="off" aria-label="AutoPen"></textarea></div>
+    </div>
+  </section>
 </div>
 <script>
 /*SCRIPT*/

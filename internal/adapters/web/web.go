@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/smarty/treaty/internal/app"
+	"github.com/smarty/treaty/internal/autopen"
 	"github.com/smarty/treaty/internal/rules"
 )
 
@@ -163,6 +164,8 @@ func Listen(projects *app.Projects, sessions Sessions, version string, port int)
 		"POST /api/config":       result.saveConfig,
 		"GET /api/map-settings":  result.mapSettings,
 		"POST /api/map-settings": result.saveMapSettings,
+		"GET /api/plans":         result.plans,
+		"POST /api/plan":         result.savePlan,
 		"GET /api/positions":     result.positions,
 		"POST /api/positions":    result.setPosition,
 		"GET /api/preferences":   result.preferences,
@@ -558,6 +561,44 @@ func (this *Server) page(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	_, _ = io.WriteString(writer, strings.Replace(string(project.Live.Page()), "<title>Treaty</title>", title, 1))
+}
+
+// plans serves every design's AutoPen, for the map's AutoPen tab.
+func (this *Server) plans(live *app.Live, writer http.ResponseWriter, _ *http.Request) {
+	plans, err := live.Plans()
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	respond(writer, plans)
+}
+
+// savePlan saves the AutoPen the person edited as a design, as the plan
+// tool does, and answers with what is not built yet. Text that is not a
+// plan is refused with its line, and nothing is saved.
+func (this *Server) savePlan(live *app.Live, writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+		Text string `json:"text"`
+	}
+
+	if !decodeUpTo(writer, request, &body, maxConfigBody) {
+		return
+	}
+
+	report, err := live.Plan(body.Name, body.Text)
+	var syntax *autopen.Error
+	switch {
+	case errors.As(err, &syntax), errors.Is(err, app.ErrDumpSyntax), errors.Is(err, app.ErrEmptyPlan):
+		http.Error(writer, err.Error(), http.StatusUnprocessableEntity)
+		return
+	case err != nil:
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	respond(writer, report)
 }
 
 // positions serves where the person put modules on the map.

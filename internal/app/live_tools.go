@@ -278,6 +278,38 @@ func (this *Live) Plan(name, text string) (result DesignReport, err error) {
 	return this.DesignCheck(name)
 }
 
+// PlanText is a design's name and its AutoPen, as the map's AutoPen tab edits
+// it.
+type PlanText struct {
+	Name string `json:"name"`
+	Text string `json:"text"`
+}
+
+// Plans returns every design in the workspace with its text, for the map's
+// AutoPen tab.
+//
+// Returns:
+//   - result: the designs, sorted by name.
+//   - err: the designs could not be listed or read.
+func (this *Live) Plans() (result []PlanText, err error) {
+	names, err := this.service.workspace.Designs()
+	if err != nil {
+		return nil, err
+	}
+
+	result = []PlanText{}
+	for _, name := range names {
+		text, err := this.service.workspace.ReadDesign(name)
+		if err != nil {
+			return nil, err
+		}
+
+		result = append(result, PlanText{Name: name, Text: text})
+	}
+
+	return result, nil
+}
+
 // Selected returns what the person has selected on the map, with its slice.
 //
 // Returns:
