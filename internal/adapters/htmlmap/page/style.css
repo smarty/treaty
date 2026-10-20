@@ -196,6 +196,9 @@ li.link { cursor: pointer; text-decoration: underline dotted; }
 .where { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 .sig-old { color: var(--removed); } .sig-new { color: var(--added); }
 pre.diff div { white-space: pre; }
+/* The line a reference's end points at, in a symbol's code or its file. */
+pre.lines div { white-space: pre; }
+pre div.line-hit { min-width: 100%; width: max-content; background: color-mix(in srgb, var(--selection) 20%, transparent); box-shadow: inset 3px 0 var(--selection); }
 pre.diff .sig-old { background: color-mix(in srgb, var(--removed) 12%, transparent); } pre.diff .sig-new { background: color-mix(in srgb, var(--added) 12%, transparent); }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
 .chip { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; cursor: pointer; background: var(--bg); color: var(--ink); }

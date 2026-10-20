@@ -200,7 +200,8 @@ function sliceBlock(parent, slice) {
 // referenceTable lists an arrow's references as source, reference and
 // destination, each row colored by how it changed since the base: added,
 // removed, or changed when the destination's signature changed. Clicking a
-// source or destination selects that symbol.
+// source selects that symbol and opens its code at the line that makes the
+// reference; clicking a destination does so at the line that declares it.
 function referenceTable(e) {
   const keyOf = id => { const s = symbols.get(id), a = s && anchorOf(s.module); return a ? a.key : ""; };
   const gone = e.removed ? [] : removedLinks.filter(r => keyOf(r.from) === e.from && keyOf(r.to) === e.to);
@@ -210,25 +211,46 @@ function referenceTable(e) {
   for (const label of ["Source", "Reference", "Destination"]) head.appendChild(h("th", {}, label));
   table.appendChild(h("thead")).appendChild(head);
   const body = table.appendChild(h("tbody"));
-  const end = id => {
-    const td = h("td"), name = id.split(":").pop();
-    if (!symbols.has(id)) { td.appendChild(h("code", { title: id }, name)); return td; }
-    const b = h("button", { type: "button", class: "link", title: id }, name);
-    b.addEventListener("click", () => select({ type: "symbol", id })); td.appendChild(b); return td;
+  const end = (id, file, line) => {
+    const td = h("td"), name = id.split(":").pop(), title = file && line ? `${id}\n${file}:${line}` : id;
+    if (!symbols.has(id)) { td.appendChild(h("code", { title }, name)); return td; }
+    const b = h("button", { type: "button", class: "link", title }, name);
+    b.addEventListener("click", () => showCodeAt(id, line)); td.appendChild(b); return td;
   };
   for (const { r, change } of rows) {
-    const tr = h("tr", change ? { class: "ref-" + change, title: change } : {});
-    tr.appendChild(end(r.from));
-    tr.appendChild(h("td", { class: "ref-at" }, `${r.kind} at ${r.file}:${r.line}`));
-    tr.appendChild(end(r.to)); body.appendChild(tr);
+    const tr = h("tr", change ? { class: "ref-" + change, title: change } : {}), to = symbols.get(r.to) || {};
+    tr.appendChild(end(r.from, r.file, r.line));
+    tr.appendChild(h("td", { class: "ref-at", title: `${r.file}:${r.line}` }, r.kind));
+    tr.appendChild(end(r.to, to.file, to.line)); body.appendChild(tr);
   }
   return { table, count: rows.length };
 }
+// showCodeAt selects a symbol and opens the Code tab at one of its lines,
+// highlighted and scrolled to the middle.
+function showCodeAt(id, line) {
+  select(line ? { type: "symbol", id, line } : { type: "symbol", id });
+  showPanel("code");
+  requestAnimationFrame(() => { const hit = document.querySelector("#code .line-hit"); if (hit) hit.scrollIntoView({ block: "center", inline: "nearest" }); });
+}
+// linesBlock draws code a line at a time, numbering its lines from first,
+// and highlights the line hit.
+function linesBlock(text, first, hit, cls) {
+  const pre = h("pre", { class: cls ? "lines " + cls : "lines" });
+  text.split("\n").forEach((line, i) => pre.appendChild(h("div", first + i === hit ? { class: "line-hit" } : {}, line || " ")));
+  return pre;
+}
 // diffBlock draws a line diff in full: removed lines red, added lines
-// green, unchanged lines plain.
-function diffBlock(lines) {
+// green, unchanged lines plain. Given the line its side of the diff starts
+// at, the base's for a removed symbol and the working tree's otherwise, it
+// highlights the line hit.
+function diffBlock(lines, first, hit, removed) {
   const pre = h("pre", { class: "diff" });
-  for (const d of lines) pre.appendChild(h("div", { class: d.op === "-" ? "sig-old" : d.op === "+" ? "sig-new" : "" }, d.op + " " + d.text));
+  let at = first;
+  for (const d of lines) {
+    const counts = removed ? d.op !== "+" : d.op !== "-", cls = (d.op === "-" ? "sig-old" : d.op === "+" ? "sig-new" : "") + (hit && counts && at === hit ? " line-hit" : "");
+    pre.appendChild(h("div", { class: cls.trim() }, d.op + " " + d.text));
+    if (counts) at++;
+  }
   return pre;
 }
 // diffSummary counts a diff's added and removed lines.
@@ -237,7 +259,9 @@ function diffSummary(lines) {
   return `+${added} −${removed}`;
 }
 // showCode fills the Code tab with the selection's code: a symbol's lines,
-// or its diff with the baseline when it changed, or a whole file.
+// or its diff with the baseline when it changed, or a whole file. A symbol
+// selected at a line, from a reference's end, highlights that line, and
+// shows its whole file when its own lines do not hold it.
 function showCode() {
   const box = document.getElementById("code"); box.innerHTML = ""; const sel = state.selected;
   const note = text => box.appendChild(h("p", { class: "empty" }, text));
@@ -249,11 +273,13 @@ function showCode() {
     // A changed symbol's code shows as a diff with the base: removed lines
     // red, added lines green, as its signature does.
     if (s.diff && s.diff.length) {
-      box.appendChild(h("h2", {}, s.removed ? "Removed" : `Changes since the baseline · ${diffSummary(s.diff)}`)); box.appendChild(diffBlock(s.diff));
+      box.appendChild(h("h2", {}, s.removed ? "Removed" : `Changes since the baseline · ${diffSummary(s.diff)}`)); box.appendChild(diffBlock(s.diff, s.line, sel.line, s.removed));
       return;
     }
     if (s.design) return note("Planned, not built: there is no code yet.");
-    const code = codeOf(s);
+    const code = codeOf(s), text = sel.line && fileSource(s.file);
+    if (sel.line && code && sel.line >= s.line && sel.line < s.line + code.split("\n").length) return box.appendChild(linesBlock(code, s.line, sel.line));
+    if (text) return box.appendChild(linesBlock(text, 1, sel.line, "file"));
     return code ? box.appendChild(h("pre", {}, code)) : note("This symbol is too long to show here, or its file could not be read. Select its file to see all of it.");
   }
   if (sel.type === "file") {
