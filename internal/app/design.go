@@ -136,8 +136,21 @@ func (this *Service) DesignNew(name string, from []string) (path string, err err
 		module := g.Module(symbol.Module)
 		scaffold.AddModule(&graph.Module{ID: module.ID, Language: module.Language, Path: module.Path})
 		scaffold.Module(module.ID).Files = append(scaffold.Module(module.ID).Files, symbol.File)
-		if symbol.Parent != "" && !chosen[graph.SymbolID(symbol.Module, symbol.Parent)] {
-			parent := *g.Symbol(graph.SymbolID(symbol.Module, symbol.Parent))
+		// A member of a nested type needs every enclosing type, outermost
+		// first, to sit at its place in the scaffold.
+		var missing []*graph.Symbol
+		for at := symbol.Parent; at != ""; {
+			parent := g.Symbol(graph.SymbolID(symbol.Module, at))
+			if parent == nil || chosen[parent.ID] {
+				break
+			}
+
+			missing = append(missing, parent)
+			at = parent.Parent
+		}
+
+		for index := len(missing) - 1; index >= 0; index-- {
+			parent := *missing[index]
 			parent.Fields = contractFields(parent.Fields)
 			scaffold.AddSymbol(&parent)
 			chosen[parent.ID] = true
@@ -216,7 +229,7 @@ func (this *designWalk) block(block *autopen.Block) error {
 	}
 
 	for _, node := range block.Nodes {
-		if err := this.node(dialect, moduleID, layer, node, nil, nil); err != nil {
+		if err := this.node(dialect, moduleID, layer, node, nil, nil, ""); err != nil {
 			return err
 		}
 	}
@@ -318,7 +331,10 @@ func (this *designWalk) expect(directive autopen.Directive, owner, moduleID, sym
 	}
 }
 
-func (this *designWalk) node(dialect Dialect, moduleID, layer string, node *autopen.Node, parent *graph.Symbol, parentDecl *Declaration) error {
+// node checks one design line and its children. parentName is the full
+// name of the enclosing declaration, as Order.Line, since parentDecl names
+// only the last part.
+func (this *designWalk) node(dialect Dialect, moduleID, layer string, node *autopen.Node, parent *graph.Symbol, parentDecl *Declaration, parentName string) error {
 	declaration, err := dialect.Declare(node.Text, parentDecl)
 	if err != nil {
 		return fmt.Errorf("design line %d: %w", node.Line, err)
@@ -333,10 +349,8 @@ func (this *designWalk) node(dialect Dialect, moduleID, layer string, node *auto
 	}
 
 	name := declaration.Name
-	parentName := ""
-	if parentDecl != nil {
-		parentName = parentDecl.Name
-		name = parentDecl.Name + "." + declaration.Name
+	if parentName != "" {
+		name = parentName + "." + declaration.Name
 	}
 
 	id := graph.SymbolID(moduleID, name)
@@ -357,7 +371,7 @@ func (this *designWalk) node(dialect Dialect, moduleID, layer string, node *auto
 	}
 
 	for _, child := range node.Children {
-		if err := this.node(dialect, moduleID, layer, child, built, &declaration); err != nil {
+		if err := this.node(dialect, moduleID, layer, child, built, &declaration, name); err != nil {
 			return err
 		}
 	}

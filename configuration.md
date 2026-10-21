@@ -378,7 +378,8 @@ are named edges, each with a reason.
 
 Every glob is matched against a module's path, relative to the repository
 root. A module is a directory of source: a Go package, a directory of
-JavaScript or TypeScript files, or a Python package. The repository root's
+JavaScript or TypeScript files, a Python package, or a directory of C#
+files. The repository root's
 path is `.`.
 
 Test files are not read in any architecture, so their imports are never

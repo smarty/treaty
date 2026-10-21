@@ -27,7 +27,7 @@ Agents now produce diffs faster than humans can review them, and line-based revi
 3. Render an interactive map that stays legible at 50 modules and 2,000 contract symbols through aggregation and semantic zoom.
 4. Export a context slice per symbol or module that gives an agent the contracts it needs and nothing else.
 5. Let people design new features in AutoPen, then check the design against the code as it is built.
-6. Support languages through one extractor interface, each with a small hand-written contract scanner and no language treated as a special case. Version 1 supports Go, JavaScript, TypeScript and Python.
+6. Support languages through one extractor interface, each with a small hand-written contract scanner and no language treated as a special case. Version 1 supports Go, JavaScript, TypeScript, Python and C#.
 
 **Non-goals**
 
@@ -38,7 +38,7 @@ Agents now produce diffs faster than humans can review them, and line-based revi
 - Treaty does not choose an architecture. Knowing which one fits the codebase is the team's job; the tool checks the one they declare.
 - No strict layering. In the layered architecture a layer may use every layer below it. Whether a team also forbids skipping a layer is a team decision, not a rule the tool enforces.
 - No test-strength scoring for now. Contract-scoped mutation testing was deferred on Sep 29, 2026 and may return later.
-- Go, JavaScript, TypeScript and Python only in version 1. Other languages follow later, each through its own contract scanner behind the same extractor interface.
+- Go, JavaScript, TypeScript, Python and C# only in version 1. Other languages follow later, each through its own contract scanner behind the same extractor interface.
 
 ## Core concepts
 
@@ -213,6 +213,21 @@ Python has a scanner of its own, built the same way:
 - **Imports resolve inside the tree only**: relative imports from the file's package, and absolute ones from the source roots, which are the repository root, `src`, and each project directory and its `src`. A directory a file adds to the import path at run time, with `sys.path.insert`, `sys.path.append` or `site.addsitedir`, is a source root too, when its path is a string or is built from `__file__` with `os.path` or `pathlib`; a plain string may be relative to the file's directory or the repository root, so both are tried, and a path computed any other way is ignored. A package found in no root but in exactly one place in the tree, as a vendored dependency is, resolves there. `a.b.c.name` walks packages and submodules to the symbol. As with JavaScript, a name defined in more than one file of a directory is qualified by its file's stem.
 - **What is skipped.** Tests (`test_*.py`, `*_test.py`, `conftest.py`, `tests` directories), stubs (`.pyi`), virtual environments, caches, and `build` and `dist` directories.
 - **Breaking changes** compare annotations, defaults, `*`, `**`, `/` and `*` markers and the return annotation, ignoring parameter names and a method's `self` or `cls`. Variable values may change.
+
+C# has a scanner of its own, built the same way:
+
+- **The lexer** knows regular, verbatim, interpolated and raw strings, `u8` literals, and verbatim identifiers such as `@class`. It keeps every branch of an `#if` group when each branch holds whole declarations, and only the first branch otherwise, so a method or class header split by `#if` reads as one declaration. The same member in two kept branches is a variant.
+- **Modules are directories**, `cs`. Each `.cs` file belongs to the nearest `.csproj` above it, read with `encoding/xml`; MSBuild is not evaluated. A project is a test project, and skipped, when it or its nearest `Directory.Build.props` references a test framework or sets `IsTestProject`, or when its name ends in `.Tests` and the like; a conditioned signal does not count. The directory of a `.csproj` has it as its manifest, and its `AssemblyName` or file name as its name. A directory with `static Main` or top-level statements, in an executable project that no other project references, is an entry point. Files with no `.csproj` form one implicit project.
+- **Names** carry parameter types, as in `Order.Add(Line,int)`, so overloads are separate symbols. Each type in a parameter list keeps only its last segment, uses the C# keyword for a .NET type such as `String`, and numbers type parameters by position: `Result<>.Map<>(Func<T0,M0>)`. A constructor is named after its type, an indexer is `this[int]`, an operator uses its .NET name such as `op_Addition`, and top-level statements are one `<Program>` function. Static constructors, finalizers and explicit interface implementations are not symbols; their code belongs to the type. The parts of a partial type are one symbol in the module of its first part by path; each member keeps its own file.
+- **Signatures** are the declaration without attributes, comments or bodies, on one line, starting with the visibility. Properties keep their accessors, as in `{ get; private set; }`, and an enum member its value, computed when the source leaves it out.
+- **Every member is a symbol.** Properties, events, fields, constants and enum members are kind `value`; no C# symbol has fields, so `find --kind field` finds no C# member.
+- **Contracts** are symbols that other directories of the project can use: `internal` or wider, through every enclosing type. A module is private when nothing in it is usable from another assembly.
+- **References resolve** through the namespaces a file declares, its `using` directives and the project's global usings, limited to the projects the file's project references. `using X = …` and `using static …` record an import; a plain `using` records nothing by itself. A call picks the overload that accepts its argument count; when none or several do, the edge goes to the type.
+- **What is skipped.** Test projects, generated files (`*.g.cs`, `*.Designer.cs`, `// <auto-generated>`), `bin` and `obj`, and files that do not parse, which the extractor lists instead of failing.
+- **Breaking changes** compare visibility, `static`, `abstract`, `virtual` and `sealed`, the types and default values, ignoring parameter names. A property may gain accessors but not lose one or narrow it; `set` and `init` differ; added `required` breaks. A type may gain bases and lose `abstract` or `sealed`; an interface may not gain a base. A `const` or enum value may not change; a field's initializer may.
+- **Designs** must use the code's type parameter names: a design line `class Result<TValue>` against code `class Result<T>` reports "designed X, built Y".
+- **Short targets** match a name without its parameter list or generic markers, so `Order.Add` finds `Order.Add(Line,int)`. A member of a nested type needs its full parent, as `Order.Line.Total`; an indexer needs its parameters, as `Order.this[int]`; top-level statements are `<Program>`.
+- **Limits and gaps.** A renamed type parameter of a generic type is breaking on every member that uses it, since the comparison sees only the member. Names qualified by a file stem do not survive a dump round trip. A new abstract member on a public abstract class, and a new `required` member, are not reported; a new interface member with a default body is reported as breaking although it is not. A new enum member before members whose values follow a non-literal value is not reported. A wider method visibility, an added `virtual` and an added `params` are reported as breaking.
 
 The same scanner reads AutoPen declaration lines, so design signatures and code signatures are compared by one piece of code. The tool is pure Go with no cgo: it cross-compiles, and `go install` needs no C toolchain. On this repository, the Go scanner produced the same modules, symbols, signatures and fields as a tree-sitter-based extractor it replaced, in about a twentieth of the time.
 

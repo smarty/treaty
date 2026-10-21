@@ -49,6 +49,16 @@ func (this *analysis) resolve(target string) (result string, err error) {
 	for _, symbol := range g.Symbols {
 		if symbol.Name == target || tailMatches(symbol.ID, target) || (symbol.Parent != "" && symbol.Name == symbol.Parent+"."+target) {
 			matches = append(matches, symbol.ID)
+			continue
+		}
+
+		// A name with a parameter list or generic markers, as in
+		// Order.Add(Line,int) or Result<>.Get(int), also matches without them.
+		if bare := bareName(symbol.Name); bare != symbol.Name {
+			parent := bareName(symbol.Parent)
+			if bare == target || tailMatches(symbol.Module+":"+bare, target) || (parent != "" && bare == parent+"."+target) {
+				matches = append(matches, symbol.ID)
+			}
 		}
 	}
 
@@ -82,6 +92,30 @@ func listed(ids []string) string {
 	}
 
 	return fmt.Sprintf("%s and %d more", strings.Join(ids[:suggestionLimit], ", "), len(ids)-suggestionLimit)
+}
+
+// bareName drops a name's parameter list, from the first (, and every <…>
+// group, so Money.op_Implicit(int)Money is Money.op_Implicit and
+// Result<>.Get(int) is Result.Get.
+func bareName(name string) string {
+	if cut := strings.Index(name, "("); cut >= 0 {
+		name = name[:cut]
+	}
+
+	var builder strings.Builder
+	depth := 0
+	for _, r := range name {
+		switch {
+		case r == '<':
+			depth++
+		case r == '>' && depth > 0:
+			depth--
+		case depth == 0:
+			builder.WriteRune(r)
+		}
+	}
+
+	return builder.String()
 }
 
 // tailMatches reports whether an id ends with the target after a slash or a
