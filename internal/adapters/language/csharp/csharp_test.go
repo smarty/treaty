@@ -1206,6 +1206,17 @@ func TestResolution(t *testing.T) {
 			[]string{"A/Z:Use.Run(One) -> A/S:Ext.Ext1(One,int) (call)"}, nil},
 		{"two reachable methods", with("A/Z/Use.cs", "using Lib;\nclass Use { void Run(object x) { x.Go(); } }"),
 			nil, []string{"A/Z:Use.Run(object) -> A/S:G1.Go() (call)", "A/Z:Use.Run(object) -> A/S:G2.Go() (call)"}},
+		{"initializer member names", with("A/Z/Use.cs", join(
+			"using Lib;",
+			"record Box(int One, int Two);",
+			"class Use {",
+			"    Box Copy(Box b) => b with { One = 1, Two = 2 };",
+			"    Box Make() => new Box(0, 0) { One = 1 };",
+			"    void Set(int One) { One = 2; }",
+			"}",
+		)), []string{"A/Z:Use.Copy(Box) -> A/Z:Box (type-use)"}, []string{
+			"A/Z:Use.Copy(Box) -> A/X:One (type-use)", "A/Z:Use.Copy(Box) -> A/Y:Two (type-use)", "A/Z:Use.Make() -> A/X:One (type-use)",
+		}},
 	} {
 		t.Run(each.name, func(t *testing.T) {
 			hasEdges(t, extractTree(t, each.files), each.want, each.unwanted)

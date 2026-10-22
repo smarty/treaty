@@ -418,6 +418,12 @@ func (this *resolver) scan(where scope, tokens []token, signature bool, emit fun
 			continue
 		}
 
+		// A member name set in an object or with initializer, as in
+		// r with { Program = p }, names a member of that object, not a type.
+		if !signature && at(tokens, index+1).is("=") && (previous == "{" || previous == ",") && initializer(tokens, index) {
+			continue
+		}
+
 		loose := signature || index == 0 || declarationStarts[previous]
 		chain, last, after := chainAt(tokens, index, loose)
 		if len(chain) == 0 {
@@ -581,6 +587,49 @@ func (this *resolver) uniqueMethod(where scope, name string, count int) string {
 	}
 
 	return found[0]
+}
+
+// initializer reports whether the token at index is inside the braces of
+// an object, collection or with initializer: braces after with, or after a
+// new expression in the same statement.
+func initializer(tokens []token, index int) bool {
+	depth := 0
+	open := -1
+	for at := index - 1; at >= 0 && open < 0; at-- {
+		switch {
+		case tokens[at].is("}"):
+			depth++
+		case tokens[at].is("{") && depth == 0:
+			open = at
+		case tokens[at].is("{"):
+			depth--
+		}
+	}
+
+	if open <= 0 {
+		return false
+	}
+
+	if tokens[open-1].is("with") {
+		return true
+	}
+
+	depth = 0
+	for at := open - 1; at >= 0; at-- {
+		current := tokens[at]
+		switch {
+		case current.is(")") || current.is("]") || current.is(">"):
+			depth++
+		case current.is("(") || current.is("[") || current.is("<"):
+			depth--
+		case depth == 0 && current.is("new"):
+			return true
+		case depth == 0 && (current.is(";") || current.is("{") || current.is("}") || current.is("=>") || current.is("=")):
+			return false
+		}
+	}
+
+	return false
 }
 
 // fits reports whether a parameter list accepts an argument count. For an
