@@ -15,6 +15,7 @@ import (
 
 	"github.com/smarty/treaty/internal/adapters/filesystem"
 	"github.com/smarty/treaty/internal/adapters/gitvcs"
+	"github.com/smarty/treaty/internal/adapters/htmlmap"
 	"github.com/smarty/treaty/internal/app"
 	"github.com/smarty/treaty/internal/graph"
 	"github.com/smarty/treaty/internal/rules"
@@ -1725,6 +1726,153 @@ func TestNominalTypes(t *testing.T) {
 		if target := dialect.Alias(g, symbol.ID); target != "" {
 			t.Errorf("%s aliases %s", symbol.ID, target)
 		}
+	}
+}
+
+// snowflakeTree is the JavaScript snowflake test's tree, written in C#: a
+// root star with contracts and an assembler, and a branch src/Billing whose
+// Tax reaches its sibling Invoices sideways.
+var snowflakeTree = map[string]string{
+	"treaty.yaml":                     "version: 1\narchitecture: snowflake\nstars:\n  .:\n    contracts: [\"src/Contracts\"]\n    assemblers: [\"src/App\"]\n  src/Billing: {contracts: [\"src/Billing/Contracts\"], assemblers: [\"src/Billing/Assembly\"]}\nrules:\n  fail_on: [breaking_changes, layer_violation, unclassified]\n",
+	"src/Shop.csproj":                 sdkProject(""),
+	"src/Contracts/Clock.cs":          "namespace Shop.Contracts;\npublic interface IClock { long Now(); }",
+	"src/Clock/SystemClock.cs":        "using Shop.Contracts;\nnamespace Shop.Clock;\npublic class SystemClock : IClock { public long Now() => 0; }",
+	"src/App/Program.cs":              "using Shop.Clock;\nusing Shop.Billing.Assembly;\nnamespace Shop.App;\npublic static class Wiring { public static object Ledger() => Builder.Build(new SystemClock()); }",
+	"src/Billing/Contracts/Ledger.cs": "namespace Shop.Billing.Contracts;\npublic interface ILedger { void Add(long amount); }",
+	"src/Billing/Assembly/Builder.cs": "using Shop.Contracts;\nusing Shop.Billing.Contracts;\nusing Shop.Billing.Invoices;\nusing Shop.Billing.Tax;\nusing Shop.Billing.Report;\nnamespace Shop.Billing.Assembly;\npublic static class Builder { public static ILedger Build(IClock clock) { TaxRules.Apply(); Reports.Run(clock); return new InvoiceBook(clock); } }",
+	"src/Billing/Invoices/Book.cs":    "using Shop.Contracts;\nusing Shop.Billing.Contracts;\nnamespace Shop.Billing.Invoices;\npublic class InvoiceBook : ILedger { private readonly IClock clock; public InvoiceBook(IClock clock) { this.clock = clock; } public void Add(long amount) { clock.Now(); } }",
+	"src/Billing/Tax/TaxRules.cs":     "using Shop.Billing.Invoices;\nnamespace Shop.Billing.Tax;\npublic static class TaxRules { public static int Apply() => typeof(InvoiceBook).Name.Length; }",
+	"src/Billing/Report/Reports.cs":   "using Shop.Contracts;\nnamespace Shop.Billing.Report;\npublic static class Reports { public static long Run(IClock clock) => clock.Now(); }",
+}
+
+func TestSnowflake(t *testing.T) {
+	service := newService(t, writeTree(t, snowflakeTree))
+	report, err := service.Check("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Tax names InvoiceBook in typeof, a reference with no import, so the
+	// snowflake sees the sideways dependency through the reference.
+	var violations []string
+	for _, violation := range report.Violations {
+		violations = append(violations, violation.From+" -> "+violation.To+": "+violation.Rule)
+	}
+
+	want := []string{
+		"cs:src/Billing/Tax -> cs:src/Billing/Invoices: leaf src/Billing/Tax may not depend on leaf src/Billing/Invoices: src/Billing/Tax and src/Billing/Invoices are sibling spokes of star src/Billing, and no dependency runs sideways; declare a port in the contracts of star src/Billing (src/Billing/Contracts), implement it in src/Billing/Invoices, and let an assembler of star src/Billing hand it in",
+	}
+
+	if !slices.Equal(violations, want) {
+		t.Errorf("violations:\n%s\nwant\n%s", strings.Join(violations, "\n"), strings.Join(want, "\n"))
+	}
+
+	if want := []string{"1 layer violation(s)"}; !slices.Equal(report.Failures, want) {
+		t.Errorf("failures: got %q, want %q", report.Failures, want)
+	}
+
+	// allowed names the port the sibling implements, and lets a leaf use
+	// the contracts of the star around its own.
+	for _, c := range []struct{ from, to, want string }{
+		{"src/Billing/Tax", "src/Billing/Invoices", "ports: cs:src/Billing/Invoices:InvoiceBook implements cs:src/Billing/Contracts:ILedger, which leaf src/Billing/Tax may use; depend on the port, and let an assembler of star src/Billing hand src/Billing/Invoices in\n"},
+		{"src/Billing/Report", "src/Contracts", "allowed: cs:src/Billing/Report (leaf src/Billing/Report) → cs:src/Contracts (contracts src/Contracts)\n"},
+		{"src/Billing/Tax", "src/Billing/Assembly", "rule: leaf src/Billing/Tax may not depend on assembler src/Billing/Assembly: a spoke never uses an assembler"},
+	} {
+		allowed, err := service.Allowed(c.from, c.to)
+		if err != nil || !strings.Contains(allowed, c.want) {
+			t.Errorf("allowed %s %s = %q, %v; want %q", c.from, c.to, allowed, err, c.want)
+		}
+	}
+}
+
+// TestPlanTab saves a C# plan the way the map's AutoPen tab does, through
+// Live.Plan, and checks it against the code.
+func TestPlanTab(t *testing.T) {
+	root := shopCopy(t)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "base"}} {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+
+	service := app.NewService(root, filesystem.NewConfig(root), NewExtractor(), []app.Dialect{NewDialect()},
+		gitvcs.New(root), filesystem.NewWorkspace(root), htmlmap.New(), filesystem.NewAgentConfig(t.TempDir()), filesystem.NewThemes(""), filesystem.NewPreferences(""))
+	live := app.NewLive(service, filesystem.NewWatcher(root))
+	stop := make(chan struct{})
+	defer close(stop)
+	live.Start(stop)
+	plan := join(
+		"cs:src/Shop.Domain/Order.cs",
+		"  public class Order",
+		"    public class Line",
+		"      public decimal Total(int count)",
+		"      public decimal Discounted(decimal rate)",
+		"cs:src/Shop.Domain/Result.cs",
+		"  public class Result<T>",
+		"    public Result<TOut> Map<TOut>(Func<T, TOut> map)",
+		"    public T Value { get; }",
+		"",
+	)
+
+	report, err := live.Plan("pricing", plan)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	// The nested and generic members are built; only Discounted is not.
+	var items []string
+	for _, item := range report.Items {
+		items = append(items, item.Kind+" "+item.Target)
+	}
+
+	if want := []string{"missing cs:src/Shop.Domain:Order.Line.Discounted(decimal)"}; !slices.Equal(items, want) {
+		t.Errorf("items: got %q, want %q", items, want)
+	}
+
+	if plans, err := live.Plans(); err != nil || len(plans) != 1 || plans[0].Name != "pricing" || !strings.Contains(plans[0].Text, "public decimal Discounted(decimal rate)") {
+		t.Errorf("plans: %+v %v", plans, err)
+	}
+
+	// A line that is not a C# declaration is refused with its line.
+	if _, err := live.Plan("refunds", "cs:src/Shop.Domain/Order.cs\n  return 1;\n"); err == nil || !strings.Contains(err.Error(), `not a declaration: "return 1;"`) {
+		t.Errorf("a plan line that is no declaration: %v", err)
+	}
+}
+
+// ignoreTargets are C# finding targets with the characters other languages'
+// ids lack, which rules.ignore must keep as they are.
+var ignoreTargets = []string{
+	"cs:src/Shop.Domain:Result<>.Map<>(Func<T0,M0>)",
+	"cs:src/Shop.Domain:Order.this[int]",
+	"cs:src/Shop.Web:<Program>",
+	"cs:src/Shop.Domain:Order.Save(int&,int&,int&,int[])",
+	"cs:src/Shop.Domain/Rules:Order_Validation/Order",
+	"cs:src/Shop.Domain:Money.op_Implicit(int)Money",
+	"cs:src/Shop.App -> cs:src/Shop.Adapters",
+	"cs:src/Shop.Domain:Box.Get((int,string)?)",
+}
+
+func TestIgnoreTargets(t *testing.T) {
+	root := writeTree(t, map[string]string{"treaty.yaml": "version: 1\narchitecture: none\n"})
+	config := filesystem.NewConfig(root)
+	for _, target := range ignoreTargets {
+		if _, err := config.Ignore(app.Ignore{Finding: rules.FindingBreaking, Target: target, Fingerprint: "f", Reason: "kept on purpose"}); err != nil {
+			t.Fatalf("ignore %s: %v", target, err)
+		}
+	}
+
+	loaded, _, err := config.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	var got []string
+	for _, each := range loaded.Ignores {
+		got = append(got, each.Target)
+	}
+
+	if !slices.Equal(got, ignoreTargets) {
+		t.Errorf("targets:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(ignoreTargets, "\n"))
 	}
 }
 

@@ -220,7 +220,10 @@ So:
 The rules do not rule out every cycle between regions: an assembler wires a
 leaf, and in TypeScript, JavaScript and Python a leaf importing it back
 compiles, though the snowflake reports that edge, since a spoke never uses
-an assembler. Go refuses any cycle of packages when it builds;
+an assembler. In C#, one project builds with a cycle between its
+directories, which the snowflake reports the same way, while MSBuild
+refuses a cycle of project references. Go refuses any cycle of packages
+when it builds;
 `dependency_cycles` finds cycles only between the boundaries of a `modular`
 architecture. The snowflake's dependency violations are `layer_violation`s,
 and each names the rule it breaks and what to do, such as:
@@ -367,7 +370,9 @@ wired by the component around them.
   declared inward and whose implementations are handed in.
 
 The snowflake is its own species. It has no component language: it is a
-check over plain imports in Go, TypeScript, JavaScript and Python. It puts a
+check over plain imports in Go, TypeScript, JavaScript and Python, and over
+the references between directories in C#, where a `using` names a
+namespace rather than a module. It puts a
 core region, with contracts, assemblers and engines, at every level; it lets
 a spoke use the contracts of every star around it, never an assembler; it
 allows no sideways dependency, not even between the cores of sibling
@@ -385,7 +390,10 @@ path is `.`.
 Test files are not read in any architecture, so their imports are never
 checked: Go `_test.go` files; JavaScript and TypeScript `.test.` and
 `.spec.` files and `__tests__` directories; Python `test_*.py`, `*_test.py`
-and `conftest.py` files and `tests` directories. Keep tests within the rules
+and `conftest.py` files and `tests` directories; and every file of a C# test
+project, one that references a test framework such as xUnit, NUnit, MSTest
+or TUnit, sets `IsTestProject`, uses `MSTest.Sdk`, or has a name ending in
+`.Tests`, `.UnitTests`, `.IntegrationTests` or `.FunctionalTests`. Keep tests within the rules
 by convention. Treaty reads Go tests only to find which tests exercise which
 contracts, never as dependencies.
 
