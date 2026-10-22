@@ -1710,6 +1710,24 @@ func TestRealSolution(t *testing.T) {
 	}
 }
 
+func TestNominalTypes(t *testing.T) {
+	_, g := extractShop(t)
+	dialect := NewDialect()
+
+	// SqlOrderStore names IOrderStore, so an implements edge records it; no
+	// structural match is needed, and none is made for a type that does not.
+	if dialect.Satisfies(g, "cs:src/Shop.Adapters:SqlOrderStore", "cs:src/Shop.Domain:IOrderStore") || dialect.Satisfies(g, "cs:src/Shop.Domain:Pricing", "cs:src/Shop.Domain:IOrderStore") {
+		t.Errorf("Satisfies matched structurally")
+	}
+
+	// using Store = Shop.Domain.IOrderStore is file-scoped and makes no symbol.
+	for _, symbol := range g.Symbols {
+		if target := dialect.Alias(g, symbol.ID); target != "" {
+			t.Errorf("%s aliases %s", symbol.ID, target)
+		}
+	}
+}
+
 // symbolOf finds a symbol or fails the test.
 func symbolOf(t *testing.T, g *graph.Graph, id string) *graph.Symbol {
 	t.Helper()

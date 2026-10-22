@@ -123,6 +123,33 @@ func (this *Dialect) Declare(text string, parent *app.Declaration) (result app.D
 	return app.Declaration{Kind: declared.kind, Name: name, Contract: parent.Contract && declared.directory, Key: key}, nil
 }
 
+// Satisfies reports false: a C# type names the interfaces it implements,
+// and the extractor's implements edges say so already.
+//
+// Parameters:
+//   - g: the graph both symbols are in.
+//   - concrete: the concrete type's symbol id.
+//   - iface: the interface's symbol id.
+//
+// Returns:
+//   - result: false.
+func (this *Dialect) Satisfies(g *graph.Graph, concrete, iface string) bool {
+	return false
+}
+
+// Alias reports no symbol: a using alias, using X = A.B.T, holds only in
+// its file and makes no symbol of its own.
+//
+// Parameters:
+//   - g: the graph the symbol is in.
+//   - symbol: the symbol's id.
+//
+// Returns:
+//   - result: empty.
+func (this *Dialect) Alias(g *graph.Graph, symbol string) string {
+	return ""
+}
+
 // IsFile reports whether a header path names a C# file.
 //
 // Parameters:
