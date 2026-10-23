@@ -54,7 +54,7 @@ implementation detail, and it is judged through the contracts that reach it.
   parse tree. Each language gets a small hand-written contract scanner
   behind one extractor interface. The tool is pure Go with no cgo, so
   `go install` just works. Go, JavaScript, TypeScript (with Vue and Svelte
-  components) and Python are supported.
+  components), Python and C# are supported.
 - **Treaty passes its own checks.** The tool is hexagonal itself: a pure core
   with every side effect behind a port.
 

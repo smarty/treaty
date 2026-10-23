@@ -1,0 +1,7 @@
+architecture: hexagonal
+layers:
+  composition: ["src/Shop.Web/**"]
+  domain:      ["src/Shop.Domain/**"]
+  application: ["src/Shop.App/**"]
+  adapter:
+    driven:    ["src/Shop.Adapters/**"]

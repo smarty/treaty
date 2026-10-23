@@ -292,7 +292,7 @@ const snowflakeGuidance = "contracts use only contracts of their own star and it
 func tools() []tool {
 	return []tool{
 		{
-			Name:        "overview",
+			Name: "overview",
 			Description: "The whole architecture in a few kilobytes: its rules, every module by layer with its contract count and stability, every module dependency, and violations. Call this first instead of exploring files. " +
 				"For a snowflake it lists each star's contracts, assemblers, engines, leaves and branches: " + snowflakeGuidance,
 			InputSchema: schema(nil),
@@ -318,7 +318,7 @@ func tools() []tool {
 			InputSchema: schema(map[string]string{"target": "A symbol id, module id or file, or a short name that matches exactly one."}, "target"),
 		},
 		{
-			Name:        "allowed",
+			Name: "allowed",
 			Description: "Whether one module may depend on another under the architecture's rules, the rule it would break, and what the first may use; for a snowflake, also the ports it may use that something in the module it reached for already implements. Call before adding an import. Modules that do not exist yet are placed by the config. " +
 				"In a snowflake, " + snowflakeGuidance,
 			InputSchema: schema(map[string]string{"from": "The depending module, as an id such as go:internal/app, a path, or a short name such as app; a symbol or file stands for its module.", "to": "The module depended on, given the same ways."}, "from", "to"),
@@ -359,7 +359,7 @@ func tools() []tool {
 			InputSchema: schema(map[string]string{"format": "Optional: json for the full report with metrics and the ranked review queue."}),
 		},
 		{
-			Name:        "design_check",
+			Name: "design_check",
 			Description: "Compare a design or plan in .treaty/designs with the code: missing and differing contracts, layer problems and failing expectations. " +
 				"In a snowflake a planned module is placed by its star's lists, and a package beneath a core package that no entry names is unclassified; " + snowflakeGuidance,
 			InputSchema: schema(map[string]string{"name": "The design name, without .pen."}, "name"),

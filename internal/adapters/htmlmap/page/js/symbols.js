@@ -14,7 +14,7 @@
 // language at a time, since each language names and reaches its code its
 // own way; JavaScript and TypeScript, which import each other, count as one.
 const DIR = "dir:";
-const LANGUAGE_NAMES = { go: "Go", js: "JavaScript", py: "Python", ts: "TypeScript" };
+const LANGUAGE_NAMES = { cs: "C#", go: "Go", js: "JavaScript", py: "Python", ts: "TypeScript" };
 let dirs = new Map(), languages = [], familyNames = new Map(), typeOfValue = new Map(), valueOfType = new Map();
 function dirId(path) { return DIR + path; }
 function parentPath(path) { const at = path.lastIndexOf("/"); return at < 0 ? "." : path.slice(0, at); }

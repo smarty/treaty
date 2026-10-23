@@ -25,6 +25,7 @@ import (
 	"github.com/smarty/treaty/internal/adapters/filesystem"
 	"github.com/smarty/treaty/internal/adapters/gitvcs"
 	"github.com/smarty/treaty/internal/adapters/htmlmap"
+	"github.com/smarty/treaty/internal/adapters/language/csharp"
 	"github.com/smarty/treaty/internal/adapters/language/golang"
 	"github.com/smarty/treaty/internal/adapters/language/javascript"
 	"github.com/smarty/treaty/internal/adapters/language/python"
@@ -337,12 +338,12 @@ func browse(url string) {
 
 // build wires the use cases of the repository at root, and its tests.
 func build(root string) (*app.Service, *app.Tests) {
-	extractors := app.Extractors{golang.NewExtractor(), javascript.NewExtractor(), python.NewExtractor()}
+	extractors := app.Extractors{golang.NewExtractor(), javascript.NewExtractor(), python.NewExtractor(), csharp.NewExtractor()}
 	service := app.NewService(
 		root,
 		filesystem.NewConfig(root),
 		extractors,
-		[]app.Dialect{golang.NewDialect(), javascript.NewDialect(javascript.LanguageJavaScript), javascript.NewDialect(javascript.LanguageTypeScript), python.NewDialect()},
+		[]app.Dialect{golang.NewDialect(), javascript.NewDialect(javascript.LanguageJavaScript), javascript.NewDialect(javascript.LanguageTypeScript), python.NewDialect(), csharp.NewDialect()},
 		gitvcs.New(root),
 		filesystem.NewWorkspace(root),
 		htmlmap.New(),
